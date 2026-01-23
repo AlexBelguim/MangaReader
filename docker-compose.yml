@@ -1,0 +1,20 @@
+services:
+  manga-scraper:
+    container_name: manga-scraper
+    build: .
+    ports:
+      - "5555:5555"
+    volumes:
+      # Map host directories to container directories
+      # Ensure these exist on the host and have correct permissions (UID 1000 usually)
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+    environment:
+      # Ensure Puppeteer knows where to find the browser
+      # (The base image usually configures this, but explicit is good)
+      - NODE_ENV=production
+    restart: unless-stopped
+    # If you run into shared memory issues with Chrome, uncomment the following:
+    # shm_size: '1gb'
+    # cap_add:
+    #   - SYS_ADMIN

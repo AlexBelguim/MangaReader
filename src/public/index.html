@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#667eea">
+  <meta name="description" content="Personal manga library and reader">
+  <title>Manga Scraper</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <!-- Mobile-only styles - includes foldables and tablets with touch -->
+  <link rel="stylesheet" href="/css/mobile.css" media="(pointer: coarse)">
+</head>
+
+<body>
+  <div id="app">
+    <!-- Content loaded dynamically via router -->
+  </div>
+  <div class="toast-container" id="toast-container"></div>
+  <script src="/js/api.js?v=4"></script>
+  <script src="/js/router.js?v=4"></script>
+  <script src="/js/components.js?v=4"></script>
+  <script src="/js/app.js?v=4"></script>
+  <script>
+    // Register service worker for PWA support
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(reg => console.log('Service Worker registered:', reg.scope))
+          .catch(err => console.log('Service Worker registration failed:', err));
+      });
+    }
+  </script>
+</body>
+
+</html>

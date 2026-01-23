@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Manga Scraper</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background-color: var(--bg-color, #1a202c);
+      color: var(--text-color, #fff);
+      margin: 0;
+    }
+    .login-card {
+      background: var(--card-bg, #2d3748);
+      padding: 2rem;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      width: 100%;
+      max-width: 400px;
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .login-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      color: var(--primary-color, #4299e1);
+    }
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--text-muted, #a0aec0);
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem;
+      border-radius: 0.25rem;
+      border: 1px solid #4a5568;
+      background: #1a202c;
+      color: #fff;
+      box-sizing: border-box; /* Fix input width overflow */
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary-color, #4299e1);
+      box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
+    }
+    .btn-login {
+      width: 100%;
+      padding: 0.75rem;
+      background: var(--primary-color, #4299e1);
+      color: white;
+      border: none;
+      border-radius: 0.25rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-login:hover {
+      background: #3182ce;
+    }
+    .btn-login:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .error-msg {
+      color: #fc8181;
+      text-align: center;
+      margin-top: 1rem;
+      font-size: 0.875rem;
+      min-height: 1.25rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-header">
+      <h1>Manga Library</h1>
+      <p style="color: #a0aec0; margin-top: 0.5rem;">Please log in to continue</p>
+    </div>
+    
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autofocus>
+      </div>
+      
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required>
+      </div>
+      
+      <button type="submit" class="btn-login" id="submitBtn">Log In</button>
+      
+      <div class="error-msg" id="errorMsg"></div>
+    </form>
+  </div>
+
+  <script src="/js/login.js"></script>
+</body>
+</html>
