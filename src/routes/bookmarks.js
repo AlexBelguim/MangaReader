@@ -22,37 +22,16 @@ const router = express.Router();
 
 // ==================== BOOKMARK CRUD ====================
 
-// Get all bookmarks
+// Get all bookmarks (lightweight summary for library grid)
 router.get('/', async (req, res) => {
     try {
-        const bookmarks = await bookmarkDb.getAll();
-
-        // For each bookmark, add artists and local source info
-        for (const bookmark of bookmarks) {
-            // Add artists
-            const artists = artistDb.getForBookmark(bookmark.id);
-            bookmark.artists = artists.map(a => a.name);
-
-            // For local-source bookmarks, add folder/cbz counts
-            if (bookmark.source === 'local' || bookmark.url?.startsWith('local://')) {
-                bookmark.source = 'local'; // Ensure source is set
-                try {
-                    const chapters = await downloader.scanLocalChapters(bookmark.title, bookmark.alias);
-                    const cbzFiles = await downloader.findCbzFiles(bookmark.title, bookmark.alias);
-                    bookmark.folderChapters = chapters.length;
-                    bookmark.cbzChapters = cbzFiles.length;
-                } catch (e) {
-                    bookmark.folderChapters = 0;
-                    bookmark.cbzChapters = 0;
-                }
-            }
-        }
-
+        const bookmarks = bookmarkDb.getAllSummary();
         res.json(bookmarks);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 // Get single bookmark
 router.get('/:id', async (req, res) => {

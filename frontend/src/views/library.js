@@ -27,12 +27,13 @@ let viewModeHandler = null;
  */
 function renderMangaCard(manga) {
   const displayName = manga.alias || manga.title;
-  const downloadedCount = manga.downloadedChapters?.length || 0;
+  const downloadedCount = manga.downloadedCount ?? manga.downloadedChapters?.length ?? 0;
   const excludedSet = new Set(manga.excludedChapters || []);
   const visibleChapters = (manga.chapters || []).filter(c => !excludedSet.has(c.number));
   const totalCount = new Set(visibleChapters.map(c => c.number)).size || manga.uniqueChapters || 0;
-  const readCount = manga.readChapters?.length || 0;
-  const hasUpdates = (manga.updatedChapters || []).length > 0;
+  const readCount = manga.readCount ?? manga.readChapters?.length ?? 0;
+  const hasUpdates = (manga.updatedCount ?? manga.updatedChapters?.length ?? 0) > 0;
+
 
   // Cover URL
   const coverUrl = manga.localCover

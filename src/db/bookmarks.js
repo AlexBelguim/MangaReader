@@ -13,6 +13,114 @@ export const bookmarkDb = {
         return bookmarks.map(b => this.enrichBookmark(b));
     },
 
+    // Lightweight listing for the library grid — bulk queries instead of N×11
+    getAllSummary() {
+        const db = getDb();
+        const bookmarks = db.prepare('SELECT * FROM bookmarks ORDER BY updated_at DESC').all();
+        if (bookmarks.length === 0) return [];
+
+        // Bulk: chapter counts (unique chapter numbers per bookmark)
+        const chapterCounts = new Map();
+        db.prepare(`
+            SELECT bookmark_id, COUNT(DISTINCT number) as cnt
+            FROM chapters
+            GROUP BY bookmark_id
+        `).all().forEach(r => chapterCounts.set(r.bookmark_id, r.cnt));
+
+        // Bulk: chapters list (needed for filtering by excluded + Favorites category click)
+        const chaptersMap = new Map();
+        db.prepare(`
+            SELECT bookmark_id, number, title, url
+            FROM chapters
+            ORDER BY bookmark_id, number
+        `).all().forEach(r => {
+            if (!chaptersMap.has(r.bookmark_id)) chaptersMap.set(r.bookmark_id, []);
+            chaptersMap.get(r.bookmark_id).push({ number: r.number, title: r.title, url: r.url });
+        });
+
+        // Bulk: downloaded chapter counts
+        const downloadedCounts = new Map();
+        db.prepare(`
+            SELECT bookmark_id, COUNT(*) as cnt
+            FROM downloaded_chapters
+            GROUP BY bookmark_id
+        `).all().forEach(r => downloadedCounts.set(r.bookmark_id, r.cnt));
+
+        // Bulk: read chapter counts
+        const readCounts = new Map();
+        db.prepare(`
+            SELECT bookmark_id, COUNT(*) as cnt
+            FROM read_chapters
+            GROUP BY bookmark_id
+        `).all().forEach(r => readCounts.set(r.bookmark_id, r.cnt));
+
+        // Bulk: excluded chapters per bookmark
+        const excludedMap = new Map();
+        db.prepare(`
+            SELECT bookmark_id, chapter_number
+            FROM excluded_chapters
+        `).all().forEach(r => {
+            if (!excludedMap.has(r.bookmark_id)) excludedMap.set(r.bookmark_id, []);
+            excludedMap.get(r.bookmark_id).push(r.chapter_number);
+        });
+
+        // Bulk: updated chapter counts (just need presence)
+        const updatedCounts = new Map();
+        db.prepare(`
+            SELECT bookmark_id, COUNT(*) as cnt
+            FROM updated_chapters
+            GROUP BY bookmark_id
+        `).all().forEach(r => updatedCounts.set(r.bookmark_id, r.cnt));
+
+        // Bulk: categories per bookmark
+        const categoriesMap = new Map();
+        db.prepare(`
+            SELECT bc.bookmark_id, c.name
+            FROM bookmark_categories bc
+            JOIN categories c ON c.id = bc.category_id
+        `).all().forEach(r => {
+            if (!categoriesMap.has(r.bookmark_id)) categoriesMap.set(r.bookmark_id, []);
+            categoriesMap.get(r.bookmark_id).push(r.name);
+        });
+
+        // Bulk: artists per bookmark
+        const artistsMap = new Map();
+        db.prepare(`
+            SELECT ba.bookmark_id, a.name
+            FROM bookmark_artists ba
+            JOIN artists a ON a.id = ba.artist_id
+        `).all().forEach(r => {
+            if (!artistsMap.has(r.bookmark_id)) artistsMap.set(r.bookmark_id, []);
+            artistsMap.get(r.bookmark_id).push(r.name);
+        });
+
+        return bookmarks.map(b => ({
+            id: b.id,
+            url: b.url,
+            title: b.title,
+            alias: b.alias,
+            website: b.website,
+            source: b.source,
+            cover: b.cover,
+            localCover: b.local_cover,
+            uniqueChapters: b.unique_chapters,
+            lastReadChapter: b.last_read_chapter,
+            lastReadAt: b.last_read_at,
+            updatedAt: b.updated_at,
+            autoCheck: !!b.auto_check,
+            autoDownload: !!b.auto_download,
+            // Counts instead of full arrays
+            downloadedCount: downloadedCounts.get(b.id) || 0,
+            readCount: readCounts.get(b.id) || 0,
+            updatedCount: updatedCounts.get(b.id) || 0,
+            // Arrays still needed for filtering/display
+            chapters: chaptersMap.get(b.id) || [],
+            excludedChapters: excludedMap.get(b.id) || [],
+            categories: categoriesMap.get(b.id) || [],
+            artists: artistsMap.get(b.id) || [],
+        }));
+    },
+
     getById(id) {
         const db = getDb();
         const bookmark = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);
