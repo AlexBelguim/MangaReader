@@ -21,6 +21,20 @@ A Puppeteer-based manga scraper with bookmark management. Scrape manga from mult
 npm install
 ```
 
+### Raspberry Pi Deployment
+
+1. Install dependencies (skipping Chromium download to save space/RAM):
+   ```bash
+   export PUPPETEER_SKIP_DOWNLOAD=true
+   npm install
+   ```
+   *Note: If installation stalls, try:* `npm install --maxsockets=1`
+
+2. Create a `.env` file with your paths and system Chromium:
+   ```env
+   CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
+   ```
+
 ## Usage
 
 ### Interactive Mode (Recommended)

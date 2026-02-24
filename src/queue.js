@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 class PersistentQueue {
     constructor() {
         this.isProcessing = false;
+        this.inlineTaskRunning = false;
         this.processors = new Map();
     }
 
@@ -30,6 +31,62 @@ class PersistentQueue {
             id: result.lastInsertRowid,
             status: 'pending'
         };
+    }
+
+    // Add a job and wait for it to complete inline (synchronous execution)
+    // This is for operations that need immediate results
+    // Uses a lock to ensure only one task runs at a time
+    async addAndWait(task) {
+        const { type, description, execute, mangaId, mangaTitle } = task;
+
+        // Wait for any currently running inline task to complete
+        while (this.inlineTaskRunning) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        this.inlineTaskRunning = true;
+        logger.info(`[Queue] Running inline task: ${description || type}`);
+
+        try {
+            // Execute the task directly
+            const result = await execute();
+            logger.info(`[Queue] Inline task completed: ${description || type}`);
+            return result;
+        } catch (error) {
+            logger.error(`[Queue] Inline task failed: ${description || type} - ${error.message}`);
+            throw error;
+        } finally {
+            this.inlineTaskRunning = false;
+        }
+    }
+
+    // Add a job to run asynchronously in the background (for downloads)
+    // Still serializes with other inline tasks via the same lock
+    addAsync(task) {
+        const { type, description, execute } = task;
+
+        // Start the task in background but still serialize with lock
+        const runTask = async () => {
+            // Wait for any currently running inline task to complete
+            while (this.inlineTaskRunning) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            this.inlineTaskRunning = true;
+            logger.info(`[Queue] Running async task: ${description || type}`);
+
+            try {
+                await execute();
+                logger.info(`[Queue] Async task completed: ${description || type}`);
+            } catch (error) {
+                logger.error(`[Queue] Async task failed: ${description || type} - ${error.message}`);
+            } finally {
+                this.inlineTaskRunning = false;
+            }
+        };
+
+        // Fire and forget - start the task but don't wait
+        runTask();
     }
 
     // Get job status

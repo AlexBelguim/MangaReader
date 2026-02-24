@@ -7,6 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "web": "node src/server.js",
+    "dev": "concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run web\" \"npm run frontend\"",
+    "frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
     "scrape": "node src/index.js scrape",
     "check": "node src/index.js check",
     "list": "node src/index.js list"
@@ -36,7 +39,11 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "sharp": "^0.34.5",
+    "socket.io": "^4.8.3",
     "winston": "^3.19.0",
     "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

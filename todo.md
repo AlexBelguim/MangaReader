@@ -35,3 +35,99 @@ on pi hidding of chapters versions can be slow maybe we should add to the queue 
 simple sha protected 4 digit pin code when accessing the app from new device or ip
 and a route to change the pin code with current pin code 
 because I add access via cloudflare tunnels
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+reader 
+fav 
+manga info page buttons 
+chapter lock 
+direction should not switch the prev and next button actions 
+page count in chapter
+
+need a button to add and remove manga page from favorites in reader make sure their is an option to select the right list or create a new one 
+
+a button to show one or 2 pages at a time in reader
+
+if the last page of the current chapter should be shown toghether with the first page of the next chapter seemless 
+
+the trophy button to show the current page as a single page no matter the settings 
+
+favorite should also show these tropy pages as a spereate fav list in the favorites 
+
+in the manga info page add a fav button to show the current page favortie should show the fav page but with only the list and pages form the current manga 
