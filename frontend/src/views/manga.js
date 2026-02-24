@@ -4,6 +4,7 @@
  */
 
 import { api } from '../api.js';
+import { store } from '../store.js';
 import { router } from '../router.js';
 import { socket } from '../socket.js';
 import { renderHeader } from '../components/header.js';
@@ -826,13 +827,13 @@ async function restoreChapter(chapterNum) {
  */
 async function loadData(mangaId) {
   try {
-    const [manga, categoriesResult] = await Promise.all([
+    const [manga, categories] = await Promise.all([
       api.getBookmark(mangaId),
-      api.get('/categories')
+      store.loadCategories()
     ]);
 
     state.manga = manga;
-    state.categories = categoriesResult.categories || [];
+    state.categories = categories;
     state.loading = false;
 
     // Default to last page

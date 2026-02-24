@@ -4,6 +4,7 @@
  */
 
 import { api } from '../api.js';
+import { store } from '../store.js';
 import { router } from '../router.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
@@ -23,6 +24,7 @@ let state = {
 
 // Event handler reference for cleanup
 let viewModeHandler = null;
+let storeUnsubs = [];
 
 /**
  * Sort bookmarks by current sort preference
@@ -616,17 +618,17 @@ function filterByCategory(category) {
  */
 async function loadData() {
   try {
-    const [bookmarks, categoriesResult, series, favorites] = await Promise.all([
-      api.getBookmarks(),
-      api.get('/categories'),
-      api.get('/series'),
-      api.getFavorites()
+    const [bookmarks, categories, series, favorites] = await Promise.all([
+      store.loadBookmarks(),
+      store.loadCategories(),
+      store.loadSeries(),
+      store.loadFavorites()
     ]);
 
     state.bookmarks = bookmarks;
-    state.categories = categoriesResult.categories || [];
-    state.series = series || [];
-    state.favorites = favorites || { favorites: {}, listOrder: [] };
+    state.categories = categories;
+    state.series = series;
+    state.favorites = favorites;
     state.loading = false;
   } catch (error) {
     showToast('Failed to load library', 'error');
@@ -659,6 +661,27 @@ export async function mount() {
   // Render with data
   app.innerHTML = render();
   setupListeners();
+
+  // Subscribe to store updates for live refresh
+  storeUnsubs.forEach(fn => fn());
+  storeUnsubs = [
+    store.subscribe('bookmarks', (bookmarks) => {
+      state.bookmarks = bookmarks;
+      const grid = document.getElementById('library-grid');
+      if (grid) {
+        let filtered = state.activeCategory
+          ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
+          : state.bookmarks;
+        if (state.artistFilter) filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
+        if (state.searchQuery) {
+          const q = state.searchQuery.toLowerCase();
+          filtered = filtered.filter(m => (m.title || '').toLowerCase().includes(q) || (m.alias || '').toLowerCase().includes(q));
+        }
+        filtered = sortBookmarks(filtered);
+        grid.innerHTML = filtered.map(renderMangaCard).join('') || renderEmptyState();
+      }
+    })
+  ];
 }
 
 /**
@@ -673,6 +696,10 @@ export function unmount() {
 
   // Remove clearFilters listener
   window.removeEventListener('clearFilters', handleClearFilters);
+
+  // Unsubscribe from store
+  storeUnsubs.forEach(fn => fn());
+  storeUnsubs = [];
 }
 
 export default { mount, unmount, render };

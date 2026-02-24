@@ -4,6 +4,7 @@
  */
 
 import { api } from '../api.js';
+import { store } from '../store.js';
 import { router } from '../router.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
@@ -293,10 +294,10 @@ export function setupListeners() {
 async function loadData() {
   try {
     const [favoritesData, trophyData, bookmarksData, seriesData] = await Promise.all([
-      api.getFavorites(),
+      store.loadFavorites(),
       api.get('/trophy-pages'),
-      api.getBookmarks(),
-      api.getSeries()
+      store.loadBookmarks(),
+      store.loadSeries()
     ]);
 
     state.favorites = favoritesData || { favorites: {}, listOrder: [] };
