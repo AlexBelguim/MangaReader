@@ -15,12 +15,34 @@ let state = {
   favorites: { favorites: {}, listOrder: [] },
   activeCategory: localStorage.getItem('library_active_category') || null,
   artistFilter: null,
+  searchQuery: '',
+  sortBy: localStorage.getItem('library_sort') || 'updated',
   viewMode: 'manga', // 'manga' or 'series'
   loading: true
 };
 
 // Event handler reference for cleanup
 let viewModeHandler = null;
+
+/**
+ * Sort bookmarks by current sort preference
+ */
+function sortBookmarks(list) {
+  return [...list].sort((a, b) => {
+    switch (state.sortBy) {
+      case 'az': return (a.alias || a.title).localeCompare(b.alias || b.title);
+      case 'za': return (b.alias || b.title).localeCompare(a.alias || a.title);
+      case 'lastread': return (b.lastReadAt || '').localeCompare(a.lastReadAt || '');
+      case 'chapters': {
+        const ac = a.chapters?.length || a.uniqueChapters || 0;
+        const bc = b.chapters?.length || b.uniqueChapters || 0;
+        return bc - ac;
+      }
+      case 'updated':
+      default: return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    }
+  });
+}
 
 /**
  * Render a manga card
@@ -54,6 +76,7 @@ function renderMangaCard(manga) {
           <span class="badge badge-chapters" title="Total">${totalCount}</span>
           ${downloadedCount > 0 ? `<span class="badge badge-downloaded" title="Downloaded">${downloadedCount}</span>` : ''}
           ${hasUpdates ? `<span class="badge badge-warning" title="Updates available">!</span>` : ''}
+          ${manga.autoCheck ? `<span class="badge badge-monitored" title="Monitored">🔔</span>` : ''}
           ${state.activeCategory === 'Favorites' ? `<span class="badge badge-play" title="Click to Read">▶</span>` : ''}
         </div>
       </div>
@@ -181,11 +204,37 @@ export function render() {
     filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
   }
 
+  // Search filter
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    filtered = filtered.filter(m =>
+      (m.title || '').toLowerCase().includes(q) ||
+      (m.alias || '').toLowerCase().includes(q)
+    );
+  }
+
+  // Sort
+  filtered = sortBookmarks(filtered);
+
   const cards = filtered.map(renderMangaCard).join('');
 
   return `
     ${renderHeader(state.viewMode)}
     <div class="container">
+      <div class="library-controls">
+        <div class="search-bar">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="library-search" placeholder="Search manga..." value="${state.searchQuery}" autocomplete="off">
+          ${state.searchQuery ? '<button class="search-clear" id="search-clear">×</button>' : ''}
+        </div>
+        <select class="sort-select" id="library-sort">
+          <option value="updated" ${state.sortBy === 'updated' ? 'selected' : ''}>Recently Updated</option>
+          <option value="az" ${state.sortBy === 'az' ? 'selected' : ''}>A → Z</option>
+          <option value="za" ${state.sortBy === 'za' ? 'selected' : ''}>Z → A</option>
+          <option value="lastread" ${state.sortBy === 'lastread' ? 'selected' : ''}>Last Read</option>
+          <option value="chapters" ${state.sortBy === 'chapters' ? 'selected' : ''}>Most Chapters</option>
+        </select>
+      </div>
       ${state.artistFilter ? `
         <div class="artist-filter-badge" id="artist-filter-badge">
           <span class="artist-filter-icon">🎨</span>
@@ -423,6 +472,65 @@ export function setupListeners() {
   if (artistBadge) {
     artistBadge.addEventListener('click', () => {
       state.artistFilter = null;
+      mount();
+    });
+  }
+
+  // Search bar
+  const searchInput = document.getElementById('library-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.searchQuery = e.target.value;
+      // Re-render grid only
+      const grid = document.getElementById('library-grid');
+      if (grid) {
+        let filtered = state.activeCategory
+          ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
+          : state.bookmarks;
+        if (state.artistFilter) {
+          filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
+        }
+        if (state.searchQuery) {
+          const q = state.searchQuery.toLowerCase();
+          filtered = filtered.filter(m =>
+            (m.title || '').toLowerCase().includes(q) ||
+            (m.alias || '').toLowerCase().includes(q)
+          );
+        }
+        filtered = sortBookmarks(filtered);
+        grid.innerHTML = filtered.map(renderMangaCard).join('') || renderEmptyState();
+        // Show/hide clear button
+        const clearBtn = document.getElementById('search-clear');
+        if (!clearBtn && state.searchQuery) {
+          searchInput.parentElement.insertAdjacentHTML('beforeend', '<button class="search-clear" id="search-clear">×</button>');
+          document.getElementById('search-clear')?.addEventListener('click', () => {
+            state.searchQuery = '';
+            searchInput.value = '';
+            mount();
+          });
+        } else if (clearBtn && !state.searchQuery) {
+          clearBtn.remove();
+        }
+      }
+    });
+    // Focus preservation: re-focus after render
+    if (state.searchQuery) searchInput.focus();
+  }
+
+  const searchClear = document.getElementById('search-clear');
+  if (searchClear) {
+    searchClear.addEventListener('click', () => {
+      state.searchQuery = '';
+      mount();
+    });
+  }
+
+  // Sort dropdown
+  const sortSelect = document.getElementById('library-sort');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', (e) => {
+      state.sortBy = e.target.value;
+      localStorage.setItem('library_sort', state.sortBy);
       mount();
     });
   }
