@@ -9,14 +9,14 @@ let db = null;
 
 // Initialize database with schema
 export function initDatabase() {
-    fs.ensureDirSync(CONFIG.dataDir);
+  fs.ensureDirSync(CONFIG.dataDir);
 
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = DELETE'); // Better compatibility with network storage
-    db.pragma('foreign_keys = ON');
+  db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL'); // Fast concurrent reads/writes (requires local storage)
+  db.pragma('foreign_keys = ON');
 
-    // Create tables
-    db.exec(`
+  // Create tables
+  db.exec(`
     -- Bookmarks (manga) table
     CREATE TABLE IF NOT EXISTS bookmarks (
       id TEXT PRIMARY KEY,
@@ -308,115 +308,115 @@ export function initDatabase() {
     );
   `);
 
-    // Fix bookmark_artists table if it has wrong foreign key
-    fixBookmarkArtistsTable();
+  // Fix bookmark_artists table if it has wrong foreign key
+  fixBookmarkArtistsTable();
 
-    // Add preferred_release_group column if not exists
-    addPreferredReleaseGroupColumn();
+  // Add preferred_release_group column if not exists
+  addPreferredReleaseGroupColumn();
 
-    // Add release_group and uploaded_at columns to chapters if not exists
-    addChapterMetadataColumns();
+  // Add release_group and uploaded_at columns to chapters if not exists
+  addChapterMetadataColumns();
 
-    // Lazy migration for locked column in chapter_settings
-    try {
-        db.prepare('ALTER TABLE chapter_settings ADD COLUMN locked INTEGER DEFAULT 0').run();
-    } catch (e) {
-        // Column likely already exists
-    }
+  // Lazy migration for locked column in chapter_settings
+  try {
+    db.prepare('ALTER TABLE chapter_settings ADD COLUMN locked INTEGER DEFAULT 0').run();
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    // Lazy migration for display_order column in volumes
-    try {
-        db.prepare('ALTER TABLE volumes ADD COLUMN display_order INTEGER DEFAULT 0').run();
-    } catch (e) {
-        // Column likely already exists
-    }
+  // Lazy migration for display_order column in volumes
+  try {
+    db.prepare('ALTER TABLE volumes ADD COLUMN display_order INTEGER DEFAULT 0').run();
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    // Lazy migration for auto_check and auto_download columns in bookmarks
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN auto_check INTEGER DEFAULT 0').run();
-        console.log('📦 Added auto_check column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  // Lazy migration for auto_check and auto_download columns in bookmarks
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN auto_check INTEGER DEFAULT 0').run();
+    console.log('📦 Added auto_check column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN auto_download INTEGER DEFAULT 0').run();
-        console.log('📦 Added auto_download column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN auto_download INTEGER DEFAULT 0').run();
+    console.log('📦 Added auto_download column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    // Lazy migration for schedule columns (daily, weekly, specific day+time)
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_schedule TEXT DEFAULT NULL').run();
-        console.log('📦 Added check_schedule column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  // Lazy migration for schedule columns (daily, weekly, specific day+time)
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN check_schedule TEXT DEFAULT NULL').run();
+    console.log('📦 Added check_schedule column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_day TEXT DEFAULT NULL').run();
-        console.log('📦 Added check_day column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN check_day TEXT DEFAULT NULL').run();
+    console.log('📦 Added check_day column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_time TEXT DEFAULT NULL').run();
-        console.log('📦 Added check_time column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN check_time TEXT DEFAULT NULL').run();
+    console.log('📦 Added check_time column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    try {
-        db.prepare('ALTER TABLE bookmarks ADD COLUMN next_check TEXT DEFAULT NULL').run();
-        console.log('📦 Added next_check column to bookmarks');
-    } catch (e) {
-        // Column likely already exists
-    }
+  try {
+    db.prepare('ALTER TABLE bookmarks ADD COLUMN next_check TEXT DEFAULT NULL').run();
+    console.log('📦 Added next_check column to bookmarks');
+  } catch (e) {
+    // Column likely already exists
+  }
 
-    // Lazy migration for reading_mode and direction in chapter_settings
-    try {
-        db.prepare('ALTER TABLE chapter_settings ADD COLUMN reading_mode TEXT').run();
-        console.log('📦 Added reading_mode column to chapter_settings');
-    } catch (e) { }
+  // Lazy migration for reading_mode and direction in chapter_settings
+  try {
+    db.prepare('ALTER TABLE chapter_settings ADD COLUMN reading_mode TEXT').run();
+    console.log('📦 Added reading_mode column to chapter_settings');
+  } catch (e) { }
 
-    try {
-        db.prepare('ALTER TABLE chapter_settings ADD COLUMN direction TEXT').run();
-        console.log('📦 Added direction column to chapter_settings');
-    } catch (e) { }
+  try {
+    db.prepare('ALTER TABLE chapter_settings ADD COLUMN direction TEXT').run();
+    console.log('📦 Added direction column to chapter_settings');
+  } catch (e) { }
 
-    console.log('📦 Database initialized:', DB_PATH);
-    return db;
+  console.log('📦 Database initialized:', DB_PATH);
+  return db;
 }
 
 // Get database instance
 export function getDb() {
-    if (!db) {
-        initDatabase();
-    }
-    return db;
+  if (!db) {
+    initDatabase();
+  }
+  return db;
 }
 
 // Shared ID generator
 export function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
 // Fix bookmark_artists table if it has wrong foreign key
 function fixBookmarkArtistsTable() {
-    // Check if bookmark_artists has the wrong foreign key constraint
-    // by trying to check the table info
-    try {
-        const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'bookmark_artists'").get();
-        if (tableInfo && tableInfo.sql && tableInfo.sql.includes('REFERENCES bookmarks')) {
-            console.log('📦 Fixing bookmark_artists table foreign key...');
+  // Check if bookmark_artists has the wrong foreign key constraint
+  // by trying to check the table info
+  try {
+    const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'bookmark_artists'").get();
+    if (tableInfo && tableInfo.sql && tableInfo.sql.includes('REFERENCES bookmarks')) {
+      console.log('📦 Fixing bookmark_artists table foreign key...');
 
-            // Save existing data
-            const existingData = db.prepare('SELECT * FROM bookmark_artists').all();
+      // Save existing data
+      const existingData = db.prepare('SELECT * FROM bookmark_artists').all();
 
-            // Drop and recreate table without the problematic foreign key
-            db.exec(`
+      // Drop and recreate table without the problematic foreign key
+      db.exec(`
         DROP TABLE IF EXISTS bookmark_artists;
         
         CREATE TABLE bookmark_artists (
@@ -429,80 +429,80 @@ function fixBookmarkArtistsTable() {
         CREATE INDEX IF NOT EXISTS idx_bookmark_artists_bookmark ON bookmark_artists(bookmark_id);
       `);
 
-            // Restore data
-            const insertStmt = db.prepare('INSERT OR IGNORE INTO bookmark_artists (bookmark_id, artist_id) VALUES (?, ?)');
-            for (const row of existingData) {
-                insertStmt.run(row.bookmark_id, row.artist_id);
-            }
+      // Restore data
+      const insertStmt = db.prepare('INSERT OR IGNORE INTO bookmark_artists (bookmark_id, artist_id) VALUES (?, ?)');
+      for (const row of existingData) {
+        insertStmt.run(row.bookmark_id, row.artist_id);
+      }
 
-            console.log('📦 bookmark_artists table fixed');
-        }
-    } catch (e) {
-        // Table might not exist yet, that's fine
+      console.log('📦 bookmark_artists table fixed');
     }
+  } catch (e) {
+    // Table might not exist yet, that's fine
+  }
 }
 
 // Add preferred_release_group column if it doesn't exist
 function addPreferredReleaseGroupColumn() {
-    try {
-        const columns = db.prepare("PRAGMA table_info(bookmarks)").all();
-        const hasColumn = columns.some(c => c.name === 'preferred_release_group');
-        if (!hasColumn) {
-            db.exec('ALTER TABLE bookmarks ADD COLUMN preferred_release_group TEXT');
-            console.log('📦 Added preferred_release_group column');
-        }
-    } catch (e) {
-        // Table might not exist yet, that's fine
+  try {
+    const columns = db.prepare("PRAGMA table_info(bookmarks)").all();
+    const hasColumn = columns.some(c => c.name === 'preferred_release_group');
+    if (!hasColumn) {
+      db.exec('ALTER TABLE bookmarks ADD COLUMN preferred_release_group TEXT');
+      console.log('📦 Added preferred_release_group column');
     }
+  } catch (e) {
+    // Table might not exist yet, that's fine
+  }
 }
 
 // Add tags column if it doesn't exist
 function addTagsColumn() {
-    try {
-        const columns = db.prepare("PRAGMA table_info(bookmarks)").all();
-        const hasColumn = columns.some(c => c.name === 'tags');
-        if (!hasColumn) {
-            db.exec('ALTER TABLE bookmarks ADD COLUMN tags TEXT');
-            console.log('📦 Added tags column');
-        }
-    } catch (e) {
-        // Table might not exist yet, that's fine
+  try {
+    const columns = db.prepare("PRAGMA table_info(bookmarks)").all();
+    const hasColumn = columns.some(c => c.name === 'tags');
+    if (!hasColumn) {
+      db.exec('ALTER TABLE bookmarks ADD COLUMN tags TEXT');
+      console.log('📦 Added tags column');
     }
+  } catch (e) {
+    // Table might not exist yet, that's fine
+  }
 }
 
 // Add release_group and uploaded_at columns to chapters if they don't exist
 function addChapterMetadataColumns() {
-    try {
-        const columns = db.prepare("PRAGMA table_info(chapters)").all();
-        const existingColumns = new Set(columns.map(c => c.name));
+  try {
+    const columns = db.prepare("PRAGMA table_info(chapters)").all();
+    const existingColumns = new Set(columns.map(c => c.name));
 
-        // List of columns to check and their definitions
-        const columnsToCheck = [
-            { name: 'release_group', def: 'TEXT' },
-            { name: 'uploaded_at', def: 'TEXT' },
-            { name: 'version', def: 'INTEGER DEFAULT 1' },
-            { name: 'total_versions', def: 'INTEGER DEFAULT 1' },
-            { name: 'original_number', def: 'REAL' },
-            { name: 'removed_from_remote', def: 'INTEGER DEFAULT 0' },
-            { name: 'is_old_version', def: 'INTEGER DEFAULT 0' },
-            { name: 'url_changed', def: 'INTEGER DEFAULT 0' }
-        ];
+    // List of columns to check and their definitions
+    const columnsToCheck = [
+      { name: 'release_group', def: 'TEXT' },
+      { name: 'uploaded_at', def: 'TEXT' },
+      { name: 'version', def: 'INTEGER DEFAULT 1' },
+      { name: 'total_versions', def: 'INTEGER DEFAULT 1' },
+      { name: 'original_number', def: 'REAL' },
+      { name: 'removed_from_remote', def: 'INTEGER DEFAULT 0' },
+      { name: 'is_old_version', def: 'INTEGER DEFAULT 0' },
+      { name: 'url_changed', def: 'INTEGER DEFAULT 0' }
+    ];
 
-        for (const col of columnsToCheck) {
-            if (!existingColumns.has(col.name)) {
-                db.exec(`ALTER TABLE chapters ADD COLUMN ${col.name} ${col.def}`);
-                console.log(`📦 Added ${col.name} column to chapters`);
-            }
-        }
-    } catch (e) {
-        console.error('Error migrating chapters table:', e);
+    for (const col of columnsToCheck) {
+      if (!existingColumns.has(col.name)) {
+        db.exec(`ALTER TABLE chapters ADD COLUMN ${col.name} ${col.def}`);
+        console.log(`📦 Added ${col.name} column to chapters`);
+      }
     }
+  } catch (e) {
+    console.error('Error migrating chapters table:', e);
+  }
 }
 
 // Close database
 export function closeDatabase() {
-    if (db) {
-        db.close();
-        db = null;
-    }
+  if (db) {
+    db.close();
+    db = null;
+  }
 }
