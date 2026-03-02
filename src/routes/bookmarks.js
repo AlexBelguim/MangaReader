@@ -5,6 +5,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
+import sharp from 'sharp';
 import {
     bookmarkDb,
     artistDb,
@@ -27,6 +28,28 @@ router.get('/', async (req, res) => {
     try {
         const bookmarks = bookmarkDb.getAllSummary();
         res.json(bookmarks);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all unique artists
+router.get('/artists/all', (req, res) => {
+    try {
+        const db = getDb();
+        const artists = db.prepare('SELECT DISTINCT name FROM artists ORDER BY name').all();
+        res.json(artists.map(a => a.name));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all unique categories
+router.get('/categories/all', (req, res) => {
+    try {
+        const db = getDb();
+        const categories = db.prepare('SELECT DISTINCT name FROM categories ORDER BY name').all();
+        res.json(categories.map(c => c.name));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -152,10 +175,10 @@ router.post('/', validate(schemas.addBookmark), async (req, res) => {
     }
 });
 
-// Update bookmark (rename/alias)
+// Update bookmark (rename/alias, tags)
 router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
     try {
-        const { alias: rawAlias, readChapters } = req.body;
+        const { alias: rawAlias, readChapters, tags, localCover } = req.body;
         const bookmarkId = req.params.id;
 
         const currentBookmark = bookmarkDb.getById(bookmarkId);
@@ -163,9 +186,26 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
 
-        if (readChapters !== undefined && rawAlias === undefined) {
+        // Handle tags update
+        if (tags !== undefined) {
+            const tagsJson = tags ? JSON.stringify(tags) : null;
+            bookmarkDb.update(bookmarkId, { tags: tagsJson });
+        }
+
+        // Handle localCover update (don't affect alias)
+        if (localCover !== undefined) {
+            bookmarkDb.update(bookmarkId, { localCover });
+        }
+
+        if (readChapters !== undefined && rawAlias === undefined && tags === undefined && localCover === undefined) {
             const result = bookmarkDb.update(bookmarkId, { readChapters });
             return res.json(result);
+        }
+
+        // Only update alias if explicitly provided in request
+        if (rawAlias === undefined) {
+            // No alias in request, don't change it - just return current bookmark
+            return res.json(currentBookmark);
         }
 
         const alias = rawAlias?.trim() || null;
@@ -176,8 +216,11 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
         const oldAlias = currentBookmark.alias;
         const newAlias = alias;
 
+        // Always update alias even if it hasn't changed (to ensure it's saved)
+        const result = bookmarkDb.update(bookmarkId, { alias });
+
         if (oldAlias !== newAlias) {
-            console.log(`[Rename] Alias changed, attempting folder rename...`);
+            console.log(`[Alias] Alias changed, attempting folder rename...`);
             const folderResult = await downloader.renameMangaFolder(
                 currentBookmark.title,
                 oldAlias,
@@ -193,20 +236,18 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
             if (folderResult.renamed && currentBookmark.localCover) {
                 const oldFolderName = folderResult.oldFolderName;
                 const newFolderName = folderResult.newFolderName;
-                const newLocalCover = currentBookmark.localCover.replace(
-                    `/downloads/${encodeURIComponent(oldFolderName)}/`,
-                    `/downloads/${encodeURIComponent(newFolderName)}/`
+                // Simple string replacement - works with any path format
+                let newLocalCover = currentBookmark.localCover.replace(
+                    oldFolderName,
+                    newFolderName
                 );
                 console.log(`[Rename] Updating localCover: ${currentBookmark.localCover} -> ${newLocalCover}`);
-                const result = bookmarkDb.update(bookmarkId, { alias, localCover: newLocalCover });
+                bookmarkDb.update(bookmarkId, { localCover: newLocalCover });
                 return res.json({ ...result, folderRenamed: true });
             }
-
-            const result = bookmarkDb.update(bookmarkId, { alias });
-            return res.json(result);
-        } else {
-            return res.json({ success: true, message: 'No changes' });
         }
+
+        return res.json(result);
     } catch (error) {
         console.error(`[Rename] Error:`, error);
         res.status(500).json({ error: error.message });
@@ -261,15 +302,10 @@ router.delete('/:id', async (req, res) => {
         const deleteFolder = req.query.deleteFolder === 'true';
 
         if (deleteFolder) {
-            try {
-                const mangaDir = downloader.getMangaDir(bookmark.title, bookmark.alias);
-                if (await fs.pathExists(mangaDir)) {
-                    await fs.remove(mangaDir);
-                    console.log(`Deleted manga folder: ${mangaDir}`);
-                }
-            } catch (folderError) {
-                console.error('Error deleting manga folder:', folderError);
-            }
+            queue.add('delete-manga-folder', {
+                title: bookmark.title,
+                alias: bookmark.alias
+            });
         }
 
         const result = bookmarkDb.remove(req.params.id);
@@ -589,16 +625,15 @@ router.delete('/:id/chapters', async (req, res) => {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
 
-        try {
-            await downloader.deleteChapter(
-                bookmark.title,
-                chapterNumber,
-                bookmark.alias,
-                url
-            );
-        } catch (e) {
-            // Ignore errors if folder doesn't exist
-        }
+        // Queue the actual file deletion to run in the background
+        // so the UI doesn't freeze waiting for local file IO
+        queue.add('delete-chapter', {
+            bookmarkId: bookmark.id,
+            title: bookmark.title,
+            chapterNumber: chapterNumber,
+            alias: bookmark.alias,
+            url: url
+        });
 
         const downloadedVersions = { ...(bookmark.downloadedVersions || {}) };
         const numKey = String(chapterNumber);
@@ -831,6 +866,45 @@ router.post('/:id/covers/from-chapter', async (req, res) => {
     }
 });
 
+// Set cover from selected image path (copies to covers folder)
+router.post('/:id/covers/from-image', async (req, res) => {
+    try {
+        const { imagePath } = req.body;
+        const bookmark = await bookmarkDb.getById(req.params.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
+
+        if (!imagePath) {
+            return res.status(400).json({ error: 'Image path required' });
+        }
+
+        // Copy image to covers folder with unique name
+        const coverDir = downloader.getCoverDir(bookmark.title, bookmark.alias);
+        await fs.ensureDir(coverDir);
+
+        // Generate unique filename using hash of source path
+        const sourceHash = downloader.hashString(imagePath);
+        const ext = path.extname(imagePath) || '.jpg';
+        const coverFilename = `cover_${sourceHash}${ext}`;
+        const coverPath = path.join(coverDir, coverFilename);
+
+        // Copy the image to covers folder
+        await fs.copy(imagePath, coverPath);
+
+        // Update active cover
+        await downloader.setActiveCover(bookmark.title, coverFilename, bookmark.alias);
+
+        // Save full path to database
+        await bookmarkDb.update(bookmark.id, { localCover: coverPath });
+
+        res.json({ success: true, coverPath: `/api/bookmarks/${bookmark.id}/covers/${encodeURIComponent(coverFilename)}` });
+    } catch (error) {
+        console.error('Error setting cover from image:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ==================== MISC BOOKMARK OPERATIONS ====================
 
 // Clear deleted URL tracking for a chapter
@@ -858,7 +932,7 @@ router.post('/:id/clear-updated/:num', async (req, res) => {
 // Toggle auto-check for a bookmark
 router.post('/:id/auto-check', async (req, res) => {
     try {
-        const { enabled, autoDownload } = req.body;
+        const { enabled, autoDownload, schedule, day, time } = req.body;
         const updates = {};
 
         if (enabled !== undefined) {
@@ -867,10 +941,372 @@ router.post('/:id/auto-check', async (req, res) => {
         if (autoDownload !== undefined) {
             updates.autoDownload = autoDownload ? 1 : 0;
         }
+        if (schedule !== undefined) {
+            updates.checkSchedule = schedule; // 'daily', 'weekly', or null
+        }
+        if (day !== undefined) {
+            updates.checkDay = day; // 'monday', 'tuesday', etc.
+        }
+        if (time !== undefined) {
+            updates.checkTime = time; // 'HH:MM' format
+        }
+
+        // Calculate next check time
+        if (updates.autoCheck === 1 || (enabled === undefined && updates.checkSchedule)) {
+            const bookmark = bookmarkDb.getById(req.params.id);
+            const sched = updates.checkSchedule || bookmark?.checkSchedule || 'daily';
+            const checkDay = updates.checkDay || bookmark?.checkDay || 'monday';
+            const checkTime = updates.checkTime || bookmark?.checkTime || '06:00';
+            updates.nextCheck = calculateNextCheck(sched, checkDay, checkTime);
+        }
+        if (updates.autoCheck === 0) {
+            updates.nextCheck = null;
+            updates.checkSchedule = null;
+            updates.checkDay = null;
+            updates.checkTime = null;
+        }
 
         const result = bookmarkDb.update(req.params.id, updates);
         res.json({ success: true, ...result });
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Helper to calculate next check time
+function calculateNextCheck(schedule, day, time) {
+    const now = new Date();
+    const [hours, minutes] = (time || '06:00').split(':').map(Number);
+
+    if (schedule === 'daily') {
+        const next = new Date(now);
+        next.setHours(hours, minutes, 0, 0);
+        if (next <= now) {
+            next.setDate(next.getDate() + 1);
+        }
+        return next.toISOString();
+    }
+
+    if (schedule === 'weekly') {
+        const dayMap = {
+            'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3,
+            'thursday': 4, 'friday': 5, 'saturday': 6
+        };
+        const targetDay = dayMap[(day || 'monday').toLowerCase()] || 1;
+        const next = new Date(now);
+        next.setHours(hours, minutes, 0, 0);
+
+        const currentDay = next.getDay();
+        let daysUntil = targetDay - currentDay;
+        if (daysUntil < 0 || (daysUntil === 0 && next <= now)) {
+            daysUntil += 7;
+        }
+        next.setDate(next.getDate() + daysUntil);
+        return next.toISOString();
+    }
+
+    // Default: 6 hours from now
+    return new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString();
+}
+
+// ==================== PAGE MANIPULATION ====================
+
+// Helper to get chapter directory for a bookmark
+async function getChapterDir(bookmarkId, chapterNum) {
+    const bookmark = await bookmarkDb.getById(bookmarkId);
+    if (!bookmark) return null;
+
+    const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNum), bookmark.alias);
+    const validVersion = versions.find(v => v.imageCount > 0);
+    return validVersion ? validVersion.path : null;
+}
+
+// Helper to get sorted image list for a chapter
+async function getChapterImages(bookmarkId, chapterNum) {
+    const chapterDir = await getChapterDir(bookmarkId, chapterNum);
+    if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
+
+    const files = await fs.readdir(chapterDir);
+    const images = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    images.sort(collator.compare);
+    return images;
+}
+
+// Rotate a page
+router.post('/:id/chapters/:chapterNum/pages/rotate', async (req, res) => {
+    try {
+        const { id, chapterNum } = req.params;
+        const { filename, degrees = 90 } = req.body;
+
+        if (!filename) {
+            return res.status(400).json({ error: 'Filename is required' });
+        }
+
+        const chapterDir = await getChapterDir(id, chapterNum);
+        if (!chapterDir) {
+            return res.status(404).json({ error: 'Chapter not found or not downloaded' });
+        }
+
+        const filePath = path.join(chapterDir, filename);
+        if (!await fs.pathExists(filePath)) {
+            return res.status(404).json({ error: 'Image file not found' });
+        }
+
+        // Read file to buffer to avoid file locking on Windows
+        const fileBuffer = await fs.readFile(filePath);
+
+        // Rotate the image
+        await sharp(fileBuffer)
+            .rotate(degrees)
+            .toFile(filePath + '.tmp');
+
+        await fs.move(filePath + '.tmp', filePath, { overwrite: true });
+
+        // Return updated image list
+        const images = await getChapterImages(id, chapterNum);
+        res.json({ images });
+    } catch (error) {
+        // Handle EBUSY error - file is locked by another process
+        if (error.code === 'EBUSY' || error.code === 'ENOENT') {
+            return res.status(423).json({ error: 'File is currently in use. Please close the reader and try again.' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Swap two pages
+router.post('/:id/chapters/:chapterNum/pages/swap', async (req, res) => {
+    try {
+        const { id, chapterNum } = req.params;
+        const { filenameA, filenameB } = req.body;
+
+        if (!filenameA || !filenameB) {
+            return res.status(400).json({ error: 'Both filenameA and filenameB are required' });
+        }
+
+        const chapterDir = await getChapterDir(id, chapterNum);
+        if (!chapterDir) {
+            return res.status(404).json({ error: 'Chapter not found or not downloaded' });
+        }
+
+        const filePathA = path.join(chapterDir, filenameA);
+        const filePathB = path.join(chapterDir, filenameB);
+
+        if (!await fs.pathExists(filePathA)) {
+            return res.status(404).json({ error: 'Image file A not found' });
+        }
+        if (!await fs.pathExists(filePathB)) {
+            return res.status(404).json({ error: 'Image file B not found' });
+        }
+
+        // Swap the files
+        const tempPath = path.join(chapterDir, '.swap_temp');
+        await fs.move(filePathA, tempPath);
+        await fs.move(filePathB, filePathA);
+        await fs.move(tempPath, filePathB);
+
+        // Return updated image list
+        const images = await getChapterImages(id, chapterNum);
+        res.json({ images });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Split a page into left and right halves
+router.post('/:id/chapters/:chapterNum/pages/split', async (req, res) => {
+    try {
+        const { id, chapterNum } = req.params;
+        const { filename } = req.body;
+
+        if (!filename) {
+            return res.status(400).json({ error: 'Filename is required' });
+        }
+
+        const chapterDir = await getChapterDir(id, chapterNum);
+        if (!chapterDir) {
+            return res.status(404).json({ error: 'Chapter not found or not downloaded' });
+        }
+
+        const filePath = path.join(chapterDir, filename);
+        if (!await fs.pathExists(filePath)) {
+            return res.status(404).json({ error: 'Image file not found' });
+        }
+
+        // Read file to buffer to prevent file locking on Windows
+        const fileBuffer = await fs.readFile(filePath);
+
+        // Get image metadata
+        const metadata = await sharp(fileBuffer).metadata();
+        const width = metadata.width;
+        const height = metadata.height;
+
+        if (!width || !height) {
+            return res.status(500).json({ error: 'Could not read image metadata' });
+        }
+
+        const halfWidth = Math.floor(width / 2);
+        const ext = path.extname(filename);
+
+        // Create split halves as temp files with proper names that will be caught by filter
+        // For manga (RTL), the RIGHT half of the full image should be read FIRST.
+        // So we name the right side as part 1, and left side as part 2.
+        const baseName = path.basename(filename, ext);
+        const rightTempPath = path.join(chapterDir, `${baseName}_1_right${ext}`);
+        const leftTempPath = path.join(chapterDir, `${baseName}_2_left${ext}`);
+
+        // Create right half (second half of the image, read first in RTL)
+        await sharp(fileBuffer)
+            .extract({ left: halfWidth, top: 0, width: width - halfWidth, height })
+            .toFile(rightTempPath);
+
+        // Create left half (first half of the image, read second in RTL)
+        await sharp(fileBuffer)
+            .extract({ left: 0, top: 0, width: halfWidth, height })
+            .toFile(leftTempPath);
+
+        // Try to delete the original double spread with retries
+        let originalDeleted = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                await fs.remove(filePath);
+                originalDeleted = true;
+                break;
+            } catch (deleteErr) {
+                if (deleteErr.code === 'EBUSY') {
+                    console.warn(`Delete attempt ${attempt + 1} failed, retrying in 1s...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } else {
+                    throw deleteErr;
+                }
+            }
+        }
+
+        if (!originalDeleted) {
+            console.warn('Could not delete original file after 3 attempts (may be in use)');
+        }
+
+        // Get all images (including the new split files) and rename to sequential numbers
+        const allFiles = await fs.readdir(chapterDir);
+        // Include files with _1_right and _2_left suffixes too
+        const imageFiles = allFiles.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f) || /_1_right\.(jpg|jpeg|png|webp|gif)$/i.test(f) || /_2_left\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        imageFiles.sort(collator.compare);
+
+        // If original wasn't deleted, it will be renamed too (which is fine)
+        const filesToRename = imageFiles;
+
+        // Rename all images to sequential numbers using a two-pass approach to avoid overwriting
+        // Pass 1: Rename all files to a temporary namespace
+        const tempFilesMap = [];
+        for (let i = 0; i < filesToRename.length; i++) {
+            const oldName = filesToRename[i];
+            const fileExt = path.extname(oldName);
+            const tempName = `temp_split_rename_${Date.now()}_${i}${fileExt}`;
+            const oldPath = path.join(chapterDir, oldName);
+            const tempPath = path.join(chapterDir, tempName);
+
+            try {
+                await fs.rename(oldPath, tempPath);
+            } catch (renameErr) {
+                console.warn('Rename to temp failed, trying copy+delete:', renameErr.message);
+                try {
+                    await fs.copy(oldPath, tempPath);
+                    await fs.remove(oldPath);
+                } catch (copyErr) {
+                    console.warn('Copy+delete to temp also failed:', copyErr.message);
+                    // If we can't move it to temp, we risk data loss, but try to continue
+                }
+            }
+            tempFilesMap.push({ tempName, index: i, ext: fileExt, original: oldName });
+        }
+
+        // Pass 2: Rename from temp namespace to final zero-padded names
+        const renamedFiles = [];
+        for (const item of tempFilesMap) {
+            const newName = String(item.index + 1).padStart(3, '0') + item.ext;
+            const tempPath = path.join(chapterDir, item.tempName);
+            const newPath = path.join(chapterDir, newName);
+
+            try {
+                if (await fs.pathExists(tempPath)) {
+                    await fs.rename(tempPath, newPath);
+                    renamedFiles.push(newName);
+                } else {
+                    renamedFiles.push(item.original); // Fallback if temp file missing
+                }
+            } catch (renameErr) {
+                console.warn('Final rename failed, trying copy+delete:', renameErr.message);
+                try {
+                    await fs.copy(tempPath, newPath);
+                    await fs.remove(tempPath);
+                    renamedFiles.push(newName);
+                } catch (copyErr) {
+                    console.warn('Final copy+delete failed:', copyErr.message);
+                    renamedFiles.push(item.original);
+                }
+            }
+        }
+
+        // Sort the renamed files numerically
+        renamedFiles.sort(collator.compare);
+
+        // Convert to URLs
+        const images = renamedFiles.map(f =>
+            `/api/public/chapter-images/${id}/${chapterNum}/${encodeURIComponent(f)}`
+        );
+
+        // Return updated image list
+        res.json({ images });
+    } catch (error) {
+        // Handle file locked errors more gracefully
+        if (error.code === 'EBUSY' || error.code === 'ENOENT') {
+            // Still return success - the split likely worked, just the delete failed
+            const chapterDir = await getChapterDir(id, chapterNum);
+            if (chapterDir) {
+                const allFiles = await fs.readdir(chapterDir);
+                const imageFiles = allFiles.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+                const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+                imageFiles.sort(collator.compare);
+                // Convert to URLs
+                const images = imageFiles.map(f =>
+                    `/api/public/chapter-images/${id}/${chapterNum}/${encodeURIComponent(f)}`
+                );
+                return res.json({ images, warning: 'Original file could not be deleted. You may need to refresh or close the reader.' });
+            }
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete a page
+router.delete('/:id/chapters/:chapterNum/pages/:filename', async (req, res) => {
+    try {
+        const { id, chapterNum, filename } = req.params;
+        const decodedFilename = decodeURIComponent(filename);
+
+        const chapterDir = await getChapterDir(id, chapterNum);
+        if (!chapterDir) {
+            return res.status(404).json({ error: 'Chapter not found or not downloaded' });
+        }
+
+        const filePath = path.join(chapterDir, decodedFilename);
+        if (!await fs.pathExists(filePath)) {
+            return res.status(404).json({ error: 'Image file not found' });
+        }
+
+        // Delete the file
+        await fs.remove(filePath);
+
+        // Return updated image list
+        const images = await getChapterImages(id, chapterNum);
+        res.json({ images });
+    } catch (error) {
+        // Handle EBUSY error - file is locked by another process
+        if (error.code === 'EBUSY' || error.code === 'ENOENT') {
+            return res.status(423).json({ error: 'File is currently in use. Please close the reader and try again.' });
+        }
         res.status(500).json({ error: error.message });
     }
 });

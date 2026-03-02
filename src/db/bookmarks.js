@@ -109,6 +109,10 @@ export const bookmarkDb = {
             updatedAt: b.updated_at,
             autoCheck: !!b.auto_check,
             autoDownload: !!b.auto_download,
+            checkSchedule: b.check_schedule || null,
+            checkDay: b.check_day || null,
+            checkTime: b.check_time || null,
+            nextCheck: b.next_check || null,
             // Counts instead of full arrays
             downloadedCount: downloadedCounts.get(b.id) || 0,
             readCount: readCounts.get(b.id) || 0,
@@ -262,6 +266,10 @@ export const bookmarkDb = {
             excludedChapters,
             autoCheck: !!bookmark.auto_check,
             autoDownload: !!bookmark.auto_download,
+            checkSchedule: bookmark.check_schedule || null,
+            checkDay: bookmark.check_day || null,
+            checkTime: bookmark.check_time || null,
+            nextCheck: bookmark.next_check || null,
             volumes: this.getVolumes(id)
         };
     },
@@ -491,8 +499,6 @@ export const bookmarkDb = {
         const db = getDb();
         const now = new Date().toISOString();
 
-        console.log(`[DB Update] Bookmark ${id}, updates:`, updates);
-
         const fields = [];
         const values = [];
 
@@ -508,7 +514,11 @@ export const bookmarkDb = {
             lastReadAt: 'last_read_at',
             preferredReleaseGroup: 'preferred_release_group',
             autoCheck: 'auto_check',
-            autoDownload: 'auto_download'
+            autoDownload: 'auto_download',
+            checkSchedule: 'check_schedule',
+            checkDay: 'check_day',
+            checkTime: 'check_time',
+            nextCheck: 'next_check'
         };
 
         for (const [key, col] of Object.entries(fieldMap)) {
@@ -525,8 +535,6 @@ export const bookmarkDb = {
 
         if (fields.length > 1) {
             const sql = `UPDATE bookmarks SET ${fields.join(', ')} WHERE id = ?`;
-            console.log(`[DB Update] SQL: ${sql}`);
-            console.log(`[DB Update] Values:`, values);
             db.prepare(sql).run(...values);
         }
 

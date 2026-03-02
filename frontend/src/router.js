@@ -34,6 +34,7 @@ class Router {
      * Navigate to current hash
      */
     async navigate() {
+        console.log('[Router] navigate called');
         const hash = window.location.hash.slice(1) || '/';
         const [path, ...params] = hash.split('/').filter(Boolean);
 
@@ -41,6 +42,7 @@ class Router {
 
         // Unmount previous view
         if (this.currentView && this.currentView.unmount) {
+            console.log('[Router] calling unmount on current view');
             this.currentView.unmount();
         }
 
@@ -58,6 +60,7 @@ class Router {
 
             // Mount the view
             if (viewModule.mount) {
+                console.log('[Router] calling mount on view module');
                 await viewModule.mount(params);
             }
 
@@ -102,6 +105,7 @@ import seriesView from './views/series.js';
 import settingsView from './views/settings.js';
 import adminView from './views/admin.js';
 import favoritesView from './views/favorites.js';
+import queueView from './views/queue.js';
 
 // Register routes
 router.register('/', libraryView);
@@ -111,6 +115,7 @@ router.register('/series', seriesView);
 router.register('/settings', settingsView);
 router.register('/admin', adminView);
 router.register('/favorites', favoritesView);
+router.register('/queue', queueView);
 
 export { router };
 export default router;

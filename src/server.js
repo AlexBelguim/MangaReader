@@ -16,6 +16,8 @@ import {
   bookmarkDb,
   closeDatabase
 } from './database.js';
+import { favoritesDb } from './db/favorites.js';
+import { trophyDb } from './db/trophies.js';
 
 // Import route modules
 import adminRouter from './routes/admin.js';
@@ -56,6 +58,44 @@ app.use(requestLogger);
 
 // ==================== PUBLIC ROUTES (before auth) ====================
 
+// Proxy image from local folder
+app.get('/api/proxy-image', async (req, res) => {
+  try {
+    const imagePath = req.query.path;
+    if (!imagePath) return res.status(400).send('Missing path');
+
+    const decodedPath = decodeURIComponent(imagePath);
+    const resolvedPath = path.resolve(decodedPath);
+    const resolvedDownloadsDir = path.resolve(CONFIG.downloadsDir);
+
+    // Security check - ensure path is within downloads dir
+    if (!resolvedPath.startsWith(resolvedDownloadsDir)) {
+      return res.status(403).send('Access denied');
+    }
+
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile()) return res.status(404).send('Not found');
+
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const contentTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+
+    res.setHeader('Content-Type', contentTypes[ext] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+
+    const stream = fs.createReadStream(resolvedPath);
+    stream.pipe(res);
+  } catch (error) {
+    console.error('Proxy image error:', error);
+    res.status(500).send('Error loading image');
+  }
+});
+
 // Public Cover Image Route
 app.get('/api/public/covers/:id/:filename', async (req, res) => {
   console.log(`[Debug] Public cover request: ${req.params.id} / ${req.params.filename}`);
@@ -63,32 +103,49 @@ app.get('/api/public/covers/:id/:filename', async (req, res) => {
     const bookmark = await bookmarkDb.getById(req.params.id);
     if (!bookmark) return res.status(404).send('Not found');
 
-    let coverDir;
-
+    let filePath;
     const reqFilename = decodeURIComponent(req.params.filename);
+
+    // If localCover is saved, try to use it directly
     if (bookmark.local_cover && bookmark.local_cover.endsWith(reqFilename)) {
-      let relPath = bookmark.local_cover;
-      if (relPath.startsWith('/downloads/')) {
-        relPath = relPath.substring(11);
-      } else if (relPath.startsWith('downloads/')) {
-        relPath = relPath.substring(10);
+      // Try the saved path directly first
+      if (await fs.pathExists(bookmark.local_cover)) {
+        filePath = bookmark.local_cover;
+      } else {
+        // Try to extract relative path and construct new path
+        let relPath = bookmark.local_cover;
+
+        // Handle various path formats
+        if (relPath.startsWith('/downloads/')) {
+          relPath = relPath.substring(11);
+        } else if (relPath.startsWith('downloads/')) {
+          relPath = relPath.substring(10);
+        } else if (relPath.includes('/downloads/')) {
+          // Handle full paths like /mnt/smb/.../downloads/...
+          relPath = relPath.substring(relPath.indexOf('/downloads/') + 11);
+        } else if (relPath.includes('\\downloads\\')) {
+          // Handle Windows full paths like F:\...\downloads\...
+          relPath = relPath.substring(relPath.indexOf('\\downloads\\') + 12);
+        }
+
+        // Try with CONFIG.downloadsDir
+        const fullPath = path.join(CONFIG.downloadsDir, relPath);
+        if (await fs.pathExists(fullPath)) {
+          filePath = fullPath;
+        }
       }
-
-      try {
-        relPath = decodeURIComponent(relPath);
-      } catch (e) { }
-
-      const fullPath = path.join(CONFIG.downloadsDir, relPath);
-      coverDir = path.dirname(fullPath);
-    } else {
-      coverDir = downloader.getCoverDir(bookmark.title, bookmark.alias);
     }
 
-    const filePath = path.join(coverDir, reqFilename);
+    // Fall back to computed cover directory
+    if (!filePath) {
+      const coverDir = downloader.getCoverDir(bookmark.title, bookmark.alias);
+      filePath = path.join(coverDir, reqFilename);
+    }
 
     if (await fs.pathExists(filePath)) {
       res.sendFile(filePath);
     } else {
+      console.log(`[Debug] Cover not found at: ${filePath}`);
       res.status(404).send('Cover not found');
     }
   } catch (e) {
@@ -138,6 +195,40 @@ app.use('/downloads', express.static(CONFIG.downloadsDir));
 const taskQueue = queue;
 
 // Register Queue Processors
+queue.registerProcessor('delete-chapter', async (jobData) => {
+  const { bookmarkId, title, chapterNumber, alias, url } = jobData;
+  logger.info(`[Queue-Worker] Processing delete-chapter for ${title} Ch.${chapterNumber}`);
+
+  try {
+    await downloader.deleteChapter(title, chapterNumber, alias, url);
+
+    if (bookmarkId) {
+      favoritesDb.deleteForChapter(bookmarkId, chapterNumber);
+      trophyDb.deleteForChapter(bookmarkId, chapterNumber);
+    }
+
+    return { success: true };
+  } catch (e) {
+    throw new Error(`Failed to delete chapter: ${e.message}`);
+  }
+});
+
+queue.registerProcessor('delete-manga-folder', async (jobData) => {
+  const { title, alias } = jobData;
+  logger.info(`[Queue-Worker] Processing delete-manga-folder for ${title}`);
+
+  try {
+    const mangaDir = downloader.getMangaDir(title, alias);
+    if (await fs.pathExists(mangaDir)) {
+      await fs.remove(mangaDir);
+      logger.info(`Deleted manga folder: ${mangaDir}`);
+    }
+    return { success: true };
+  } catch (e) {
+    throw new Error(`Failed to delete manga folder: ${e.message}`);
+  }
+});
+
 queue.registerProcessor('scrape', async (jobData, jobId) => {
   const { url } = jobData;
   logger.info(`[Queue-Worker] Processing scrape job ${jobId} for ${url}`);
@@ -214,17 +305,41 @@ app.get('/api/queue/tasks', (req, res) => {
   res.json(queue.getActiveJobs());
 });
 
+app.get('/api/queue/history', (req, res) => {
+  const limit = parseInt(req.query.limit) || 100;
+  res.json(queue.getHistory(limit));
+});
+
 // Auto-check status
 app.get('/api/auto-check/status', (req, res) => {
   try {
     const db = getDb();
     const enabled = db.prepare('SELECT COUNT(*) as count FROM bookmarks WHERE auto_check = 1').get();
     const total = db.prepare('SELECT COUNT(*) as count FROM bookmarks').get();
+
+    // Get per-manga scheduled tasks
+    const scheduledManga = db.prepare(`
+      SELECT id, title, alias, auto_check, check_schedule, check_day, check_time, next_check
+      FROM bookmarks 
+      WHERE auto_check = 1
+      ORDER BY next_check ASC
+    `).all();
+
+    const schedules = scheduledManga.map(m => ({
+      id: m.id,
+      title: m.alias || m.title,
+      schedule: m.check_schedule || 'default',
+      day: m.check_day,
+      time: m.check_time,
+      nextCheck: m.next_check
+    }));
+
     res.json({
       enabledCount: enabled.count,
       totalCount: total.count,
       lastRun: global.lastAutoCheckRun || null,
-      nextRun: global.nextAutoCheckRun || null
+      nextRun: global.nextAutoCheckRun || null,
+      schedules
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -273,22 +388,30 @@ async function runAutoCheck() {
 
   const db = getDb();
   const autoCheckEnabled = db.prepare(`
-    SELECT id, url, title, alias, website 
+    SELECT id, url, title, alias, website, check_schedule, check_day, check_time, next_check
     FROM bookmarks 
     WHERE auto_check = 1 AND website IS NOT NULL AND website != 'Local'
   `).all();
 
-  const shuffled = [...autoCheckEnabled].sort(() => Math.random() - 0.5);
+  // Filter to only manga whose next_check is due (or has no schedule set = use default)
+  const now = new Date();
+  const dueForCheck = autoCheckEnabled.filter(m => {
+    if (!m.next_check) return true; // No schedule set, always check
+    return new Date(m.next_check) <= now;
+  });
+
+  const shuffled = [...dueForCheck].sort(() => Math.random() - 0.5);
 
   const results = {
     checked: 0,
     updated: 0,
     downloaded: 0,
     errors: [],
-    totalToCheck: shuffled.length
+    totalToCheck: shuffled.length,
+    totalEnabled: autoCheckEnabled.length
   };
 
-  console.log(`[Auto-Check] Checking ${shuffled.length} manga with staggered timing...`);
+  console.log(`[Auto-Check] Checking ${shuffled.length}/${autoCheckEnabled.length} manga with staggered timing...`);
 
   for (let i = 0; i < shuffled.length; i++) {
     const manga = shuffled[i];
@@ -311,6 +434,35 @@ async function runAutoCheck() {
 
       const updateResult = await scraper.quickCheckUpdates(manga.url, knownUrls);
       results.checked++;
+
+      // Update next_check for this manga
+      try {
+        const sched = manga.check_schedule || 'daily';
+        const dayMap = {
+          'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3,
+          'thursday': 4, 'friday': 5, 'saturday': 6
+        };
+        const checkTime = manga.check_time || '06:00';
+        const [h, m] = checkTime.split(':').map(Number);
+        let nextCheck;
+        if (sched === 'weekly') {
+          const targetDay = dayMap[(manga.check_day || 'monday').toLowerCase()] || 1;
+          nextCheck = new Date();
+          nextCheck.setHours(h, m, 0, 0);
+          const currentDay = nextCheck.getDay();
+          let daysUntil = targetDay - currentDay;
+          if (daysUntil <= 0) daysUntil += 7;
+          nextCheck.setDate(nextCheck.getDate() + daysUntil);
+        } else {
+          // daily
+          nextCheck = new Date();
+          nextCheck.setHours(h, m, 0, 0);
+          if (nextCheck <= new Date()) nextCheck.setDate(nextCheck.getDate() + 1);
+        }
+        db.prepare('UPDATE bookmarks SET next_check = ? WHERE id = ?').run(nextCheck.toISOString(), manga.id);
+      } catch (schedErr) {
+        console.error(`[Auto-Check] Failed to update next_check for ${manga.title}: ${schedErr.message}`);
+      }
 
       if (updateResult.hasUpdates && updateResult.newChapters.length > 0) {
         console.log(`[Auto-Check] Found ${updateResult.newChapters.length} new chapters for ${manga.title}`);
@@ -354,7 +506,7 @@ async function runAutoCheck() {
 }
 
 function scheduleAutoCheck() {
-  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  const ONE_HOUR = 60 * 60 * 1000;
 
   const runScheduled = async () => {
     try {
@@ -362,14 +514,14 @@ function scheduleAutoCheck() {
     } catch (err) {
       console.error('[Auto-Check] Scheduled check failed:', err);
     }
-    global.nextAutoCheckRun = new Date(Date.now() + SIX_HOURS).toISOString();
-    setTimeout(runScheduled, SIX_HOURS);
+    global.nextAutoCheckRun = new Date(Date.now() + ONE_HOUR).toISOString();
+    setTimeout(runScheduled, ONE_HOUR);
   };
 
-  global.nextAutoCheckRun = new Date(Date.now() + SIX_HOURS).toISOString();
-  setTimeout(runScheduled, SIX_HOURS);
+  global.nextAutoCheckRun = new Date(Date.now() + ONE_HOUR).toISOString();
+  setTimeout(runScheduled, ONE_HOUR);
 
-  console.log('[Auto-Check] Scheduler started (runs every 6 hours)');
+  console.log('[Auto-Check] Scheduler started (checks every hour for due manga)');
 }
 
 // ==================== STARTUP ====================

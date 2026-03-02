@@ -2,6 +2,9 @@
  * Header Component
  * Navigation bar with actions
  */
+import { router } from '../router.js';
+import { store } from '../store.js';
+import { handleScan } from '../utils/scan.js';
 
 /**
  * Render the header
@@ -17,8 +20,12 @@ export function renderHeader(viewMode = 'manga') {
             <button class="view-toggle-btn ${viewMode === 'series' ? 'active' : ''}" data-view="series" title="Series view">📖</button>
           </div>
           <button class="btn btn-secondary" id="favorites-btn">⭐ Favorites</button>
+          <a href="#/queue" class="btn btn-secondary" id="queue-nav-btn" title="Task Queue">📋 Queue</a>
           <button class="btn btn-secondary" id="scan-btn">📁 Scan Folder</button>
-          <button class="btn btn-primary" id="add-manga-btn">+ Add Manga</button>
+          ${viewMode === 'series'
+      ? '<button class="btn btn-primary" id="add-series-btn">+ Add Series</button>'
+      : '<button class="btn btn-primary" id="add-manga-btn">+ Add Manga</button>'
+    }
           <button class="btn btn-secondary" id="logout-btn">🚪</button>
           <a href="#/admin" class="btn btn-secondary" title="Admin">🔧</a>
           <a href="#/settings" class="btn btn-secondary" title="Settings">⚙️</a>
@@ -33,8 +40,12 @@ export function renderHeader(viewMode = 'manga') {
           <button class="view-toggle-btn ${viewMode === 'series' ? 'active' : ''}" data-view="series">📖 Series</button>
         </div>
         <button class="mobile-menu-item" id="mobile-favorites-btn">⭐ Favorites</button>
+        <a href="#/queue" class="mobile-menu-item">📋 Task Queue</a>
         <button class="mobile-menu-item" id="mobile-scan-btn">📁 Scan Folder</button>
-        <button class="mobile-menu-item primary" id="mobile-add-btn">+ Add Manga</button>
+        ${viewMode === 'series'
+      ? '<button class="mobile-menu-item primary" id="mobile-add-series-btn">+ Add Series</button>'
+      : '<button class="mobile-menu-item primary" id="mobile-add-btn">+ Add Manga</button>'
+    }
         <button class="mobile-menu-item" id="mobile-logout-btn">🚪 Logout</button>
         <a href="#/admin" class="mobile-menu-item">🔧 Admin</a>
         <a href="#/settings" class="mobile-menu-item">⚙️ Settings</a>
@@ -96,6 +107,41 @@ export function setupHeaderListeners() {
       // Dispatch event to clear filters in library
       window.dispatchEvent(new CustomEvent('clearFilters'));
     });
+  }
+
+  // Favorites
+  const favBtn = document.getElementById('favorites-btn');
+  const mobileFavBtn = document.getElementById('mobile-favorites-btn');
+  const handleFav = (e) => {
+    e.preventDefault();
+    router.go('/favorites');
+  };
+  if (favBtn) favBtn.addEventListener('click', handleFav);
+  if (mobileFavBtn) mobileFavBtn.addEventListener('click', handleFav);
+
+  // Queue
+  const queueBtn = document.getElementById('queue-nav-btn');
+  if (queueBtn) {
+    queueBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      router.go('/queue');
+    });
+  }
+
+  // Scan Folder
+  const scanBtn = document.getElementById('scan-btn');
+  const mobileScanBtn = document.getElementById('mobile-scan-btn');
+  if (scanBtn || mobileScanBtn) {
+    const handleScanClick = () => {
+      handleScan(scanBtn, mobileScanBtn, async () => {
+        // Refresh store
+        await store.loadBookmarks(true);
+        // Refresh current view if needed
+        router.reload();
+      });
+    };
+    if (scanBtn) scanBtn.addEventListener('click', handleScanClick);
+    if (mobileScanBtn) mobileScanBtn.addEventListener('click', handleScanClick);
   }
 }
 

@@ -3,9 +3,11 @@ import { defineConfig } from 'vite';
 export default defineConfig({
     root: '.',
     base: '/',
+    appType: 'mpa',
 
     server: {
         port: 5173,
+        host: true,
         proxy: {
             // Proxy API requests to the backend
             '/api': {

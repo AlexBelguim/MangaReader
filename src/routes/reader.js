@@ -8,6 +8,8 @@ import fs from 'fs-extra';
 import sharp from 'sharp';
 import { bookmarkDb, chapterSettingsDb } from '../database.js';
 import { downloader } from '../downloader.js';
+import { favoritesDb } from '../db/favorites.js';
+import { trophyDb } from '../db/trophies.js';
 import { CONFIG } from '../config.js';
 
 const router = express.Router();
@@ -144,8 +146,50 @@ router.delete('/:id/chapters/:num/download', async (req, res) => {
 
         if (result.success) {
             await bookmarkDb.markChapterDeleted(bookmark.id, chapterNum, chapter?.url);
+            favoritesDb.deleteForChapter(bookmark.id, chapterNum);
+            trophyDb.deleteForChapter(bookmark.id, chapterNum);
         }
         res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get next chapter's first image (for link mode)
+router.get('/:id/chapters/:num/next-preview', async (req, res) => {
+    try {
+        const bookmark = await bookmarkDb.getById(req.params.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const currentChapter = parseFloat(req.params.num);
+        const downloadedChapters = (bookmark.downloadedChapters || []).sort((a, b) => a - b);
+        const currentIdx = downloadedChapters.indexOf(currentChapter);
+
+        if (currentIdx === -1 || currentIdx >= downloadedChapters.length - 1) {
+            return res.json({ firstImage: null, nextChapter: null });
+        }
+
+        const nextChapter = downloadedChapters[currentIdx + 1];
+
+        // Get the first image from next chapter
+        const versions = await downloader.getExistingVersions(bookmark.title, nextChapter, bookmark.alias);
+        const validVersion = versions.find(v => v.imageCount > 0);
+
+        if (!validVersion) {
+            return res.json({ firstImage: null, nextChapter });
+        }
+
+        const files = await fs.readdir(validVersion.path);
+        const images = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        images.sort(collator.compare);
+
+        if (images.length === 0) {
+            return res.json({ firstImage: null, nextChapter });
+        }
+
+        const firstImage = `/api/public/chapter-images/${req.params.id}/${nextChapter}/${encodeURIComponent(images[0])}`;
+        res.json({ firstImage, nextChapter });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

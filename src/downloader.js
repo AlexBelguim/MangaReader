@@ -3,6 +3,7 @@ import path from 'path';
 import https from 'https';
 import http from 'http';
 import AdmZip from 'adm-zip';
+import sharp from 'sharp';
 import { CONFIG } from './config.js';
 
 class Downloader {
@@ -85,7 +86,7 @@ class Downloader {
     return versions;
   }
 
-  async downloadImage(url, filePath) {
+  async downloadImage(url, filePath, customHeaders = null) {
     // Handle protocol-relative URLs
     let fullUrl = url;
     if (url.startsWith('//')) {
@@ -95,16 +96,18 @@ class Downloader {
     return new Promise((resolve, reject) => {
       const protocol = fullUrl.startsWith('https') ? https : http;
 
-      const request = protocol.get(fullUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': new URL(fullUrl).origin,
-          'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
-        }
-      }, (response) => {
+      const defaultHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': new URL(fullUrl).origin,
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+      };
+
+      const headers = customHeaders ? { ...defaultHeaders, ...customHeaders } : defaultHeaders;
+
+      const request = protocol.get(fullUrl, { headers }, (response) => {
         // Handle redirects
         if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          this.downloadImage(response.headers.location, filePath)
+          this.downloadImage(response.headers.location, filePath, customHeaders)
             .then(resolve)
             .catch(reject);
           return;
@@ -171,23 +174,67 @@ class Downloader {
       version: version
     };
 
-    for (const image of images) {
-      const ext = this.getImageExtension(image.url);
-      const fileName = `${String(image.index).padStart(3, '0')}${ext}`;
-      const filePath = path.join(chapterDir, fileName);
+    let fileIndex = 1;
 
-      // Skip if already downloaded
-      if (await fs.pathExists(filePath)) {
+    for (let i = 0; i < images.length; i++) {
+      const image = images[i];
+      const ext = this.getImageExtension(image.url);
+
+      // Initial download path (temporary if we split)
+      const rawFileName = `raw_${String(fileIndex).padStart(3, '0')}${ext}`;
+      const rawFilePath = path.join(chapterDir, rawFileName);
+
+      const finalFileNamePattern = `${String(fileIndex).padStart(3, '0')}`;
+      const finalFilePath = path.join(chapterDir, `${finalFileNamePattern}${ext}`);
+
+      // Check if the final expected file already exists (simplistic skip check)
+      if (await fs.pathExists(finalFilePath)) {
         results.skipped++;
-        results.files.push(filePath);
+        results.files.push(finalFilePath);
+        fileIndex++;
         if (onProgress) onProgress(image.index, images.length, 'skipped');
         continue;
       }
 
       try {
-        await this.downloadImage(image.url, filePath);
-        results.success++;
-        results.files.push(filePath);
+        await this.downloadImage(image.url, rawFilePath, image.headers || null);
+
+        // Analyze image dimensions via buffer to prevent EBUSY locks on Windows
+        const fileBuffer = await fs.readFile(rawFilePath);
+        const metadata = await sharp(fileBuffer).metadata();
+        const aspect = metadata.width / metadata.height;
+
+        if (aspect > 1.2) {
+          // It's a double spread, split it
+          const halfWidth = Math.floor(metadata.width / 2);
+
+          const rightPath = path.join(chapterDir, `${String(fileIndex).padStart(3, '0')}${ext}`);
+          const leftPath = path.join(chapterDir, `${String(fileIndex + 1).padStart(3, '0')}${ext}`);
+
+          // Right half (Page 1)
+          await sharp(fileBuffer)
+            .extract({ left: halfWidth, top: 0, width: metadata.width - halfWidth, height: metadata.height })
+            .toFile(rightPath);
+
+          // Left half (Page 2)
+          await sharp(fileBuffer)
+            .extract({ left: 0, top: 0, width: halfWidth, height: metadata.height })
+            .toFile(leftPath);
+
+          // Cleanup raw
+          await fs.unlink(rawFilePath);
+
+          results.success += 2; // Treat as 2 successful pieces
+          results.files.push(leftPath, rightPath);
+          fileIndex += 2;
+        } else {
+          // Normal image, just rename the raw file to final
+          await fs.rename(rawFilePath, finalFilePath);
+          results.success++;
+          results.files.push(finalFilePath);
+          fileIndex++;
+        }
+
         if (onProgress) onProgress(image.index, images.length, 'success');
 
         // Small delay between downloads
@@ -195,7 +242,9 @@ class Downloader {
       } catch (error) {
         results.failed++;
         if (onProgress) onProgress(image.index, images.length, 'failed');
-        console.error(`    Failed to download image ${image.index}: ${error.message}`);
+        console.error(`    Failed to download/process image ${image.index}: ${error.message}`);
+        // Attempt cleanup of raw if failed during split
+        try { if (await fs.pathExists(rawFilePath)) await fs.unlink(rawFilePath); } catch (e) { }
       }
     }
 

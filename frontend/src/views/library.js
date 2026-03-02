@@ -1,3 +1,5 @@
+import { handleScan } from '../utils/scan.js';
+
 /**
  * Library View Component
  * Main grid of manga cards
@@ -16,7 +18,7 @@ let state = {
   favorites: { favorites: {}, listOrder: [] },
   activeCategory: localStorage.getItem('library_active_category') || null,
   artistFilter: null,
-  searchQuery: '',
+  searchQuery: localStorage.getItem('library_search') || '',
   sortBy: localStorage.getItem('library_sort') || 'updated',
   viewMode: 'manga', // 'manga' or 'series'
   loading: true
@@ -78,7 +80,7 @@ function renderMangaCard(manga) {
           <span class="badge badge-chapters" title="Total">${totalCount}</span>
           ${downloadedCount > 0 ? `<span class="badge badge-downloaded" title="Downloaded">${downloadedCount}</span>` : ''}
           ${hasUpdates ? `<span class="badge badge-warning" title="Updates available">!</span>` : ''}
-          ${manga.autoCheck ? `<span class="badge badge-monitored" title="Monitored">🔔</span>` : ''}
+          ${manga.autoCheck ? `<span class="badge badge-monitored" title="Auto-check enabled">⏰</span>` : ''}
           ${state.activeCategory === 'Favorites' ? `<span class="badge badge-play" title="Click to Read">▶</span>` : ''}
         </div>
       </div>
@@ -174,59 +176,55 @@ export function render() {
     state.viewMode = savedMode;
   }
 
-  if (state.viewMode === 'series') {
-    // Render series view
-    const seriesCards = state.series.map(renderSeriesCard).join('');
-
-    return `
-        ${renderHeader(state.viewMode)}
-<div class="container">
-  <div class="library-grid" id="library-grid">
-    ${state.loading
-        ? '<div class="loading-spinner"></div>'
-        : (seriesCards || '<div class="empty-state"><h2>No series yet</h2><p>Create a series to group related manga together.</p></div>')
-      }
-  </div>
-</div>
-`;
-
-  }
-
   // Favorites - redirect to dedicated favorites view
   if (state.activeCategory === 'Favorites') {
     // Redirect to favorites view - don't return any HTML to avoid overwriting
     router.go('/favorites');
     return ''; // Return empty - favorites view will render its own content
   }
-  let filtered = state.activeCategory
-    ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
-    : state.bookmarks;
 
-  if (state.artistFilter) {
-    filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
-  }
+  let content = '';
+  if (state.viewMode === 'series') {
+    // Render series view
+    const seriesCards = state.series.map(renderSeriesCard).join('');
+    content = `
+      <div class="library-grid" id="library-grid">
+        ${state.loading
+        ? '<div class="loading-spinner"></div>'
+        : (seriesCards || '<div class="empty-state"><h2>No series yet</h2><p>Create a series to group related manga together.</p><button class="btn btn-primary" id="empty-add-series-btn">+ Create Series</button></div>')
+      }
+      </div>
+    `;
+  } else {
+    // Render manga view
+    let filtered = state.activeCategory
+      ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
+      : state.bookmarks;
 
-  // Search filter
-  if (state.searchQuery) {
-    const q = state.searchQuery.toLowerCase();
-    filtered = filtered.filter(m =>
-      (m.title || '').toLowerCase().includes(q) ||
-      (m.alias || '').toLowerCase().includes(q)
-    );
-  }
+    if (state.artistFilter) {
+      filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
+    }
 
-  // Sort
-  filtered = sortBookmarks(filtered);
+    // Search filter
+    if (state.searchQuery) {
+      const q = state.searchQuery.toLowerCase();
+      filtered = filtered.filter(m =>
+        (m.title || '').toLowerCase().includes(q) ||
+        (m.alias || '').toLowerCase().includes(q) ||
+        (m.artists || []).some(a => a.toLowerCase().includes(q))
+      );
+    }
 
-  const cards = filtered.map(renderMangaCard).join('');
+    // Sort
+    filtered = sortBookmarks(filtered);
 
-  return `
-    ${renderHeader(state.viewMode)}
-    <div class="container">
+    const cards = filtered.map(renderMangaCard).join('');
+
+    content = `
       <div class="library-controls">
         <div class="search-bar">
           <span class="search-icon">🔍</span>
-          <input type="text" id="library-search" placeholder="Search manga..." value="${state.searchQuery}" autocomplete="off">
+          <input type="text" id="library-search" placeholder="Search manga or author..." value="${state.searchQuery}" autocomplete="off">
           ${state.searchQuery ? '<button class="search-clear" id="search-clear">×</button>' : ''}
         </div>
         <select class="sort-select" id="library-sort">
@@ -246,14 +244,22 @@ export function render() {
       ` : ''}
       <div class="library-grid" id="library-grid">
         ${state.loading
-      ? '<div class="loading-spinner"></div>'
-      : (cards || renderEmptyState())
-    }
+        ? '<div class="loading-spinner"></div>'
+        : (cards || renderEmptyState())
+      }
       </div>
+    `;
+  }
+
+  return `
+    ${renderHeader(state.viewMode)}
+    <div class="container">
+      ${content}
     </div>
     ${renderCategoryFab()}
     ${renderAddModal()}
-    `;
+    ${renderAddSeriesModal()}
+  `;
 }
 
 /**
@@ -319,13 +325,100 @@ function renderAddModal() {
 }
 
 /**
- * Handle clear filters event
+ * Render add series modal
  */
+function renderAddSeriesModal() {
+  return `
+      <div class="modal" id="add-series-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Create New Series</h2>
+          <button class="modal-close" id="add-series-modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="series-title">Series Title</label>
+            <input type="text" id="series-title" placeholder="e.g., Marvel Cinematic Universe" required>
+          </div>
+          <div class="form-group">
+            <label for="series-alias">Alias (Optional)</label>
+            <input type="text" id="series-alias" placeholder="e.g., MCU">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="add-series-modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="add-series-modal-submit">Create</button>
+        </div>
+      </div>
+    </div>
+      `;
+}
 function handleClearFilters() {
   state.activeCategory = null;
   state.artistFilter = null;
+  state.searchQuery = '';
   localStorage.removeItem('library_active_category');
+  localStorage.removeItem('library_artist_filter');
+  localStorage.removeItem('library_search');
   mount();
+}
+
+/**
+ * Setup event listeners
+ */
+/**
+ * Handle card clicks
+ */
+async function handleCardClick(e) {
+  const card = e.target.closest('.manga-card');
+  if (card) {
+    // Check for Gallery Card
+    if (card.classList.contains('gallery-card')) {
+      const name = card.dataset.gallery;
+      router.go(`/read/gallery/${encodeURIComponent(name)}`);
+      return;
+    }
+
+    const id = card.dataset.id;
+    const seriesId = card.dataset.seriesId;
+
+    // Handle Series Card
+    if (seriesId) {
+      router.go(`/series/${seriesId}`);
+      return;
+    }
+
+    // Handle Manga Card
+    if (id) {
+      // Special behavior for Favorites: Open Reader directly
+      if (state.activeCategory === 'Favorites') {
+        const manga = state.bookmarks.find(m => m.id === id);
+        if (manga) {
+          // Determine chapter to read
+          let targetChapter = manga.last_read_chapter;
+
+          // If never read, find the first available chapter
+          if (!targetChapter && manga.chapters && manga.chapters.length > 0) {
+            // Sort by number ascending to find the first one
+            const sorted = [...manga.chapters].sort((a, b) => a.number - b.number);
+            targetChapter = sorted[0].number;
+          }
+
+          // Navigate to reader if a chapter is found
+          if (targetChapter) {
+            router.go(`/read/${id}/${targetChapter}`);
+            return;
+          } else {
+            showToast('No chapters available to read', 'warning');
+          }
+        }
+      }
+
+      // Default behavior: Open Detail View
+      router.go(`/manga/${id}`);
+    }
+  }
 }
 
 /**
@@ -335,106 +428,13 @@ export function setupListeners() {
   const app = document.getElementById('app');
 
   // Manga card clicks
-  app.addEventListener('click', (e) => {
-    const card = e.target.closest('.manga-card');
-    if (card) {
-      // Check for Gallery Card
-      if (card.classList.contains('gallery-card')) {
-        const name = card.dataset.gallery;
-        router.go(`/ read / gallery / ${encodeURIComponent(name)} `);
-        return;
-      }
+  app.removeEventListener('click', handleCardClick);
+  app.addEventListener('click', handleCardClick);
 
-      const id = card.dataset.id;
-      const seriesId = card.dataset.seriesId;
+  // Header actions (Favorites, Queue, etc.) are now handled by setupHeaderListeners in header.js
+  // that is called centrally by the router or by each view.
 
-      // Handle Series Card
-      if (seriesId) {
-        router.go(`/ series / ${seriesId} `);
-        return;
-      }
-
-      // Handle Manga Card
-      if (id) {
-        // Special behavior for Favorites: Open Reader directly
-        if (state.activeCategory === 'Favorites') {
-          const manga = state.bookmarks.find(m => m.id === id);
-          if (manga) {
-            // Determine chapter to read
-            let targetChapter = manga.last_read_chapter;
-
-            // If never read, find the first available chapter
-            if (!targetChapter && manga.chapters && manga.chapters.length > 0) {
-              // Sort by number ascending to find the first one
-              const sorted = [...manga.chapters].sort((a, b) => a.number - b.number);
-              targetChapter = sorted[0].number;
-            }
-
-            // Navigate to reader if a chapter is found
-            if (targetChapter) {
-              // Format: /read/:id/:chapter
-              // Note: Router likely expects the "reader" view which is at /read or /reader. 
-              // Checking router definitions would be ideal, but assuming standard /read/:id/:chapter based on context
-              router.go(`/ read / ${id}/${targetChapter}`);
-              return;
-            } else {
-              showToast('No chapters available to read', 'warning');
-              // Fallback to detail view
-            }
-          }
-        }
-
-        // Default behavior: Open Detail View
-        router.go(`/manga/${id}`);
-      }
-    }
-  });
-
-  // CRITICAL: Setup header listeners for navigation
-  setupHeaderListeners();
-
-  // Header Actions
-  const favBtn = document.getElementById('favorites-btn');
-  const scanBtn = document.getElementById('scan-btn');
-  const quickCheckBtn = document.getElementById('quick-check-btn');
-
-  const mobileFavBtn = document.getElementById('mobile-favorites-btn');
-  const mobileScanBtn = document.getElementById('mobile-scan-btn');
-  const mobileQuickCheckBtn = document.getElementById('mobile-quick-check-btn');
-
-  // Favorites
-  const handleFavorites = () => {
-    // Toggle: if already on favorites, clear it. If not, set it.
-    if (state.activeCategory === 'Favorites') {
-      filterByCategory(null);
-    } else {
-      filterByCategory('Favorites');
-    }
-  };
-  if (favBtn) favBtn.addEventListener('click', handleFavorites);
-  if (mobileFavBtn) mobileFavBtn.addEventListener('click', handleFavorites);
-
-  // Scan Folder
-  const handleScan = async () => {
-    try {
-      if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = 'Scanning...'; }
-      if (mobileScanBtn) mobileScanBtn.textContent = 'Scanning...';
-      showToast('Scanning downloads folder...', 'info');
-
-      await api.scanLibrary();
-
-      showToast('Scan complete. Refreshing...', 'success');
-      await loadData();
-      mount();
-    } catch (e) {
-      showToast('Scan failed: ' + e.message, 'error');
-    } finally {
-      if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = '📁 Scan Folder'; }
-      if (mobileScanBtn) mobileScanBtn.textContent = '📁 Scan Folder';
-    }
-  };
-  if (scanBtn) scanBtn.addEventListener('click', handleScan);
-  if (mobileScanBtn) mobileScanBtn.addEventListener('click', handleScan);
+  // Scan Folder listeners are now handled centrally by setupHeaderListeners in header.js
 
   // View mode change listener - only set up once globally
   if (!window._libraryViewModeListenerSet) {
@@ -483,6 +483,7 @@ export function setupListeners() {
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
       state.searchQuery = e.target.value;
+      localStorage.setItem('library_search', e.target.value);
       // Re-render grid only
       const grid = document.getElementById('library-grid');
       if (grid) {
@@ -507,6 +508,7 @@ export function setupListeners() {
           searchInput.parentElement.insertAdjacentHTML('beforeend', '<button class="search-clear" id="search-clear">×</button>');
           document.getElementById('search-clear')?.addEventListener('click', () => {
             state.searchQuery = '';
+            localStorage.removeItem('library_search');
             searchInput.value = '';
             mount();
           });
@@ -587,10 +589,73 @@ export function setupListeners() {
     });
   }
 
+  // Add series modal
+  const addSeriesBtn = document.getElementById('add-series-btn');
+  const mobileAddSeriesBtn = document.getElementById('mobile-add-series-btn');
+  const seriesModal = document.getElementById('add-series-modal');
+  const seriesModalClose = document.getElementById('add-series-modal-close');
+  const seriesModalCancel = document.getElementById('add-series-modal-cancel');
+  const seriesModalSubmit = document.getElementById('add-series-modal-submit');
+
+  if ((addSeriesBtn || mobileAddSeriesBtn) && seriesModal) {
+    const showSeriesModal = () => seriesModal.classList.add('open');
+    if (addSeriesBtn) addSeriesBtn.addEventListener('click', showSeriesModal);
+    if (mobileAddSeriesBtn) mobileAddSeriesBtn.addEventListener('click', showSeriesModal);
+  }
+
+  if (seriesModalClose) seriesModalClose.addEventListener('click', () => seriesModal.classList.remove('open'));
+  if (seriesModalCancel) seriesModalCancel.addEventListener('click', () => seriesModal.classList.remove('open'));
+
+  if (seriesModalSubmit) {
+    seriesModalSubmit.addEventListener('click', async () => {
+      const titleInput = document.getElementById('series-title');
+      const aliasInput = document.getElementById('series-alias');
+      const title = titleInput.value.trim();
+      const alias = aliasInput.value.trim();
+
+      if (!title) {
+        showToast('Please enter a title', 'error');
+        return;
+      }
+
+      try {
+        seriesModalSubmit.disabled = true;
+        seriesModalSubmit.textContent = 'Creating...';
+
+        await api.createSeries(title, alias);
+        showToast('Series created successfully!', 'success');
+        seriesModal.classList.remove('open');
+        titleInput.value = '';
+        aliasInput.value = '';
+
+        // Refresh library
+        await loadData(true);
+        mount();
+      } catch (error) {
+        showToast('Failed to create series: ' + error.message, 'error');
+      } finally {
+        seriesModalSubmit.disabled = false;
+        seriesModalSubmit.textContent = 'Create';
+      }
+    });
+  }
+
+  // Close series modal on overlay click
+  const seriesOverlay = seriesModal?.querySelector('.modal-overlay');
+  if (seriesOverlay) {
+    seriesOverlay.addEventListener('click', () => seriesModal.classList.remove('open'));
+  }
+
   // Empty state add button
   const emptyAddBtn = document.getElementById('empty-add-btn');
   if (emptyAddBtn && modal) {
     emptyAddBtn.addEventListener('click', () => modal.classList.add('open'));
+  }
+
+  // Empty state add series button
+  const emptyAddSeriesBtn = document.getElementById('empty-add-series-btn');
+  if (emptyAddSeriesBtn && seriesModal) {
+    emptyAddSeriesBtn.addEventListener('click', () => seriesModal.classList.add('open'));
   }
 
   // Close modal on overlay click
@@ -598,6 +663,9 @@ export function setupListeners() {
   if (overlay) {
     overlay.addEventListener('click', () => modal.classList.remove('open'));
   }
+
+  // Header Component Listeners
+  setupHeaderListeners();
 }
 
 /**
@@ -616,13 +684,13 @@ function filterByCategory(category) {
 /**
  * Load library data
  */
-async function loadData() {
+async function loadData(force = false) {
   try {
     const [bookmarks, categories, series, favorites] = await Promise.all([
-      store.loadBookmarks(),
-      store.loadCategories(),
-      store.loadSeries(),
-      store.loadFavorites()
+      store.loadBookmarks(force),
+      store.loadCategories(force),
+      store.loadSeries(force),
+      store.loadFavorites(force)
     ]);
 
     state.bookmarks = bookmarks;
@@ -646,6 +714,12 @@ export async function mount() {
   const storedCategory = localStorage.getItem('library_active_category');
   if (state.activeCategory !== storedCategory) {
     state.activeCategory = storedCategory;
+  }
+
+  // Sync artistFilter with localStorage
+  const storedArtist = localStorage.getItem('library_artist_filter');
+  if (storedArtist && state.artistFilter !== storedArtist) {
+    state.artistFilter = storedArtist;
   }
 
   // Show loading first
@@ -688,10 +762,16 @@ export async function mount() {
  * Unmount / cleanup
  */
 export function unmount() {
-  // Remove event listener to prevent duplicates
+  // Unmount previous view
   if (viewModeHandler) {
     window.removeEventListener('viewModeChange', viewModeHandler);
     viewModeHandler = null;
+  }
+
+  // Remove card click listener
+  const app = document.getElementById('app');
+  if (app) {
+    app.removeEventListener('click', handleCardClick);
   }
 
   // Remove clearFilters listener

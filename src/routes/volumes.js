@@ -159,6 +159,32 @@ router.post('/:id/volumes/:volumeId/reorder', async (req, res) => {
     }
 });
 
+// Get volume chapters
+router.get('/:id/volumes/:volumeId/chapters', async (req, res) => {
+    try {
+        const volume = bookmarkDb.getVolumes(req.params.id).find(v => v.id === req.params.volumeId);
+        if (!volume) return res.status(404).json({ error: 'Volume not found' });
+        res.json({ success: true, chapters: volume.chapters });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update volume chapters
+router.post('/:id/volumes/:volumeId/chapters', async (req, res) => {
+    try {
+        const { chapterNumbers } = req.body;
+        if (!chapterNumbers || !Array.isArray(chapterNumbers)) {
+            return res.status(400).json({ error: 'Chapter numbers array required' });
+        }
+
+        bookmarkDb.updateVolumeChapters(req.params.volumeId, chapterNumbers);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Delete a volume
 router.delete('/:id/volumes/:volumeId', async (req, res) => {
     try {

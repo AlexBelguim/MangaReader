@@ -39,21 +39,54 @@ class PersistentQueue {
     async addAndWait(task) {
         const { type, description, execute, mangaId, mangaTitle } = task;
 
+        // Insert into DB as pending initially
+        const db = getDb();
+        const data = { description, mangaId, mangaTitle };
+        const insertResult = db.prepare(`
+            INSERT INTO job_queue (type, data, status, created_at)
+            VALUES (?, ?, 'pending', ?)
+        `).run(type || 'inline', JSON.stringify(data), new Date().toISOString());
+
+        const jobId = insertResult.lastInsertRowid;
+
         // Wait for any currently running inline task to complete
         while (this.inlineTaskRunning) {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
 
         this.inlineTaskRunning = true;
-        logger.info(`[Queue] Running inline task: ${description || type}`);
+
+        // Mark as processing
+        db.prepare(`
+            UPDATE job_queue 
+            SET status = 'processing', started_at = ? 
+            WHERE id = ?
+        `).run(new Date().toISOString(), jobId);
+
+        logger.info(`[Queue] Running inline task ${jobId}: ${description || type}`);
 
         try {
             // Execute the task directly
             const result = await execute();
-            logger.info(`[Queue] Inline task completed: ${description || type}`);
+
+            // Mark as completed
+            db.prepare(`
+                UPDATE job_queue 
+                SET status = 'completed', completed_at = ?, result = ? 
+                WHERE id = ?
+            `).run(new Date().toISOString(), JSON.stringify(result || {}), jobId);
+
+            logger.info(`[Queue] Inline task ${jobId} completed: ${description || type}`);
             return result;
         } catch (error) {
-            logger.error(`[Queue] Inline task failed: ${description || type} - ${error.message}`);
+            // Mark as failed
+            db.prepare(`
+                UPDATE job_queue 
+                SET status = 'failed', completed_at = ?, error = ? 
+                WHERE id = ?
+            `).run(new Date().toISOString(), error.message, jobId);
+
+            logger.error(`[Queue] Inline task ${jobId} failed: ${description || type} - ${error.message}`);
             throw error;
         } finally {
             this.inlineTaskRunning = false;
@@ -63,7 +96,17 @@ class PersistentQueue {
     // Add a job to run asynchronously in the background (for downloads)
     // Still serializes with other inline tasks via the same lock
     addAsync(task) {
-        const { type, description, execute } = task;
+        const { type, description, execute, mangaId, mangaTitle } = task;
+
+        // Insert into DB as pending
+        const db = getDb();
+        const data = { description, mangaId, mangaTitle };
+        const insertResult = db.prepare(`
+            INSERT INTO job_queue (type, data, status, created_at)
+            VALUES (?, ?, 'pending', ?)
+        `).run(type || 'async', JSON.stringify(data), new Date().toISOString());
+
+        const jobId = insertResult.lastInsertRowid;
 
         // Start the task in background but still serialize with lock
         const runTask = async () => {
@@ -73,13 +116,36 @@ class PersistentQueue {
             }
 
             this.inlineTaskRunning = true;
-            logger.info(`[Queue] Running async task: ${description || type}`);
+
+            // Mark as processing
+            db.prepare(`
+                UPDATE job_queue 
+                SET status = 'processing', started_at = ? 
+                WHERE id = ?
+            `).run(new Date().toISOString(), jobId);
+
+            logger.info(`[Queue] Running async task ${jobId}: ${description || type}`);
 
             try {
-                await execute();
-                logger.info(`[Queue] Async task completed: ${description || type}`);
+                const result = await execute();
+
+                // Mark as completed
+                db.prepare(`
+                    UPDATE job_queue 
+                    SET status = 'completed', completed_at = ?, result = ? 
+                    WHERE id = ?
+                `).run(new Date().toISOString(), JSON.stringify(result || {}), jobId);
+
+                logger.info(`[Queue] Async task ${jobId} completed: ${description || type}`);
             } catch (error) {
-                logger.error(`[Queue] Async task failed: ${description || type} - ${error.message}`);
+                // Mark as failed
+                db.prepare(`
+                    UPDATE job_queue 
+                    SET status = 'failed', completed_at = ?, error = ? 
+                    WHERE id = ?
+                `).run(new Date().toISOString(), error.message, jobId);
+
+                logger.error(`[Queue] Async task ${jobId} failed: ${description || type} - ${error.message}`);
             } finally {
                 this.inlineTaskRunning = false;
             }
@@ -87,6 +153,11 @@ class PersistentQueue {
 
         // Fire and forget - start the task but don't wait
         runTask();
+
+        return {
+            id: jobId,
+            status: 'pending'
+        };
     }
 
     // Get job status
@@ -111,7 +182,25 @@ class PersistentQueue {
 
         return jobs.map(job => ({
             ...job,
-            data: JSON.parse(job.data)
+            data: JSON.parse(job.data),
+            result: job.result ? JSON.parse(job.result) : null
+        }));
+    }
+
+    // Get historical jobs
+    getHistory(limit = 100) {
+        const db = getDb();
+        const jobs = db.prepare(`
+      SELECT * FROM job_queue 
+      WHERE status IN ('completed', 'failed', 'cancelled') 
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit);
+
+        return jobs.map(job => ({
+            ...job,
+            data: JSON.parse(job.data),
+            result: job.result ? JSON.parse(job.result) : null
         }));
     }
 

@@ -347,6 +347,13 @@ header {
   font-size: 0.6rem;
 }
 
+/* ==================== Schedule Badge ==================== */
+.badge-schedule {
+  background: rgba(255, 193, 7, 0.3);
+  color: #ffd54f;
+  font-size: 0.6rem;
+}
+
 /* ==================== Library Grid ==================== */
 .library-grid {
   display: grid;

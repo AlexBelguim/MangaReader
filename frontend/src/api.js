@@ -49,6 +49,11 @@ class ApiClient {
             ...options.headers
         };
 
+        // If body is FormData, browser MUST set Content-Type with boundary automatically
+        if (options.body instanceof FormData) {
+            delete headers['Content-Type'];
+        }
+
         // Add auth token if available
         const token = this.getToken();
         if (token) {
@@ -143,6 +148,26 @@ class ApiClient {
         return this.get('/series');
     }
 
+    createSeries(title, alias = null) {
+        return this.post('/series', { title, alias });
+    }
+
+    getAvailableBookmarksForSeries() {
+        return this.get('/series/available-bookmarks');
+    }
+
+    addSeriesEntry(seriesId, bookmarkId) {
+        return this.post(`/series/${seriesId}/entries`, { bookmarkId });
+    }
+
+    removeSeriesEntry(seriesId, entryId) {
+        return this.delete(`/series/${seriesId}/entries/${entryId}`);
+    }
+
+    setSeriesCover(seriesId, entryId) {
+        return this.post(`/series/${seriesId}/cover`, { entryId });
+    }
+
     getBookmark(id) {
         return this.get(`/bookmarks/${id}`);
     }
@@ -153,8 +178,8 @@ class ApiClient {
 
     // ==================== VOLUMES ====================
 
-    createVolume(bookmarkId, name) {
-        return this.post(`/bookmarks/${bookmarkId}/volumes`, { name });
+    createVolume(bookmarkId, name, chapters = []) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes`, { name, chapters });
     }
 
     renameVolume(bookmarkId, volumeId, name) {
@@ -163,6 +188,16 @@ class ApiClient {
 
     deleteVolume(bookmarkId, volumeId) {
         return this.delete(`/bookmarks/${bookmarkId}/volumes/${volumeId}`);
+    }
+
+    uploadVolumeCover(bookmarkId, volumeId, file) {
+        const formData = new FormData();
+        formData.append('cover', file);
+        return this.request(`/bookmarks/${bookmarkId}/volumes/${volumeId}/cover`, {
+            method: 'POST',
+            body: formData,
+            headers: {} // Don't set Content-Type, browser will set it with boundary
+        });
     }
 
     setVolumeCoverFromChapter(bookmarkId, volumeId, chapterNumber, filename) {
@@ -197,6 +232,14 @@ class ApiClient {
 
     updateBookmark(id, updates) {
         return this.patch(`/bookmarks/${id}`, updates);
+    }
+
+    setBookmarkArtists(bookmarkId, artists) {
+        return this.post(`/bookmarks/${bookmarkId}/artists`, { artists });
+    }
+
+    setBookmarkCategories(bookmarkId, categories) {
+        return this.post(`/bookmarks/${bookmarkId}/categories`, { categories });
     }
 
     deleteBookmark(id, deleteFolder = false) {
@@ -286,10 +329,103 @@ class ApiClient {
         return this.get('/queue/tasks');
     }
 
+    getQueueHistory(limit = 100) {
+        return this.get(`/queue/history?limit=${limit}`);
+    }
+
+    // ==================== DOWNLOADS ====================
+
+    getDownloads() {
+        return this.get('/downloads');
+    }
+
+    getDownloadProgress(taskId) {
+        return this.get(`/downloads/${taskId}`);
+    }
+
+    pauseDownload(taskId) {
+        return this.post(`/downloads/${taskId}/pause`);
+    }
+
+    resumeDownload(taskId) {
+        return this.post(`/downloads/${taskId}/resume`);
+    }
+
+    cancelDownload(taskId) {
+        return this.post(`/downloads/${taskId}/cancel`);
+    }
+
+    // ==================== AUTO-CHECK ====================
+
+    getAutoCheckStatus() {
+        return this.get('/auto-check/status');
+    }
+
+    runAutoCheck() {
+        return this.post('/auto-check/run');
+    }
+
+    toggleAutoCheck(bookmarkId, enabled) {
+        return this.post(`/bookmarks/${bookmarkId}/auto-check`, { enabled });
+    }
+
+    updateAutoCheckSchedule(bookmarkId, { enabled, schedule, day, time, autoDownload }) {
+        return this.post(`/bookmarks/${bookmarkId}/auto-check`, { enabled, schedule, day, time, autoDownload });
+    }
+
     // ==================== SYSTEM ACTIONS ====================
 
     scanLibrary() {
         return this.post('/scan-local');
+    }
+
+    importLocalManga(folderName) {
+        return this.post('/local-manga', { folderName });
+    }
+
+    getLocalManga() {
+        return this.get('/local-manga');
+    }
+
+    // ==================== CBZ METHODS ====================
+
+    getCbzFiles(bookmarkId) {
+        return this.get(`/bookmarks/${bookmarkId}/cbz`);
+    }
+
+    extractCbz(bookmarkId, cbzPath, chapterNumber, options = {}) {
+        const { deleteAfter = false, forceReExtract = false } = options;
+        return this.post(`/bookmarks/${bookmarkId}/cbz/extract`, {
+            cbzPath,
+            chapterNumber,
+            deleteAfter,
+            forceReExtract
+        });
+    }
+
+    getFolderImages(bookmarkId) {
+        return this.get(`/bookmarks/${bookmarkId}/folder-images`);
+    }
+
+    setBookmarkCover(bookmarkId, coverPath) {
+        return this.patch(`/bookmarks/${bookmarkId}`, { localCover: coverPath });
+    }
+
+    // Set cover from selected image path (copies to covers folder)
+    setBookmarkCoverFromImage(bookmarkId, imagePath) {
+        return this.post(`/bookmarks/${bookmarkId}/covers/from-image`, { imagePath });
+    }
+
+    getAllArtists() {
+        return this.get('/bookmarks/artists/all');
+    }
+
+    getAllCategories() {
+        return this.get('/bookmarks/categories/all');
+    }
+
+    scanBookmark(bookmarkId) {
+        return this.post(`/bookmarks/${bookmarkId}/scan-local`);
     }
 
     quickCheck() {
@@ -332,6 +468,10 @@ class ApiClient {
 
     getTrophyPages(mangaId, chapterNum) {
         return this.get(`/trophy-pages/${mangaId}/${chapterNum}`);
+    }
+
+    getTrophyPagesAll(mangaId) {
+        return this.get(`/trophy-pages/${mangaId}/all`);
     }
 
     saveTrophyPages(mangaId, chapterNum, trophyMap) {

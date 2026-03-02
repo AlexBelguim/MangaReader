@@ -32,6 +32,22 @@ export const trophyDb = {
         return result;
     },
 
+    getForManga(bookmarkId) {
+        const db = getDb();
+        const rows = db.prepare('SELECT chapter_number, page_index, is_single, pages FROM trophy_pages WHERE bookmark_id = ?')
+            .all(bookmarkId);
+
+        const result = {};
+        for (const row of rows) {
+            if (!result[row.chapter_number]) result[row.chapter_number] = {};
+            result[row.chapter_number][row.page_index] = {
+                isSingle: !!row.is_single,
+                pages: JSON.parse(row.pages || '[]')
+            };
+        }
+        return result;
+    },
+
     save(bookmarkId, chapterNumber, trophyMap) {
         const db = getDb();
 
@@ -45,6 +61,12 @@ export const trophyDb = {
             }
         })();
 
+        return { success: true };
+    },
+
+    deleteForChapter(bookmarkId, chapterNumber) {
+        const db = getDb();
+        db.prepare('DELETE FROM trophy_pages WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, chapterNumber);
         return { success: true };
     },
 

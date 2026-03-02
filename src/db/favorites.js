@@ -109,6 +109,12 @@ export const favoritesDb = {
         return { success: true };
     },
 
+    deleteForChapter(bookmarkId, chapterNumber) {
+        const db = getDb();
+        db.prepare('DELETE FROM favorites WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, chapterNumber);
+        return { success: true };
+    },
+
     saveAll(data) {
         const db = getDb();
 

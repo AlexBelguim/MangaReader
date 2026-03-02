@@ -423,7 +423,23 @@ export class ComixScraper extends BaseScraper {
       });
 
       console.log(`  Found ${images.length} images`);
-      return images;
+
+      // Extract cookies and referer for download authentication
+      const cookies = await this.page.cookies();
+      const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      const referer = chapterUrl;
+
+      // Attach download headers to each image
+      const imagesWithHeaders = images.map(img => ({
+        ...img,
+        headers: {
+          'Cookie': cookieString,
+          'Referer': referer,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      }));
+
+      return imagesWithHeaders;
 
     } finally {
       await this.closePage();

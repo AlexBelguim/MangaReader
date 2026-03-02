@@ -73,6 +73,14 @@ router.put('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
     }
 });
 
+router.get('/trophy-pages/:mangaId/all', async (req, res) => {
+    try {
+        res.json(trophyDb.getForManga(req.params.mangaId));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 router.get('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
     try {
         res.json(trophyDb.getForChapter(req.params.mangaId, parseFloat(req.params.chapterNum)));

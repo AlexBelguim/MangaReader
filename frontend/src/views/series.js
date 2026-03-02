@@ -87,6 +87,28 @@ export function render() {
           <div class="series-entries-grid">
             ${entries.map((entry, idx) => renderSeriesEntry(entry, idx, entries.length)).join('')}
           </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Entry Modal -->
+    <div class="modal" id="add-entry-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Add Manga to Series</h2>
+          <button class="btn-icon" onclick="document.getElementById('add-entry-modal').classList.remove('open')">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="available-bookmarks-input">Select Manga:</label>
+            <input list="available-bookmarks-list" id="available-bookmarks-input" class="form-control" style="width: 100%; margin-bottom: 1rem;" placeholder="Loading..." autocomplete="off">
+            <datalist id="available-bookmarks-list"></datalist>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="document.getElementById('add-entry-modal').classList.remove('open')">Cancel</button>
+          <button class="btn btn-primary" id="confirm-add-entry-btn">Add to Series</button>
         </div>
       </div>
     </div>
@@ -130,7 +152,7 @@ function renderSeriesEntry(entry, index, totalEntries) {
       : ''
     }
         </div>
-        <button class="series-set-cover-btn" data-action="set-cover" data-id="${entry.bookmark_id}" title="Use as series cover">🖼️</button>
+        <button class="series-set-cover-btn" data-action="set-cover" data-id="${entry.bookmark_id}" data-entryid="${entry.id}" title="Use as series cover">🖼️</button>
       </div>
       <div class="series-entry-info">
         <div class="series-entry-title">${displayName}</div>
@@ -176,16 +198,95 @@ export function setupListeners() {
           await reorderEntry(bookmarkId, 1);
           break;
         case 'set-cover':
-          await setSeriesCover(bookmarkId);
+          const entryId = btn.dataset.entryid;
+          await setSeriesCover(entryId);
           break;
       }
     });
   });
 
   // Add entry button
-  document.getElementById('add-entry-btn')?.addEventListener('click', () => {
-    showToast('Add entry modal coming soon', 'info');
-  });
+  const addEntryBtn = document.getElementById('add-entry-btn');
+  const addEntryModal = document.getElementById('add-entry-modal');
+  const availableBookmarksInput = document.getElementById('available-bookmarks-input');
+  const availableBookmarksList = document.getElementById('available-bookmarks-list');
+  const confirmAddEntryBtn = document.getElementById('confirm-add-entry-btn');
+
+  let currentAvailable = [];
+
+  if (addEntryBtn && addEntryModal) {
+    addEntryBtn.addEventListener('click', async () => {
+      try {
+        addEntryBtn.disabled = true;
+        if (availableBookmarksInput) {
+          availableBookmarksInput.value = '';
+          availableBookmarksInput.placeholder = 'Loading...';
+          availableBookmarksInput.disabled = true;
+        }
+        if (availableBookmarksList) {
+          availableBookmarksList.innerHTML = '';
+        }
+        addEntryModal.classList.add('open');
+
+        const available = await api.getAvailableBookmarksForSeries();
+        currentAvailable = available;
+
+        if (available.length === 0) {
+          if (availableBookmarksInput) {
+            availableBookmarksInput.placeholder = 'No available manga found';
+          }
+          confirmAddEntryBtn.disabled = true;
+        } else {
+          if (availableBookmarksInput) {
+            availableBookmarksInput.placeholder = 'Select or type a manga...';
+            availableBookmarksInput.disabled = false;
+          }
+          if (availableBookmarksList) {
+            availableBookmarksList.innerHTML = available.map(b => {
+              const displayName = b.alias || b.title || '';
+              return `<option value="${displayName.replace(/"/g, '&quot;')}"></option>`;
+            }).join('');
+          }
+          confirmAddEntryBtn.disabled = false;
+        }
+      } catch (err) {
+        showToast('Failed to load available manga', 'error');
+        addEntryModal.classList.remove('open');
+      } finally {
+        addEntryBtn.disabled = false;
+      }
+    });
+
+    confirmAddEntryBtn.addEventListener('click', async () => {
+      const selectedName = availableBookmarksInput ? availableBookmarksInput.value : '';
+      const selectedManga = currentAvailable.find(b => (b.alias || b.title || '') === selectedName);
+
+      if (!selectedManga) {
+        showToast('Please select a valid manga from the list', 'warning');
+        return;
+      }
+
+      const bookmarkId = selectedManga.id;
+
+      try {
+        confirmAddEntryBtn.disabled = true;
+        confirmAddEntryBtn.textContent = 'Adding...';
+
+        await api.addSeriesEntry(series.id, bookmarkId);
+        showToast('Manga added to series', 'success');
+
+        addEntryModal.classList.remove('open');
+        await loadData(series.id);
+        app.innerHTML = render();
+        setupListeners();
+      } catch (err) {
+        showToast('Failed to add manga: ' + err.message, 'error');
+      } finally {
+        confirmAddEntryBtn.disabled = false;
+        confirmAddEntryBtn.textContent = 'Add to Series';
+      }
+    });
+  }
 
   // Edit series button
   document.getElementById('edit-series-btn')?.addEventListener('click', () => {
@@ -228,12 +329,12 @@ async function reorderEntry(bookmarkId, direction) {
 /**
  * Set series cover from an entry
  */
-async function setSeriesCover(bookmarkId) {
+async function setSeriesCover(entryId) {
   const series = state.series;
   if (!series) return;
 
   try {
-    await api.post(`/series/${series.id}/cover`, { bookmark_id: bookmarkId });
+    await api.setSeriesCover(series.id, entryId);
     showToast('Series cover updated', 'success');
 
     // Reload

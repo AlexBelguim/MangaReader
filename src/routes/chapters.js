@@ -7,6 +7,8 @@ import express from 'express';
 import { getDb, bookmarkDb, chapterSettingsDb } from '../database.js';
 import { actionHistoryService, ActionTypes, EntityTypes } from '../services/ActionHistoryService.js';
 import { downloader } from '../downloader.js';
+import { favoritesDb } from '../db/favorites.js';
+import { trophyDb } from '../db/trophies.js';
 
 const router = express.Router();
 
@@ -201,6 +203,10 @@ router.post('/:bookmarkId/hide-version', async (req, res) => {
         if (remainingVersions.count === 0) {
             db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?')
                 .run(bookmarkId, chapterNumber);
+
+            // Cleanup favorites and trophies when the last version of a chapter is deleted/hidden
+            favoritesDb.deleteForChapter(bookmarkId, chapterNumber);
+            trophyDb.deleteForChapter(bookmarkId, chapterNumber);
         }
 
         res.json({ success: true });
@@ -373,6 +379,64 @@ router.post('/:bookmarkId/:chapterNumber/settings', async (req, res) => {
         chapterSettingsDb.save(bookmarkId, chapterNum, newSettings);
 
         res.json({ success: true, settings: newSettings });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * Delete a downloaded chapter
+ */
+router.delete('/', async (req, res) => {
+    try {
+        const { bookmarkId, chapterNumber, url } = req.body;
+
+        if (!bookmarkId || chapterNumber === undefined) {
+            return res.status(400).json({ error: 'Missing required parameters' });
+        }
+
+        const bookmark = bookmarkDb.getById(bookmarkId);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
+
+        const chapterNum = parseFloat(chapterNumber);
+
+        // Record action for undo
+        actionHistoryService.record({
+            actionType: ActionTypes.DELETE_VERSION,
+            entityType: EntityTypes.VERSION,
+            entityId: url,
+            bookmarkId,
+            beforeState: { chapterNumber: chapterNum, url, exists: true },
+            afterState: { chapterNumber: chapterNum, url, exists: false },
+            description: `Deleted version of chapter ${chapterNum}`
+        });
+
+        const db = getDb();
+
+        // Delete from downloaded_versions table
+        db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND url = ? AND chapter_number = ?')
+            .run(bookmarkId, url, chapterNum);
+
+        // Check if there are any remaining versions for this chapter
+        const remaining = db.prepare('SELECT COUNT(*) as count FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ?')
+            .get(bookmarkId, chapterNum);
+
+        if (remaining.count === 0) {
+            // Delete from downloaded_chapters
+            db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?')
+                .run(bookmarkId, chapterNum);
+
+            // Cleanup favorites and trophies
+            favoritesDb.deleteForChapter(bookmarkId, chapterNum);
+            trophyDb.deleteForChapter(bookmarkId, chapterNum);
+        }
+
+        // Delete from disk
+        await downloader.deleteChapter(bookmark.title, chapterNum, bookmark.alias, url);
+
+        res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

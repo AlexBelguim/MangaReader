@@ -346,6 +346,35 @@ export function initDatabase() {
         // Column likely already exists
     }
 
+    // Lazy migration for schedule columns (daily, weekly, specific day+time)
+    try {
+        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_schedule TEXT DEFAULT NULL').run();
+        console.log('📦 Added check_schedule column to bookmarks');
+    } catch (e) {
+        // Column likely already exists
+    }
+
+    try {
+        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_day TEXT DEFAULT NULL').run();
+        console.log('📦 Added check_day column to bookmarks');
+    } catch (e) {
+        // Column likely already exists
+    }
+
+    try {
+        db.prepare('ALTER TABLE bookmarks ADD COLUMN check_time TEXT DEFAULT NULL').run();
+        console.log('📦 Added check_time column to bookmarks');
+    } catch (e) {
+        // Column likely already exists
+    }
+
+    try {
+        db.prepare('ALTER TABLE bookmarks ADD COLUMN next_check TEXT DEFAULT NULL').run();
+        console.log('📦 Added next_check column to bookmarks');
+    } catch (e) {
+        // Column likely already exists
+    }
+
     // Lazy migration for reading_mode and direction in chapter_settings
     try {
         db.prepare('ALTER TABLE chapter_settings ADD COLUMN reading_mode TEXT').run();
@@ -421,6 +450,20 @@ function addPreferredReleaseGroupColumn() {
         if (!hasColumn) {
             db.exec('ALTER TABLE bookmarks ADD COLUMN preferred_release_group TEXT');
             console.log('📦 Added preferred_release_group column');
+        }
+    } catch (e) {
+        // Table might not exist yet, that's fine
+    }
+}
+
+// Add tags column if it doesn't exist
+function addTagsColumn() {
+    try {
+        const columns = db.prepare("PRAGMA table_info(bookmarks)").all();
+        const hasColumn = columns.some(c => c.name === 'tags');
+        if (!hasColumn) {
+            db.exec('ALTER TABLE bookmarks ADD COLUMN tags TEXT');
+            console.log('📦 Added tags column');
         }
     } catch (e) {
         // Table might not exist yet, that's fine

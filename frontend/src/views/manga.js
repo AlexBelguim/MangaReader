@@ -7,7 +7,7 @@ import { api } from '../api.js';
 import { store } from '../store.js';
 import { router } from '../router.js';
 import { socket } from '../socket.js';
-import { renderHeader } from '../components/header.js';
+import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { continueReading } from './reader.js';
 
@@ -23,8 +23,101 @@ let state = {
   selectionMode: false,
   selected: new Set(),
   activeVolume: null,
-  activeVolumeId: null
+  activeVolumeId: null,
+  cbzFiles: [],
+  manageChapters: false
 };
+
+// ==================== HELPERS ====================
+
+function timeUntil(dateStr) {
+  if (!dateStr) return 'Not scheduled';
+  const diff = new Date(dateStr).getTime() - Date.now();
+  if (diff <= 0) return 'Running soon...';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `in ${hours}h ${remMins}m`;
+}
+
+/**
+ * Render auto-check / schedule button (single button)
+ */
+function renderAutoCheckToggle(manga) {
+  const isEnabled = manga.autoCheck === true;
+
+  if (!isEnabled) {
+    return `<button class="btn btn-secondary" id="schedule-btn">⏰ Schedule</button>`;
+  }
+
+  const scheduleLabel = manga.checkSchedule === 'weekly'
+    ? `${(manga.checkDay || 'monday').charAt(0).toUpperCase() + (manga.checkDay || 'monday').slice(1)} ${manga.checkTime || '06:00'}`
+    : manga.checkSchedule === 'daily'
+      ? `Daily ${manga.checkTime || '06:00'}`
+      : 'Every 6h';
+
+  return `<button class="btn btn-primary" id="schedule-btn">⏰ ${scheduleLabel}</button>`;
+}
+
+/**
+ * Render schedule modal
+ */
+function renderScheduleModal(manga) {
+  const isEnabled = manga.autoCheck === true;
+  const schedule = manga.checkSchedule || 'daily';
+  const day = manga.checkDay || 'monday';
+  const time = manga.checkTime || '06:00';
+  const autoDownload = manga.autoDownload || false;
+
+  return `
+    <div class="modal" id="schedule-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>⏰ Auto-Check Schedule</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="schedule-type">Frequency</label>
+            <select id="schedule-type">
+              <option value="daily" ${schedule === 'daily' ? 'selected' : ''}>Daily</option>
+              <option value="weekly" ${schedule === 'weekly' ? 'selected' : ''}>Weekly</option>
+            </select>
+          </div>
+          <div class="form-group" id="schedule-day-group" style="${schedule === 'weekly' ? '' : 'display:none'}">
+            <label for="schedule-day">Day of Week</label>
+            <select id="schedule-day">
+              <option value="monday" ${day === 'monday' ? 'selected' : ''}>Monday</option>
+              <option value="tuesday" ${day === 'tuesday' ? 'selected' : ''}>Tuesday</option>
+              <option value="wednesday" ${day === 'wednesday' ? 'selected' : ''}>Wednesday</option>
+              <option value="thursday" ${day === 'thursday' ? 'selected' : ''}>Thursday</option>
+              <option value="friday" ${day === 'friday' ? 'selected' : ''}>Friday</option>
+              <option value="saturday" ${day === 'saturday' ? 'selected' : ''}>Saturday</option>
+              <option value="sunday" ${day === 'sunday' ? 'selected' : ''}>Sunday</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="schedule-time">Time</label>
+            <input type="time" id="schedule-time" value="${time}">
+          </div>
+          <div class="form-group">
+            <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="auto-download-toggle" ${autoDownload ? 'checked' : ''} style="width: 18px; height: 18px;">
+              <span>Auto-download new chapters</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          ${isEnabled ? `<button class="btn btn-danger" id="disable-schedule-btn" style="margin-right:auto;">Disable</button>` : ''}
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-primary" id="save-schedule-btn">${isEnabled ? 'Save' : 'Enable & Save'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 /**
  * Render the manga detail view
@@ -170,6 +263,7 @@ export function render() {
               </div>
                <div class="manga-detail-actions">
                  <button class="btn btn-secondary" onclick="window.location.hash='#/manga/${manga.id}'">Back to Manga</button>
+                 <button class="btn btn-secondary" id="manage-chapters-btn">${state.manageChapters ? 'Done Managing' : '➕ Add Chapters'}</button>
                  <button class="btn btn-secondary" id="edit-vol-btn" data-vol-id="${vol.id}">✏️ Edit Volume</button>
                </div>
             </div>
@@ -200,6 +294,18 @@ export function render() {
                   ${downloadedChapters.size > 0 ? `<span class="meta-item downloaded">${downloadedChapters.size} Downloaded</span>` : ''}
                   ${readChapters.size > 0 ? `<span class="meta-item">${readChapters.size} Read</span>` : ''}
                 </div>
+                ${((manga.artists || []).length > 0 || (manga.categories || []).length > 0) ? `
+                <div class="manga-artists" style="margin-top: 8px;">
+                  ${(manga.artists || []).length > 0 ? `
+                    <span class="meta-label">Author:</span>
+                    ${manga.artists.map(artist => `<a href="#//" class="artist-link" data-artist="${artist}">${artist}</a>`).join(', ')}
+                  ` : ''}
+                  ${(manga.categories || []).length > 0 ? `
+                    <span class="meta-label" style="margin-left: ${(manga.artists || []).length > 0 ? '16px' : '0'};">Tags:</span>
+                    ${manga.categories.map(cat => `<span class="tag">${cat}</span>`).join('')}
+                  ` : ''}
+                </div>
+                ` : ''}
                 <div class="manga-detail-actions">
                   <button class="btn btn-primary" id="continue-btn">
                     ▶ ${manga.lastReadChapter ? 'Continue' : 'Start'} Reading
@@ -208,12 +314,36 @@ export function render() {
                 ↓ Download All
               </button>
               <button class="btn btn-secondary" id="refresh-btn">🔄 Refresh</button>
+              ${manga.website === 'Local' ? `<button class="btn btn-secondary" id="scan-folder-btn">📁 Scan Folder</button>` : ''}
               <button class="btn btn-secondary" id="edit-btn">✏️ Edit</button>
+              ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
+              ${renderAutoCheckToggle(manga)}
             </div>
             ${manga.description ? `<p class="manga-description">${manga.description}</p>` : ''}
-            <div class="manga-tags">
-              ${(manga.tags || []).map(tag => `<span class="tag">${tag}</span>`).join('')}
+            ${state.cbzFiles.length > 0 ? `
+            <div class="cbz-section" style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
+              <h3 style="margin: 0 0 12px 0;">📦 CBZ Files (${state.cbzFiles.length})</h3>
+              <div class="cbz-list">
+                ${state.cbzFiles.map(cbz => `
+                  <div class="cbz-item" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--bg-primary); border-radius: 4px; margin-bottom: 8px;">
+                    <div>
+                      <div style="font-weight: bold;">${cbz.name}</div>
+                      <div style="font-size: 12px; color: var(--text-secondary);">
+                        ${cbz.chapterNumber ? `Chapter ${cbz.chapterNumber}` : 'Unknown chapter'}
+                        ${cbz.isExtracted ? ' | ✅ Extracted' : ''}
+                      </div>
+                    </div>
+                    <button class="btn btn-small ${cbz.isExtracted ? 'btn-secondary' : 'btn-primary'}" 
+                            data-cbz-path="${encodeURIComponent(cbz.path)}" 
+                            data-cbz-chapter="${cbz.chapterNumber || 1}"
+                            data-cbz-extracted="${cbz.isExtracted}">
+                      ${cbz.isExtracted ? 'Re-Extract' : 'Extract'}
+                    </button>
+                  </div>
+                `).join('')}
+              </div>
             </div>
+            ` : ''}
           </div>
         </div>
       `;
@@ -222,7 +352,7 @@ export function render() {
   return `
     ${headerHtml}
         
-        ${state.activeVolume ? '' : renderVolumesSection(manga, downloadedChapters)}
+        ${state.activeVolume ? (state.manageChapters ? renderAvailableChapters(manga, looseChapters) : '') : renderVolumesSection(manga, downloadedChapters)}
         
         <div class="chapter-section">
           <div class="chapter-header">
@@ -259,7 +389,85 @@ export function render() {
 }
 
 function renderModals() {
+  const manga = state.manga;
   return `
+    ${manga ? renderScheduleModal(manga) : ''}
+    ${renderAddVolumeModal()}
+
+    <!-- Edit Manga Modal -->
+    <div class="modal" id="edit-manga-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>✏️ Edit Manga</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <datalist id="artist-list"></datalist>
+          <datalist id="category-list"></datalist>
+          <div class="form-group">
+            <label for="edit-alias-input">Display Name (Alias)</label>
+            <input type="text" id="edit-alias-input" placeholder="Custom display name..." value="${manga?.alias || ''}">
+          </div>
+          <div class="form-group">
+            <label for="edit-artist-input">Author/Artist</label>
+            <input type="text" id="edit-artist-input" list="artist-list" placeholder="Author or artist name..." value="${manga?.artists?.join(', ') || ''}">
+          </div>
+          <div class="form-group">
+            <label for="edit-categories-input">Tags/Categories (comma separated)</label>
+            <input type="text" id="edit-categories-input" list="category-list" placeholder="tag1, tag2, tag3..." value="${manga?.categories?.join(', ') || ''}">
+          </div>
+          <div class="form-group">
+            <label>Cover Image</label>
+            <div id="cover-preview" style="width: 100px; height: 150px; background: var(--bg-secondary); border-radius: 4px; margin-bottom: 8px; overflow: hidden;">
+              ${manga?.localCover ? `<img src="/api/public/covers/${manga.id}/${encodeURIComponent(manga.localCover.split(/[/\\]/).pop())}" style="width: 100%; height: 100%; object-fit: cover;">` : ''}
+            </div>
+            <button type="button" class="btn btn-small btn-secondary" id="change-cover-btn">Change Cover</button>
+          </div>
+          <p class="text-muted" style="font-size: 0.8em;">Original title: ${manga?.title || ''}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-danger" id="delete-manga-btn" style="margin-right:auto;">🗑️ Delete</button>
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-primary" id="save-manga-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Download All Modal -->
+    <div class="modal" id="download-all-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Download Options</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom: 15px;">How would you like to download missing chapters?</p>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+              <input type="radio" name="download-version-mode" value="single" checked style="width: 16px; height: 16px;">
+              <div>
+                <strong style="display: block;">1 Version Per Chapter</strong>
+                <span class="text-muted" style="font-size: 0.85em;">Only downloads the primary version for each chapter.</span>
+              </div>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+              <input type="radio" name="download-version-mode" value="all" style="width: 16px; height: 16px;">
+              <div>
+                <strong style="display: block;">All Versions</strong>
+                <span class="text-muted" style="font-size: 0.85em;">Downloads every available translation/version for missing chapters.</span>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-primary" id="confirm-download-all-btn">Download</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Edit Volume Modal -->
     <div class="modal" id="edit-volume-modal">
       <div class="modal-overlay"></div>
@@ -378,6 +586,9 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
 
   const hasMultiple = displayVersions.length > 1;
 
+  // Get the first version URL for single-version operations
+  const firstVersionUrl = displayVersions[0]?.url ? encodeURIComponent(displayVersions[0].url) : null;
+
   // Get chapter settings
   const chapterSettings = manga.chapterSettings || {};
   // In volume mode, force lock visual (or maybe just hide lock button?)
@@ -435,22 +646,34 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
           ${isExcluded
       ? `<button class="btn-icon small warning" data-action="restore-chapter" data-num="${num}" title="Restore Chapter">↩️</button>`
       : (isVolumeMode
-        ? `<span style="margin-right:8px; opacity:0.5; font-size:0.8em">Vol</span>`
+        ? `<div style="display: flex; align-items: center; gap: 4px;">
+            <span style="opacity: 0.5; font-size: 0.8em">Vol</span>
+            ${state.manageChapters ? `<button class="btn-icon small danger remove-from-vol-btn" data-num="${num}" title="Remove from Volume">×</button>` : ''}
+          </div>`
         : `<button class="btn-icon small lock-btn ${isLocked ? 'locked' : ''}"
                         data-action="lock" data-num="${num}"
                         title="${isLocked ? 'Unlock' : 'Lock'}">
                   ${isLocked ? '🔒' : '🔓'}
                 </button>`)
-    }       <button class="btn-icon small ${isRead ? 'success' : 'muted'}"
+    }
+          ${!isExcluded && firstVersionUrl ? (
+      deletedUrls.has(displayVersions[0]?.url)
+        ? `<button class="btn-icon small warning" data-action="unhide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Unhide Chapter">↩️</button>`
+        : `<button class="btn-icon small" data-action="hide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Hide Chapter">👁️‍🗨️</button>`
+    ) : ''}
+          <button class="btn-icon small ${isRead ? 'success' : 'muted'}"
                   data-action="read" data-num="${num}"
                   title="${isRead ? 'Mark unread' : 'Mark read'}">
             ${isRead ? '👁️' : '○'}
           </button>
-          <button class="btn-icon small ${isDownloaded ? 'success' : ''}"
-                  data-action="download" data-num="${num}"
-                  title="${isDownloaded ? 'Downloaded' : 'Download'}">
-            ${isDownloaded ? '✓' : '↓'}
-          </button>
+          ${isDownloaded
+      ? `<button class="btn-icon small danger" data-action="delete-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Delete Files">🗑️</button>`
+      : `<button class="btn-icon small ${isDownloaded ? 'success' : ''}"
+              data-action="download" data-num="${num}"
+              title="${isDownloaded ? 'Downloaded' : 'Download'}">
+          ${isDownloaded ? '✓' : '↓'}
+        </button>`
+    }
           ${hasMultiple ? `
             <button class="btn-icon small versions-btn" data-action="versions" data-num="${num}">
               ${visibleVersions.length} ▼
@@ -474,6 +697,39 @@ function renderPagination(totalPages) {
       <span class="pagination-info">Page ${state.currentPage + 1} of ${totalPages}</span>
       <button class="btn btn-icon" data-page="next" ${state.currentPage >= totalPages - 1 ? 'disabled' : ''}>›</button>
       <button class="btn btn-icon" data-page="last" ${state.currentPage >= totalPages - 1 ? 'disabled' : ''}>»</button>
+    </div>
+  `;
+}
+
+function renderAvailableChapters(manga, looseChapters) {
+  if (looseChapters.length === 0) {
+    return `
+      <div class="available-chapters-section">
+        <div class="section-header">
+          <h2>Available Chapters</h2>
+        </div>
+        <div class="empty-state-lite">All chapters are already assigned to volumes.</div>
+      </div>
+    `;
+  }
+
+  // Group by chapter number to avoid duplicates for multi-version chapters
+  const uniqueNumbers = [...new Set(looseChapters.map(ch => ch.number))].sort((a, b) => a - b);
+
+  return `
+    <div class="available-chapters-section">
+      <div class="section-header">
+        <h2>Available Chapters</h2>
+        <p class="text-muted" style="font-size: 0.9em; margin-bottom: 12px;">These chapters are not assigned to any volume yet.</p>
+      </div>
+      <div class="available-chapters-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
+        ${uniqueNumbers.map(num => `
+          <div class="available-chapter-item" style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--bg-secondary); border-radius: var(--radius-sm);">
+            <span style="font-weight: 500;">Ch. ${num}</span>
+            <button class="btn btn-small btn-primary add-to-vol-btn" data-num="${num}">Add</button>
+          </div>
+        `).join('')}
+      </div>
     </div>
   `;
 }
@@ -510,9 +766,12 @@ function renderVolumesSection(manga, downloadedChapters) {
 
   return `
     <div class="volumes-section">
-      <h2>Volumes</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="margin: 0;">Volumes</h2>
+        <button class="btn btn-secondary btn-small" id="add-volume-btn">+ Add Volume</button>
+      </div>
       <div class="volumes-grid">
-        ${volumeCards}
+        ${volumeCards || (manga.chapters?.length > 0 ? '<div class="empty-state-lite">No volumes yet. Create one to organize your chapters!</div>' : '')}
       </div>
     </div>
   `;
@@ -530,17 +789,50 @@ export function setupListeners() {
   document.getElementById('back-btn')?.addEventListener('click', () => router.go('/'));
   document.getElementById('back-library-btn')?.addEventListener('click', () => router.go('/'));
 
+  // Artist link clicks - fill search bar in library and navigate there
+  app.querySelectorAll('.artist-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const artist = link.dataset.artist;
+      if (artist) {
+        // Store artist name in search and go to library
+        localStorage.setItem('library_search', artist);
+        localStorage.removeItem('library_artist_filter');
+        router.go('/');
+      }
+    });
+  });
+
   // Continue reading
   document.getElementById('continue-btn')?.addEventListener('click', () => {
     continueReading(manga.id);
   });
 
-  // Download all
-  document.getElementById('download-all-btn')?.addEventListener('click', async () => {
+  // Download all - open options modal
+  document.getElementById('download-all-btn')?.addEventListener('click', () => {
+    const modal = document.getElementById('download-all-modal');
+    if (modal) modal.classList.add('open');
+  });
+
+  // Confirm download all
+  document.getElementById('confirm-download-all-btn')?.addEventListener('click', async () => {
     try {
       showToast('Queueing downloads...', 'info');
-      // This will be implemented to call the download API
-      showToast('Download queued!', 'success');
+
+      const modeRadios = document.getElementsByName('download-version-mode');
+      let selectedMode = 'single';
+      for (const r of modeRadios) {
+        if (r.checked) selectedMode = r.value;
+      }
+
+      document.getElementById('download-all-modal')?.classList.remove('open');
+
+      const result = await api.post(`/bookmarks/${manga.id}/download`, { all: true, versionMode: selectedMode });
+      if (result.chaptersCount > 0) {
+        showToast(`Download queued: ${result.chaptersCount} versions`, 'success');
+      } else {
+        showToast('Already have these chapters downloaded', 'info');
+      }
     } catch (error) {
       showToast('Failed to download: ' + error.message, 'error');
     }
@@ -554,6 +846,331 @@ export function setupListeners() {
       showToast('Check complete!', 'success');
     } catch (error) {
       showToast('Check failed: ' + error.message, 'error');
+    }
+  });
+
+  // Schedule button - open schedule modal (single button for enable/configure)
+  document.getElementById('schedule-btn')?.addEventListener('click', () => {
+    const modal = document.getElementById('schedule-modal');
+    if (modal) modal.classList.add('open');
+  });
+
+  // Schedule type change - show/hide day selector
+  document.getElementById('schedule-type')?.addEventListener('change', (e) => {
+    const dayGroup = document.getElementById('schedule-day-group');
+    if (dayGroup) {
+      dayGroup.style.display = e.target.value === 'weekly' ? '' : 'none';
+    }
+  });
+
+  // Save schedule
+  document.getElementById('save-schedule-btn')?.addEventListener('click', async () => {
+    try {
+      const schedule = document.getElementById('schedule-type').value;
+      const day = document.getElementById('schedule-day').value;
+      const time = document.getElementById('schedule-time').value;
+      const autoDownload = document.getElementById('auto-download-toggle').checked;
+
+      await api.updateAutoCheckSchedule(manga.id, {
+        enabled: true,
+        schedule,
+        day,
+        time,
+        autoDownload
+      });
+
+      state.manga.checkSchedule = schedule;
+      state.manga.checkDay = day;
+      state.manga.checkTime = time;
+      state.manga.autoDownload = autoDownload;
+
+      document.getElementById('schedule-modal')?.classList.remove('open');
+      mount([manga.id]);
+      showToast('Schedule updated', 'success');
+    } catch (error) {
+      showToast('Failed to save schedule: ' + error.message, 'error');
+    }
+  });
+
+  // Disable schedule button
+  document.getElementById('disable-schedule-btn')?.addEventListener('click', async () => {
+    try {
+      await api.toggleAutoCheck(manga.id, false);
+      state.manga.autoCheck = false;
+      state.manga.checkSchedule = null;
+      state.manga.checkDay = null;
+      state.manga.checkTime = null;
+      state.manga.nextCheck = null;
+      document.getElementById('schedule-modal')?.classList.remove('open');
+      mount([manga.id]);
+      showToast('Auto-check disabled', 'success');
+    } catch (error) {
+      showToast('Failed to disable: ' + error.message, 'error');
+    }
+  });
+
+  // Refresh button - check for updates
+  document.getElementById('refresh-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('refresh-btn');
+    try {
+      btn.disabled = true;
+      btn.textContent = '⏳ Checking...';
+      showToast('Checking for updates...', 'info');
+      await api.post(`/bookmarks/${manga.id}/check`);
+      await loadData(manga.id);
+      mount([manga.id]);
+      showToast('Check complete!', 'success');
+    } catch (error) {
+      showToast('Check failed: ' + error.message, 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🔄 Refresh';
+      }
+    }
+  });
+
+  // Scan folder button - scan local folder for this manga
+  document.getElementById('scan-folder-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('scan-folder-btn');
+    try {
+      btn.disabled = true;
+      btn.textContent = '⏳ Scanning...';
+      showToast('Scanning folder...', 'info');
+      const result = await api.scanBookmark(manga.id);
+      await loadData(manga.id);
+      mount([manga.id]);
+      const added = result.addedChapters?.length || 0;
+      const removed = result.removedChapters?.length || 0;
+      if (added > 0 || removed > 0) {
+        showToast(`Scan complete: ${added} added, ${removed} removed`, 'success');
+      } else {
+        showToast('Scan complete: No changes', 'info');
+      }
+    } catch (error) {
+      showToast('Scan failed: ' + error.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '📁 Scan Folder';
+      }
+    }
+  });
+
+  // CBZ extract buttons
+  document.querySelectorAll('[data-cbz-path]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cbzPath = decodeURIComponent(btn.dataset.cbzPath);
+      const defaultChapter = parseInt(btn.dataset.cbzChapter) || 1;
+      const isExtracted = btn.dataset.cbzExtracted === 'true';
+
+      // Ask for chapter number
+      const chapterStr = prompt(`Enter chapter number for extraction:`, String(defaultChapter));
+      if (!chapterStr) return;
+
+      const chapterNum = parseFloat(chapterStr);
+      if (isNaN(chapterNum)) {
+        showToast('Invalid chapter number', 'error');
+        return;
+      }
+
+      try {
+        btn.disabled = true;
+        btn.textContent = 'Extracting...';
+        showToast('Extracting CBZ...', 'info');
+
+        await api.extractCbz(manga.id, cbzPath, chapterNum, { forceReExtract: isExtracted });
+
+        showToast('CBZ extracted successfully!', 'success');
+
+        // Reload to show updated state
+        await loadData(manga.id);
+        mount([manga.id]);
+      } catch (error) {
+        showToast('Extract failed: ' + error.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = isExtracted ? 'Re-Extract' : 'Extract';
+      }
+    });
+  });
+
+  // Edit button - open edit modal
+  document.getElementById('edit-btn')?.addEventListener('click', async () => {
+    const modal = document.getElementById('edit-manga-modal');
+    if (modal) {
+      document.getElementById('edit-alias-input').value = manga.alias || '';
+
+      // Reset selected cover path
+      window._selectedCoverPath = null;
+
+      // Populate artist and category datalists
+      try {
+        const [artists, categories] = await Promise.all([
+          api.getAllArtists(),
+          api.getAllCategories()
+        ]);
+
+        const artistList = document.getElementById('artist-list');
+        const categoryList = document.getElementById('category-list');
+
+        // Store full lists for filtering
+        window._allArtists = artists;
+        window._allCategories = categories;
+
+        if (artistList) {
+          artistList.innerHTML = artists.map(a => `<option value="${a}">`).join('');
+        }
+        if (categoryList) {
+          categoryList.innerHTML = categories.map(c => `<option value="${c}">`).join('');
+        }
+
+        // Add input handlers for autocomplete filtering
+        const artistInput = document.getElementById('edit-artist-input');
+        const categoryInput = document.getElementById('edit-categories-input');
+
+        artistInput?.addEventListener('input', () => {
+          const val = artistInput.value.toLowerCase();
+          const lastComma = artistInput.value.lastIndexOf(',');
+          const current = artistInput.value.substring(lastComma + 1).trim().toLowerCase();
+
+          if (current.length > 0 && window._allArtists) {
+            const matches = window._allArtists.filter(a => a.toLowerCase().includes(current));
+            if (artistList && matches.length > 0) {
+              // Show matches in last position
+              const prefix = lastComma >= 0 ? artistInput.value.substring(0, lastComma + 1) + ' ' : '';
+              artistList.innerHTML = matches.map(a => `<option value="${prefix}${a}">`).join('');
+            }
+          }
+        });
+
+        categoryInput?.addEventListener('input', () => {
+          const lastComma = categoryInput.value.lastIndexOf(',');
+          const current = categoryInput.value.substring(lastComma + 1).trim().toLowerCase();
+
+          if (current.length > 0 && window._allCategories) {
+            const matches = window._allCategories.filter(c => c.toLowerCase().includes(current));
+            if (categoryList && matches.length > 0) {
+              const prefix = lastComma >= 0 ? categoryInput.value.substring(0, lastComma + 1) + ' ' : '';
+              categoryList.innerHTML = matches.map(c => `<option value="${prefix}${c}">`).join('');
+            }
+          }
+        });
+
+      } catch (e) {
+        console.error('Failed to load artists/categories:', e);
+      }
+
+      modal.classList.add('open');
+    }
+  });
+
+  // Save manga changes
+  document.getElementById('save-manga-btn')?.addEventListener('click', async () => {
+    try {
+      const alias = document.getElementById('edit-alias-input').value.trim();
+      const artistInput = document.getElementById('edit-artist-input').value.trim();
+      const categoriesInput = document.getElementById('edit-categories-input').value.trim();
+
+      // Parse artist (comma separated)
+      const artists = artistInput ? artistInput.split(',').map(a => a.trim()).filter(a => a) : [];
+
+      // Parse categories (comma separated)
+      const categories = categoriesInput ? categoriesInput.split(',').map(c => c.trim()).filter(c => c) : [];
+
+      // Update bookmark alias
+      await api.updateBookmark(manga.id, { alias: alias || null });
+
+      // Update artists
+      await api.setBookmarkArtists(manga.id, artists);
+
+      // Update categories (always call, even if empty to clear)
+      await api.setBookmarkCategories(manga.id, categories);
+
+      // Update cover if changed
+      if (window._selectedCoverPath) {
+        // Use the new endpoint that copies to covers folder
+        await api.setBookmarkCoverFromImage(manga.id, window._selectedCoverPath);
+      }
+
+      state.manga.alias = alias || null;
+      state.manga.artists = artists;
+      state.manga.categories = categories;
+
+      document.getElementById('edit-manga-modal')?.classList.remove('open');
+      mount([manga.id]);
+      showToast('Manga updated', 'success');
+    } catch (error) {
+      showToast('Failed to update: ' + error.message, 'error');
+    }
+  });
+
+  // Change cover button
+  document.getElementById('change-cover-btn')?.addEventListener('click', async () => {
+    try {
+      showToast('Loading images...', 'info');
+      const images = await api.getFolderImages(manga.id);
+
+      if (images.length === 0) {
+        showToast('No images found in manga folder', 'warning');
+        return;
+      }
+
+      // Create cover selection modal
+      const modal = document.createElement('div');
+      modal.id = 'cover-select-modal';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+      modal.innerHTML = `
+        <div style="background:var(--bg-primary);border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;">
+          <h3 style="margin:0 0 16px 0;">Select Cover Image</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;">
+            ${images.slice(0, 50).map(img => `
+              <div class="cover-option" data-path="${img.path}" style="cursor:pointer;border:2px solid transparent;border-radius:4px;overflow:hidden;">
+                <img src="/api/proxy-image?path=${encodeURIComponent(img.path)}" style="width:100%;aspect-ratio:2/3;object-fit:cover;">
+              </div>
+            `).join('')}
+          </div>
+          ${images.length > 50 ? `<p style="margin:8px 0 0 0;color:var(--text-secondary);">Showing first 50 of ${images.length} images</p>` : ''}
+          <div style="margin-top:16px;display:flex;justify-content:flex-end;">
+            <button class="btn btn-secondary" id="close-cover-modal">Cancel</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('close-cover-modal').addEventListener('click', () => modal.remove());
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+      // Handle cover selection
+      modal.querySelectorAll('.cover-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+          window._selectedCoverPath = opt.dataset.path;
+          // Update preview
+          const preview = document.getElementById('cover-preview');
+          if (preview) {
+            preview.innerHTML = `<img src="/api/proxy-image?path=${encodeURIComponent(window._selectedCoverPath)}" style="width:100%;height:100%;object-fit:cover;">`;
+          }
+          modal.remove();
+          showToast('Cover selected', 'success');
+        });
+      });
+
+    } catch (error) {
+      showToast('Failed to load images: ' + error.message, 'error');
+    }
+  });
+
+  // Delete manga
+  document.getElementById('delete-manga-btn')?.addEventListener('click', async () => {
+    const deleteFolder = confirm('Also delete downloaded files?');
+    if (!confirm('Are you sure you want to delete this manga from your library?')) return;
+    try {
+      await api.deleteBookmark(manga.id, deleteFolder);
+      showToast('Manga deleted', 'success');
+      router.go('/');
+    } catch (error) {
+      showToast('Failed to delete: ' + error.message, 'error');
     }
   });
 
@@ -638,6 +1255,15 @@ export function setupListeners() {
         case 'restore-chapter':
           await restoreChapter(num);
           break;
+        case 'delete-chapter':
+          await deleteChapter(num, url);
+          break;
+        case 'hide-chapter':
+          await hideChapter(num, url);
+          break;
+        case 'unhide-chapter':
+          await unhideChapter(num, url);
+          break;
       }
     });
   });
@@ -652,6 +1278,9 @@ export function setupListeners() {
 
   // Volume Management Listeners
   setupVolumeListeners(app);
+
+  // Header Component Listeners
+  setupHeaderListeners();
 
   // Subscribe to manga updates via Socket.io
   socket.subscribeToManga(manga.id);
@@ -717,7 +1346,7 @@ async function downloadChapter(chapterNum) {
 
   try {
     showToast(`Downloading chapter ${chapterNum}...`, 'info');
-    await api.post(`/bookmarks/${manga.id}/download`, { chapter: chapterNum });
+    await api.post(`/bookmarks/${manga.id}/download`, { chapters: [chapterNum] });
     showToast('Download queued!', 'success');
   } catch (error) {
     showToast('Failed: ' + error.message, 'error');
@@ -749,8 +1378,8 @@ async function downloadVersion(chapterNum, url) {
 
   try {
     showToast(`Downloading version...`, 'info');
-    await api.post(`/bookmarks/${manga.id}/download`, {
-      chapter: chapterNum,
+    await api.post(`/bookmarks/${manga.id}/download-version`, {
+      chapterNumber: chapterNum,
       url: url
     });
     showToast('Download queued!', 'success');
@@ -768,7 +1397,10 @@ async function deleteVersion(chapterNum, url) {
   if (!confirm('Delete this version from disk?')) return;
 
   try {
-    await api.delete(`/bookmarks/${manga.id}/chapters/${chapterNum}/version?url=${encodeURIComponent(url)}`);
+    await api.request(`/bookmarks/${manga.id}/chapters`, {
+      method: 'DELETE',
+      body: JSON.stringify({ chapterNumber: chapterNum, url: decodeURIComponent(url) })
+    });
     showToast('Version deleted', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -784,7 +1416,7 @@ async function hideVersion(chapterNum, url) {
   const manga = state.manga;
 
   try {
-    await api.hideVersion(manga.id, chapterNum, url);
+    await api.hideVersion(manga.id, chapterNum, decodeURIComponent(url));
     showToast('Version hidden', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -798,7 +1430,7 @@ async function hideVersion(chapterNum, url) {
 async function restoreVersion(chapterNum, url) {
   const manga = state.manga;
   try {
-    await api.unhideVersion(manga.id, chapterNum, url);
+    await api.unhideVersion(manga.id, chapterNum, decodeURIComponent(url));
     showToast('Version restored', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -823,6 +1455,60 @@ async function restoreChapter(chapterNum) {
 }
 
 /**
+ * Delete chapter files (single version)
+ */
+async function deleteChapter(chapterNum, url) {
+  const manga = state.manga;
+
+  if (!confirm("Delete this chapter's files from disk?")) return;
+
+  try {
+    await api.request(`/bookmarks/${manga.id}/chapters`, {
+      method: 'DELETE',
+      body: JSON.stringify({ chapterNumber: chapterNum, url: decodeURIComponent(url) })
+    });
+    showToast('Chapter files deleted', 'success');
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Failed to delete: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Hide a chapter (single version)
+ */
+async function hideChapter(chapterNum, url) {
+  const manga = state.manga;
+
+  if (!confirm('Hide this chapter? It will be moved to the Hidden filter.')) return;
+
+  try {
+    await api.hideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    showToast('Chapter hidden', 'success');
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Failed to hide chapter: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Unhide a chapter (single version)
+ */
+async function unhideChapter(chapterNum, url) {
+  const manga = state.manga;
+  try {
+    await api.unhideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    showToast('Chapter unhidden', 'success');
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Failed to unhide chapter: ' + error.message, 'error');
+  }
+}
+
+/**
  * Load manga data
  */
 async function loadData(mangaId) {
@@ -835,6 +1521,19 @@ async function loadData(mangaId) {
     state.manga = manga;
     state.categories = categories;
     state.loading = false;
+
+    // Fetch CBZ files for local manga
+    if (manga.website === 'Local') {
+      try {
+        const cbzFiles = await api.getCbzFiles(mangaId);
+        state.cbzFiles = cbzFiles || [];
+      } catch (e) {
+        console.error('Failed to load CBZ files:', e);
+        state.cbzFiles = [];
+      }
+    } else {
+      state.cbzFiles = [];
+    }
 
     // Default to last page
     const chapterCount = new Set((manga.chapters || []).map(c => c.number)).size;
@@ -907,9 +1606,145 @@ export default { mount, unmount, render };
 // Volume Management Logic
 // ==========================================
 
+/**
+ * Render add volume modal
+ */
+function renderAddVolumeModal() {
+  return `
+    <div class="modal" id="add-volume-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>📦 Add New Volume</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="add-volume-name-input">Volume Name</label>
+            <input type="text" id="add-volume-name-input" placeholder="e.g. Volume 1">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-primary" id="add-volume-submit-btn">Create Volume</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function setupVolumeListeners(app) {
   const manga = state.manga;
   if (!manga) return;
+
+  // --- Add Volume Modal ---
+  const addVolBtn = app.querySelector('#add-volume-btn');
+  const addVolModal = app.querySelector('#add-volume-modal');
+  const addVolSubmitBtn = app.querySelector('#add-volume-submit-btn');
+
+  if (addVolBtn && addVolModal) {
+    addVolBtn.addEventListener('click', () => {
+      addVolModal.classList.add('open');
+      app.querySelector('#add-volume-name-input').focus();
+    });
+  }
+
+  // Close modal listeners
+  addVolModal?.querySelectorAll('.modal-close, .modal-close-btn, .modal-overlay').forEach(btn => {
+    btn.addEventListener('click', () => addVolModal.classList.remove('open'));
+  });
+
+  if (addVolSubmitBtn) {
+    addVolSubmitBtn.addEventListener('click', async () => {
+      const name = app.querySelector('#add-volume-name-input').value.trim();
+      if (!name) return showToast('Please enter a volume name', 'error');
+
+      try {
+        addVolSubmitBtn.disabled = true;
+        addVolSubmitBtn.textContent = 'Creating...';
+
+        await api.createVolume(manga.id, name);
+        showToast('Volume created successfully!', 'success');
+
+        addVolModal.classList.remove('open');
+        app.querySelector('#add-volume-name-input').value = '';
+
+        await loadData(manga.id);
+        mount([manga.id]);
+      } catch (error) {
+        showToast('Failed to create volume: ' + error.message, 'error');
+      } finally {
+        addVolSubmitBtn.disabled = false;
+        addVolSubmitBtn.textContent = 'Create Volume';
+      }
+    });
+  }
+
+  // --- Manage Volume Chapters ---
+  const manageChaptersBtn = app.querySelector('#manage-chapters-btn');
+  if (manageChaptersBtn) {
+    manageChaptersBtn.addEventListener('click', () => {
+      state.manageChapters = !state.manageChapters;
+      mount([manga.id, 'volume', state.activeVolumeId]);
+    });
+  }
+
+  // Add chapter to volume
+  app.querySelectorAll('.add-to-vol-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chapterNum = parseFloat(btn.dataset.num);
+      const vol = state.activeVolume;
+      if (!vol) return;
+
+      try {
+        btn.disabled = true;
+        btn.textContent = '...';
+
+        const currentChapters = vol.chapters || [];
+        if (currentChapters.includes(chapterNum)) return;
+
+        const newChapters = [...currentChapters, chapterNum].sort((a, b) => a - b);
+
+        await api.updateVolumeChapters(manga.id, vol.id, newChapters);
+        showToast(`Chapter ${chapterNum} added to volume`, 'success');
+
+        await loadData(manga.id);
+        mount([manga.id, 'volume', vol.id]);
+      } catch (error) {
+        showToast('Failed to add chapter: ' + error.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Add';
+      }
+    });
+  });
+
+  // Remove chapter from volume
+  app.querySelectorAll('.remove-from-vol-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation(); // Don't trigger chapter click
+      const chapterNum = parseFloat(btn.dataset.num);
+      const vol = state.activeVolume;
+      if (!vol) return;
+
+      try {
+        btn.disabled = true;
+        btn.textContent = '...';
+
+        const currentChapters = vol.chapters || [];
+        const newChapters = currentChapters.filter(num => num !== chapterNum);
+
+        await api.updateVolumeChapters(manga.id, vol.id, newChapters);
+        showToast(`Chapter ${chapterNum} removed from volume`, 'success');
+
+        await loadData(manga.id);
+        mount([manga.id, 'volume', vol.id]);
+      } catch (error) {
+        showToast('Failed to remove chapter: ' + error.message, 'error');
+        btn.disabled = false;
+        btn.textContent = '×';
+      }
+    });
+  });
 
   // --- Edit Volume Modal ---
   const editVolBtn = app.querySelector('#edit-vol-btn');
@@ -990,39 +1825,31 @@ function setupVolumeListeners(app) {
         const volId = editModal.dataset.editingVolId;
         if (!volId) return;
 
-        const formData = new FormData();
-        formData.append('cover', file);
-
         try {
-          // We need a specific endpoint for uploading volume cover directly
-          // For now, let's assume we can upload to the generic cover endpoint or add one.
-          // Wait, strict requirement was to use existing APIs or add new ones. 
-          // In server.js we added: router.post('/bookmarks/:id/volumes/:volumeId/cover/from-chapter'...)
-          // But do we have a direct upload? 
-          // Checking server.js: 
-          // router.post('/bookmarks/:id/volumes/:volumeId/cover', upload.single('cover'), ...) was NOT seen in the summary.
-          // I will skip this for now or use the generic one if available? 
-          // I'll leave a TODO or implement if I find the endpoint.
-          // Actually, let's look at the server summary. "Added API endpoint for setting volume cover (upload)." -> Yes, line 1143 in server.js summary.
+          // Reset input so the same file can be selected again
+          fileInput.value = '';
 
-          await fetch(`/api/bookmarks/${manga.id}/volumes/${volId}/cover`, {
-            method: 'POST',
-            body: formData,
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-          });
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Uploading...';
+
+          await api.uploadVolumeCover(manga.id, volId, file);
 
           showToast('Cover uploaded', 'success');
           await loadData(manga.id);
+          // Update the volume cover source directly in the DOM if we are looking at it
+          // the mount call below handles the full refresh
           mount([manga.id, 'volume', volId]);
         } catch (err) {
           showToast('Upload failed: ' + err.message, 'error');
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.innerHTML = '📤 Upload Image';
         }
       });
     }
 
     uploadBtn.addEventListener('click', () => fileInput.click());
   }
-
 
   // --- Cover Selector Modal (Trigger) ---
   const selectorBtn = app.querySelector('#vol-cover-selector-btn');

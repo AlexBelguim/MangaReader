@@ -264,11 +264,9 @@ export function setupListeners() {
 
   // Gallery card clicks - open reader with only pages from this gallery
   const galleryCards = app.querySelectorAll('.gallery-card');
-  console.log('[Favorites] Found gallery cards:', galleryCards.length);
   galleryCards.forEach(card => {
     card.addEventListener('click', () => {
       const galleryName = card.dataset.gallery;
-      console.log('[Favorites] Gallery clicked:', galleryName);
       router.go(`/read/gallery/${encodeURIComponent(galleryName)}`);
     });
   });
@@ -280,9 +278,9 @@ export function setupListeners() {
       const isSeries = card.dataset.isSeries === 'true';
 
       if (isSeries) {
-        router.go(`/series/${id}`);
+        router.go(`/read/trophies/series-${id}/🏆`);
       } else {
-        router.go(`/manga/${id}`);
+        router.go(`/read/trophies/${id}/🏆`);
       }
     });
   });
