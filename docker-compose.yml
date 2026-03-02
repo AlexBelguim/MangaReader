@@ -1,20 +1,21 @@
 services:
-  manga-scraper:
-    container_name: manga-scraper
+  manga-reader:
     build: .
-    ports:
-      - "5555:5555"
-    volumes:
-      # Map host directories to container directories
-      # Ensure these exist on the host and have correct permissions (UID 1000 usually)
-      - ./data:/app/data
-      - ./downloads:/app/downloads
-    environment:
-      # Ensure Puppeteer knows where to find the browser
-      # (The base image usually configures this, but explicit is good)
-      - NODE_ENV=production
+    container_name: manga-reader
     restart: unless-stopped
-    # If you run into shared memory issues with Chrome, uncomment the following:
-    # shm_size: '1gb'
-    # cap_add:
-    #   - SYS_ADMIN
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=1234
+      - JWT_SECRET=change_this_to_a_long_random_string_12345
+      - DATA_DIR=/app/data
+      - DOWNLOADS_DIR=/app/downloads
+      - CHROME_EXECUTABLE_PATH=/usr/bin/chromium
+    volumes:
+      # Database and covers
+      - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/data:/app/data
+      # Downloads/media
+      - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/media/downloads:/app/downloads
