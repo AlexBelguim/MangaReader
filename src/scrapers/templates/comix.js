@@ -1,4 +1,4 @@
-import { BaseScraper } from '../../../testfiles/old src/scrapers/base.js';
+import { BaseScraper } from '../base.js';
 
 /**
  * Scraper for comix.to website

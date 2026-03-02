@@ -1,4 +1,4 @@
-import { BaseScraper } from '../../../testfiles/old src/scrapers/base.js';
+import { BaseScraper } from '../base.js';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
