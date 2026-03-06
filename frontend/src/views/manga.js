@@ -677,7 +677,7 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     return `
           <div class="version-row ${isVersionDownloaded ? 'downloaded' : ''}"
                data-version-url="${versionUrl}" data-num="${num}">
-            <span class="version-title">${v.title || v.releaseGroup || 'Version'}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}</span>
+            <span class="version-title" style="cursor: pointer; flex: 1;">${v.title || v.releaseGroup || 'Version'}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}</span>
             <div class="version-actions">
               ${isVersionDownloaded
         ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">▶</button>
@@ -1398,6 +1398,21 @@ export function setupListeners() {
     });
   });
 
+  // Version row title click - read that version
+  app.querySelectorAll('.version-row .version-title').forEach(title => {
+    title.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = title.closest('.version-row');
+      const num = parseFloat(row.dataset.num);
+      const url = row.dataset.versionUrl ? decodeURIComponent(row.dataset.versionUrl) : null;
+      if (row.classList.contains('downloaded') && url) {
+        router.go(`/read/${manga.id}/${num}?version=${encodeURIComponent(url)}`);
+      } else {
+        showToast('Version not downloaded yet', 'info');
+      }
+    });
+  });
+
   // Volume card clicks
   app.querySelectorAll('.volume-card').forEach(card => {
     card.addEventListener('click', () => {
@@ -1523,8 +1538,6 @@ async function downloadVersion(chapterNum, url) {
  */
 async function deleteVersion(chapterNum, url) {
   const manga = state.manga;
-
-  if (!confirm('Delete this version from disk?')) return;
 
   try {
     await api.request(`/bookmarks/${manga.id}/chapters`, {
