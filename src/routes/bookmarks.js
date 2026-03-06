@@ -336,7 +336,8 @@ router.post('/:id/migrate-source', async (req, res) => {
             for (const ch of chapters) {
                 if (downloadedChapters.has(ch.number)) {
                     const oldUrl = ch.url;
-                    const localUrl = `local://${bookmark.id}/chapter-${ch.number}`;
+                    // Include version to avoid UNIQUE constraint when multiple versions of same chapter exist
+                    const localUrl = `local://${bookmark.id}/chapter-${ch.number}-v${ch.version || 1}`;
 
                     // Update chapter URL to local
                     db.prepare('UPDATE chapters SET url = ?, removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?')
