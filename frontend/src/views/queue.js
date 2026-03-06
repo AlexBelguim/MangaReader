@@ -227,7 +227,14 @@ function render() {
   const downloadEntries = Object.entries(state.downloads);
   const activeDownloads = downloadEntries.filter(([, t]) => t.status !== 'complete');
   const completedDownloads = downloadEntries.filter(([, t]) => t.status === 'complete');
-  const totalActive = activeDownloads.length + state.queueTasks.length;
+
+  // Filter out queue tasks that already have a corresponding active download card
+  const activeDownloadMangaIds = new Set(activeDownloads.map(([, t]) => t.bookmarkId).filter(Boolean));
+  const filteredQueueTasks = state.queueTasks.filter(t => {
+    if (t.type === 'download' && t.data?.mangaId && activeDownloadMangaIds.has(t.data.mangaId)) return false;
+    return true;
+  });
+  const totalActive = activeDownloads.length + filteredQueueTasks.length;
 
   const schedules = state.autoCheck?.schedules || [];
 
@@ -239,11 +246,11 @@ function render() {
         ${totalActive > 0 ? `<span class="queue-badge">${totalActive} active</span>` : ''}
       </div>
 
-      ${activeDownloads.length > 0 || state.queueTasks.length > 0 ? `
+      ${activeDownloads.length > 0 || filteredQueueTasks.length > 0 ? `
         <div class="queue-section">
           <h3 class="queue-section-title">Active Tasks</h3>
           ${activeDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
-          ${state.queueTasks.map(t => renderQueueTask(t)).join('')}
+          ${filteredQueueTasks.map(t => renderQueueTask(t)).join('')}
         </div>
       ` : ''}
 
@@ -273,7 +280,7 @@ function render() {
         </div>
       ` : ''}
 
-      ${activeDownloads.length === 0 && state.queueTasks.length === 0 && completedDownloads.length === 0 && schedules.length === 0 && (!state.historyTasks || state.historyTasks.length === 0) ? `
+      ${activeDownloads.length === 0 && filteredQueueTasks.length === 0 && completedDownloads.length === 0 && schedules.length === 0 && (!state.historyTasks || state.historyTasks.length === 0) ? `
         <div class="queue-empty">
           <div class="empty-icon">✨</div>
           <h3>All Clear</h3>

@@ -289,7 +289,7 @@ export function render() {
               <div class="manga-detail-info">
                 <h1>${displayName}</h1>
                 <div class="manga-detail-meta">
-                  <span class="meta-item accent">${manga.website || 'Local'}</span>
+                  <span class="meta-item accent" id="source-label" style="cursor: pointer;" title="Click to change source">${manga.website || 'Local'}</span>
                   <span class="meta-item">${manga.chapters?.length || 0} Total Chapters</span>
                   ${downloadedChapters.size > 0 ? `<span class="meta-item downloaded">${downloadedChapters.size} Downloaded</span>` : ''}
                   ${readChapters.size > 0 ? `<span class="meta-item">${readChapters.size} Read</span>` : ''}
@@ -314,6 +314,7 @@ export function render() {
                 ↓ Download All
               </button>
               <button class="btn btn-secondary" id="refresh-btn">🔄 Refresh</button>
+              ${manga.website !== 'Local' ? `<button class="btn btn-secondary" id="quick-check-btn">⚡ Quick Check</button>` : ''}
               ${manga.website === 'Local' ? `<button class="btn btn-secondary" id="scan-folder-btn">📁 Scan Folder</button>` : ''}
               <button class="btn btn-secondary" id="edit-btn">✏️ Edit</button>
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
@@ -388,11 +389,73 @@ export function render() {
   `;
 }
 
+function renderDeleteModal() {
+  const manga = state.manga;
+  if (!manga) return '';
+  const displayName = manga.alias || manga.title;
+  return `
+    <div class="modal" id="delete-manga-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content" style="max-width: 420px;">
+        <div class="modal-header">
+          <h2>🗑️ Delete Manga</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p>Are you sure you want to delete <strong>${displayName}</strong> from your library?</p>
+          <p class="text-muted" style="font-size: 0.85em;">This cannot be undone.</p>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="delete-files-toggle" style="width: 18px; height: 18px;">
+              <span>Also delete downloaded files from disk</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-danger" id="confirm-delete-manga-btn">Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMigrateSourceModal() {
+  const manga = state.manga;
+  if (!manga) return '';
+  return `
+    <div class="modal" id="migrate-source-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+          <h2>🔄 Change Source</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p>Current source: <strong>${manga.website || 'Local'}</strong></p>
+          <p class="text-muted" style="font-size: 0.85em; margin-bottom: 12px;">Enter the new URL for this manga. Downloaded chapters will be preserved as local versions.</p>
+          <div class="form-group">
+            <label for="migrate-url-input">New Manga URL</label>
+            <input type="url" id="migrate-url-input" placeholder="https://..." style="width: 100%;">
+          </div>
+          <p class="text-muted" style="font-size: 0.8em;">Current URL: <code style="word-break:break-all;">${manga.url}</code></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button class="btn btn-primary" id="confirm-migrate-btn">Migrate Source</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderModals() {
   const manga = state.manga;
   return `
     ${manga ? renderScheduleModal(manga) : ''}
     ${renderAddVolumeModal()}
+    ${renderDeleteModal()}
+    ${renderMigrateSourceModal()}
 
     <!-- Edit Manga Modal -->
     <div class="modal" id="edit-manga-modal">
@@ -610,10 +673,11 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     const isVersionDownloaded = Array.isArray(downloadedVersions)
       ? downloadedVersions.includes(v.url)
       : downloadedVersions === v.url;
+    const isLocalVersion = v.url.startsWith('local://');
     return `
           <div class="version-row ${isVersionDownloaded ? 'downloaded' : ''}"
                data-version-url="${versionUrl}" data-num="${num}">
-            <span class="version-title">${v.title || v.releaseGroup || 'Version'}</span>
+            <span class="version-title">${v.title || v.releaseGroup || 'Version'}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}</span>
             <div class="version-actions">
               ${isVersionDownloaded
         ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">▶</button>
@@ -1161,16 +1225,82 @@ export function setupListeners() {
     }
   });
 
-  // Delete manga
-  document.getElementById('delete-manga-btn')?.addEventListener('click', async () => {
-    const deleteFolder = confirm('Also delete downloaded files?');
-    if (!confirm('Are you sure you want to delete this manga from your library?')) return;
+  // Delete manga - open confirmation modal
+  document.getElementById('delete-manga-btn')?.addEventListener('click', () => {
+    const modal = document.getElementById('delete-manga-modal');
+    if (modal) modal.classList.add('open');
+  });
+
+  // Confirm delete manga
+  document.getElementById('confirm-delete-manga-btn')?.addEventListener('click', async () => {
+    const deleteFiles = document.getElementById('delete-files-toggle')?.checked || false;
     try {
-      await api.deleteBookmark(manga.id, deleteFolder);
+      await api.deleteBookmark(manga.id, deleteFiles);
+      document.getElementById('delete-manga-modal')?.classList.remove('open');
       showToast('Manga deleted', 'success');
       router.go('/');
     } catch (error) {
       showToast('Failed to delete: ' + error.message, 'error');
+    }
+  });
+
+  // Quick Check button
+  document.getElementById('quick-check-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('quick-check-btn');
+    try {
+      btn.disabled = true;
+      btn.textContent = '⏳ Checking...';
+      showToast('Quick checking for updates...', 'info');
+      const result = await api.post(`/bookmarks/${manga.id}/quick-check`);
+      await loadData(manga.id);
+      mount([manga.id]);
+      if (result.newChaptersCount > 0) {
+        showToast(`Found ${result.newChaptersCount} new chapter(s)!`, 'success');
+      } else {
+        showToast('No new chapters found', 'info');
+      }
+    } catch (error) {
+      showToast('Quick check failed: ' + error.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Quick Check'; }
+    }
+  });
+
+  // Source label click - open migrate source modal
+  document.getElementById('source-label')?.addEventListener('click', () => {
+    const modal = document.getElementById('migrate-source-modal');
+    if (modal) modal.classList.add('open');
+  });
+
+  // Confirm migrate source
+  document.getElementById('confirm-migrate-btn')?.addEventListener('click', async () => {
+    const newUrl = document.getElementById('migrate-url-input')?.value?.trim();
+    if (!newUrl) {
+      showToast('Please enter a URL', 'warning');
+      return;
+    }
+    const btn = document.getElementById('confirm-migrate-btn');
+    try {
+      btn.disabled = true;
+      btn.textContent = 'Migrating...';
+      showToast('Migrating source...', 'info');
+
+      // Step 1: Migrate source (converts downloaded chapters to local)
+      const result = await api.migrateSource(manga.id, newUrl);
+      showToast(`Migrated! ${result.migratedChapters} chapters preserved as local`, 'success');
+
+      // Step 2: Run full check against the new source
+      showToast('Running full check on new source...', 'info');
+      await api.post(`/bookmarks/${manga.id}/check`);
+
+      document.getElementById('migrate-source-modal')?.classList.remove('open');
+      await loadData(manga.id);
+      mount([manga.id]);
+      showToast('Source migration complete!', 'success');
+    } catch (error) {
+      showToast('Migration failed: ' + error.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Migrate Source'; }
     }
   });
 

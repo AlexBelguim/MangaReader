@@ -246,6 +246,10 @@ class ApiClient {
         return this.delete(`/bookmarks/${id}?deleteFolder=${deleteFolder}`);
     }
 
+    migrateSource(id, newUrl) {
+        return this.post(`/bookmarks/${id}/migrate-source`, { newUrl });
+    }
+
     // ==================== CHAPTERS ====================
 
     lockChapter(bookmarkId, chapterNumber) {

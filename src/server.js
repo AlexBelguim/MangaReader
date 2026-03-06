@@ -468,10 +468,31 @@ async function runAutoCheck() {
         console.log(`[Auto-Check] Found ${updateResult.newChapters.length} new chapters for ${manga.title}`);
         results.updated++;
 
-        await sendPushNotifications(manga.alias || manga.title, updateResult.newChapters.length);
+        // Merge new chapters into the bookmark's chapter list
+        const existingChapters = bookmark.chapters || [];
+        const existingUrls = new Set(existingChapters.map(c => c.url));
+        const existingChapterNumbers = new Set(existingChapters.map(c => c.number));
+        const chaptersToAdd = updateResult.newChapters.filter(c => !existingUrls.has(c.url));
 
-        if (bookmark.autoDownload) {
-          for (const chapter of updateResult.newChapters) {
+        if (chaptersToAdd.length > 0) {
+          const mergedChapters = [...existingChapters, ...chaptersToAdd];
+          const uniqueChapterNumbers = new Set(mergedChapters.map(c => c.number));
+          bookmarkDb.update(manga.id, {
+            chapters: mergedChapters,
+            totalChapters: mergedChapters.length,
+            uniqueChapters: uniqueChapterNumbers.size
+          });
+        }
+
+        // Only count truly new chapter numbers for notifications
+        const trulyNewChapters = updateResult.newChapters.filter(c => !existingChapterNumbers.has(c.number));
+
+        if (trulyNewChapters.length > 0) {
+          await sendPushNotifications(manga.alias || manga.title, trulyNewChapters.length);
+        }
+
+        if (bookmark.autoDownload && trulyNewChapters.length > 0) {
+          for (const chapter of trulyNewChapters) {
             try {
               await taskQueue.addAndWait({
                 type: 'download',

@@ -314,6 +314,60 @@ router.delete('/:id', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// Migrate source - change manga URL while preserving downloaded chapters as local
+router.post('/:id/migrate-source', async (req, res) => {
+    try {
+        const { newUrl } = req.body;
+        if (!newUrl) return res.status(400).json({ error: 'New URL is required' });
+
+        const bookmark = await bookmarkDb.getById(req.params.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const scraper = scraperFactory.getScraperForUrl(newUrl);
+        if (!scraper) return res.status(400).json({ error: 'No scraper found for this URL' });
+
+        const db = getDb();
+        const downloadedChapters = new Set(bookmark.downloadedChapters || []);
+
+        // Convert downloaded chapter URLs to local:// in both chapters and downloaded_versions tables
+        if (downloadedChapters.size > 0) {
+            const chapters = bookmark.chapters || [];
+
+            for (const ch of chapters) {
+                if (downloadedChapters.has(ch.number)) {
+                    const oldUrl = ch.url;
+                    const localUrl = `local://${bookmark.id}/chapter-${ch.number}`;
+
+                    // Update chapter URL to local
+                    db.prepare('UPDATE chapters SET url = ?, removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?')
+                        .run(localUrl, bookmark.id, oldUrl);
+
+                    // Update downloaded_versions to point to local URL
+                    db.prepare('UPDATE downloaded_versions SET url = ? WHERE bookmark_id = ? AND chapter_number = ? AND url = ?')
+                        .run(localUrl, bookmark.id, ch.number, oldUrl);
+
+                    // Clean up any deleted_chapter_urls referencing the old URL
+                    db.prepare('DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url = ?')
+                        .run(bookmark.id, oldUrl);
+                }
+            }
+        }
+
+        // Update the bookmark's URL and website
+        const newWebsite = scraper.websiteName || new URL(newUrl).hostname;
+        db.prepare('UPDATE bookmarks SET url = ?, website = ?, updated_at = ? WHERE id = ?')
+            .run(newUrl, newWebsite, new Date().toISOString(), bookmark.id);
+
+        console.log(`[Migrate Source] ${bookmark.alias || bookmark.title}: ${bookmark.url} -> ${newUrl}`);
+        console.log(`[Migrate Source] Converted ${downloadedChapters.size} downloaded chapters to local versions`);
+
+        const updated = await bookmarkDb.getById(bookmark.id);
+        res.json({ success: true, bookmark: updated, migratedChapters: downloadedChapters.size });
+    } catch (error) {
+        console.error('[Migrate Source] Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // ==================== CATEGORY ASSOCIATIONS ====================
 
