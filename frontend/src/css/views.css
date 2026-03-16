@@ -1591,6 +1591,29 @@ body.reader-active .category-fab {
     padding-bottom: 0;
 }
 
+/* Collapsible Sections */
+.queue-section-header-collapsible {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.queue-section-header-collapsible .collapse-icon {
+    transition: transform 0.2s ease;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #888);
+}
+
+.queue-section.collapsed .collapse-icon {
+    transform: rotate(-90deg);
+}
+
+.queue-section.collapsed .queue-section-content {
+    display: none;
+}
+
 .queue-inline-header {
     display: flex;
     align-items: center;

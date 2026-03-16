@@ -337,6 +337,10 @@ class ApiClient {
         return this.get(`/queue/history?limit=${limit}`);
     }
 
+    clearQueueHistory() {
+        return this.delete('/queue/history');
+    }
+
     // ==================== DOWNLOADS ====================
 
     getDownloads() {

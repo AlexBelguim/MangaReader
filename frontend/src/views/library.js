@@ -546,14 +546,20 @@ export function setupListeners() {
 
   // Add modal
   const addBtn = document.getElementById('add-manga-btn');
+  const mobileAddBtn = document.getElementById('mobile-add-btn');
   const modal = document.getElementById('add-modal');
   const modalClose = document.getElementById('add-modal-close');
   const modalCancel = document.getElementById('add-modal-cancel');
   const modalSubmit = document.getElementById('add-modal-submit');
+  const mobileMenu = document.getElementById('mobile-menu');
 
-  if (addBtn && modal) {
-    addBtn.addEventListener('click', () => modal.classList.add('open'));
-  }
+  const showAddModal = () => {
+    if (mobileMenu) mobileMenu.classList.add('hidden');
+    if (modal) modal.classList.add('open');
+  };
+
+  if (addBtn) addBtn.addEventListener('click', showAddModal);
+  if (mobileAddBtn) mobileAddBtn.addEventListener('click', showAddModal);
 
   if (modalClose) modalClose.addEventListener('click', () => modal.classList.remove('open'));
   if (modalCancel) modalCancel.addEventListener('click', () => modal.classList.remove('open'));
@@ -597,8 +603,12 @@ export function setupListeners() {
   const seriesModalCancel = document.getElementById('add-series-modal-cancel');
   const seriesModalSubmit = document.getElementById('add-series-modal-submit');
 
+  const mobileMenuForSeries = document.getElementById('mobile-menu');
   if ((addSeriesBtn || mobileAddSeriesBtn) && seriesModal) {
-    const showSeriesModal = () => seriesModal.classList.add('open');
+    const showSeriesModal = () => {
+      if (mobileMenuForSeries) mobileMenuForSeries.classList.add('hidden');
+      seriesModal.classList.add('open');
+    }
     if (addSeriesBtn) addSeriesBtn.addEventListener('click', showSeriesModal);
     if (mobileAddSeriesBtn) mobileAddSeriesBtn.addEventListener('click', showSeriesModal);
   }

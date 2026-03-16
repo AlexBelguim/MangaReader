@@ -310,6 +310,15 @@ app.get('/api/queue/history', (req, res) => {
   res.json(queue.getHistory(limit));
 });
 
+app.delete('/api/queue/history', (req, res) => {
+  try {
+    const deletedCount = queue.clearHistory();
+    res.json({ success: true, count: deletedCount });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Auto-check status
 app.get('/api/auto-check/status', (req, res) => {
   try {
@@ -349,7 +358,7 @@ app.get('/api/auto-check/status', (req, res) => {
 // Manual trigger for auto-check
 app.post('/api/auto-check/run', async (req, res) => {
   try {
-    const result = await runAutoCheck();
+    const result = await runAutoCheck(true);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -382,7 +391,7 @@ async function sendPushNotifications(mangaTitle, chapterCount) {
   }
 }
 
-async function runAutoCheck() {
+async function runAutoCheck(forceAll = false) {
   console.log('[Auto-Check] Starting scheduled check...');
   global.lastAutoCheckRun = new Date().toISOString();
 
@@ -396,6 +405,7 @@ async function runAutoCheck() {
   // Filter to only manga whose next_check is due (or has no schedule set = use default)
   const now = new Date();
   const dueForCheck = autoCheckEnabled.filter(m => {
+    if (forceAll) return true;
     if (!m.next_check) return true; // No schedule set, always check
     return new Date(m.next_check) <= now;
   });
@@ -417,8 +427,8 @@ async function runAutoCheck() {
     const manga = shuffled[i];
 
     if (i > 0) {
-      console.log(`[Auto-Check] Waiting 30s before next check (${i}/${shuffled.length})...`);
-      await new Promise(r => setTimeout(r, 30000));
+      console.log(`[Auto-Check] Waiting 10s before next check (${i}/${shuffled.length})...`);
+      await new Promise(r => setTimeout(r, 10000));
     }
 
     try {
@@ -500,11 +510,14 @@ async function runAutoCheck() {
                 mangaId: manga.id,
                 mangaTitle: manga.alias || manga.title,
                 execute: async () => {
+                  const images = await scraper.getChapterImages(chapter.url);
                   return await downloader.downloadChapter(
                     manga.title,
                     chapter.number,
-                    chapter.url,
-                    manga.alias
+                    images,
+                    manga.alias,
+                    null,
+                    chapter.url
                   );
                 }
               });
@@ -515,6 +528,21 @@ async function runAutoCheck() {
             }
           }
         }
+      } else {
+        // Log to history when no new chapters are found
+        await taskQueue.addAndWait({
+          type: 'scrape',
+          description: `Auto-check: ${manga.alias || manga.title}`,
+          mangaId: manga.id,
+          mangaTitle: manga.alias || manga.title,
+          execute: async () => {
+            return {
+              updated: false,
+              newChaptersCount: 0,
+              message: 'No new chapters found'
+            };
+          }
+        });
       }
     } catch (err) {
       console.error(`[Auto-Check] Error checking ${manga.title}: ${err.message}`);

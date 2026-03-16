@@ -204,6 +204,17 @@ class PersistentQueue {
         }));
     }
 
+    // Clear historical jobs
+    clearHistory() {
+        const db = getDb();
+        const result = db.prepare(`
+            DELETE FROM job_queue 
+            WHERE status IN ('completed', 'failed', 'cancelled')
+        `).run();
+        logger.info(`[Queue] Cleared ${result.changes} historical jobs`);
+        return result.changes;
+    }
+
     // Main processing loop
     async processNext() {
         if (this.isProcessing) return;

@@ -13,7 +13,13 @@ let state = {
   queueTasks: [],
   historyTasks: [],
   autoCheck: null,
-  loading: true
+  loading: true,
+  collapsed: {
+    active: false,
+    scheduled: false,
+    completed: false,
+    history: true
+  }
 };
 
 let refreshInterval = null;
@@ -247,34 +253,53 @@ function render() {
       </div>
 
       ${activeDownloads.length > 0 || filteredQueueTasks.length > 0 ? `
-        <div class="queue-section">
-          <h3 class="queue-section-title">Active Tasks</h3>
-          ${activeDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
-          ${filteredQueueTasks.map(t => renderQueueTask(t)).join('')}
+        <div class="queue-section ${state.collapsed.active ? 'collapsed' : ''}">
+          <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="active">
+            <span class="collapse-icon">▼</span> Active Tasks
+          </h3>
+          <div class="queue-section-content">
+            ${activeDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
+            ${filteredQueueTasks.map(t => renderQueueTask(t)).join('')}
+          </div>
         </div>
       ` : ''}
 
       ${schedules.length > 0 ? `
-        <div class="queue-section">
+        <div class="queue-section ${state.collapsed.scheduled ? 'collapsed' : ''}">
           <div class="queue-section-header">
-            <h3 class="queue-section-title">Scheduled Checks (${schedules.length})</h3>
+            <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="scheduled">
+              <span class="collapse-icon">▼</span> Scheduled Checks (${schedules.length})
+            </h3>
             ${renderAutoCheckHeader()}
           </div>
-          ${schedules.map(m => renderScheduledMangaCard(m)).join('')}
+          <div class="queue-section-content">
+            ${schedules.map(m => renderScheduledMangaCard(m)).join('')}
+          </div>
         </div>
       ` : ''}
 
       ${completedDownloads.length > 0 ? `
-        <div class="queue-section">
-          <h3 class="queue-section-title">Recently Completed Downloads</h3>
-          ${completedDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
+        <div class="queue-section ${state.collapsed.completed ? 'collapsed' : ''}">
+          <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="completed">
+            <span class="collapse-icon">▼</span> Recently Completed Downloads
+          </h3>
+          <div class="queue-section-content">
+            ${completedDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
+          </div>
         </div>
       ` : ''}
 
       ${state.historyTasks && state.historyTasks.length > 0 ? `
-        <div class="queue-section">
-            <h3 class="queue-section-title">Task History</h3>
-            <div class="history-list">
+        <div class="queue-section ${state.collapsed.history ? 'collapsed' : ''}">
+            <div class="queue-section-header">
+              <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="history">
+                <span class="collapse-icon">▼</span> Task History
+              </h3>
+              <button class="btn btn-sm btn-danger queue-clear-btn" id="clear-history-btn">
+                🗑️ Clear History
+              </button>
+            </div>
+            <div class="queue-section-content history-list">
                 ${state.historyTasks.map(t => renderHistoryTask(t)).join('')}
             </div>
         </div>
@@ -325,6 +350,15 @@ function refresh() {
 function setupListeners() {
   setupHeaderListeners();
 
+  // Toggle collapsible sections
+  document.querySelectorAll('[data-toggle]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const section = el.dataset.toggle;
+      state.collapsed[section] = !state.collapsed[section];
+      refresh();
+    });
+  });
+
   // Run auto-check button
   const runBtn = document.getElementById('run-autocheck-btn');
   if (runBtn) {
@@ -341,6 +375,23 @@ function setupListeners() {
         showToast('Auto-check failed: ' + err.message, 'error');
         runBtn.disabled = false;
         runBtn.textContent = '▶ Run Now';
+      }
+    });
+  }
+
+  const clearHistoryBtn = document.getElementById('clear-history-btn');
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); // prevent collapsing the section
+      if (confirm('Are you sure you want to clear the task history?')) {
+        try {
+          await api.clearQueueHistory();
+          showToast('History cleared', 'success');
+          await loadData();
+          refresh();
+        } catch (err) {
+          showToast(`Failed to clear history: ${err.message}`, 'error');
+        }
       }
     });
   }

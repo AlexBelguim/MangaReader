@@ -58,6 +58,11 @@ export function renderHeader(viewMode = 'manga') {
  * Setup header event listeners
  */
 export function setupHeaderListeners() {
+  // Prevent duplicate listeners from being attached
+  const header = document.querySelector('header');
+  if (header && header.dataset.listenersBound) return;
+  if (header) header.dataset.listenersBound = 'true';
+
   const hamburger = document.getElementById('hamburger-btn');
   const mobileMenu = document.getElementById('mobile-menu');
 
