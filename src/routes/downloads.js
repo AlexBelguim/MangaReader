@@ -928,6 +928,26 @@ router.get('/bookmarks/:id/folder-images', async (req, res) => {
 
 export default router;
 
+// Export helper for background auto-downloads
+export function queueBackgroundDownload(bookmark, chaptersToDownload) {
+    if (!chaptersToDownload || chaptersToDownload.length === 0) return null;
+    
+    const taskId = `${bookmark.id}-auto-${Date.now()}`;
+    activeDownloads.set(taskId, {
+        bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
+        total: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number),
+        completedChapters: [], completed: 0, current: null, status: 'queued', errors: []
+    });
+
+    taskQueue.addAsync({
+        type: 'download',
+        description: `Auto-download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
+        execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
+    });
+
+    return taskId;
+}
+
 // ==================== PROXY IMAGE ====================
 // Proxy image from local folder to avoid CORS issues
 import { createReadStream } from 'fs';

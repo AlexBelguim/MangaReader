@@ -123,7 +123,7 @@ function renderScheduledMangaCard(manga) {
           <div>
             <div class="task-title">${manga.title}</div>
             <div class="task-status" style="color: var(--text-secondary)">
-              ${scheduleLabel(manga.schedule)}${manga.day ? ` · ${manga.day.charAt(0).toUpperCase() + manga.day.slice(1)}` : ''}${manga.time ? ` · ${manga.time}` : ''}
+              ${scheduleLabel(manga.schedule)}${manga.schedule === 'weekly' && manga.day ? ` · ${manga.day.charAt(0).toUpperCase() + manga.day.slice(1)}` : ''}${(manga.schedule === 'daily' || manga.schedule === 'weekly') && manga.time ? ` · ${manga.time}` : ''}
             </div>
           </div>
         </div>

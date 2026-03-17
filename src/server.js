@@ -30,7 +30,7 @@ import artistsRouter from './routes/artists.js';
 import seriesRouter from './routes/series.js';
 import volumesRouter from './routes/volumes.js';
 import readerRouter from './routes/reader.js';
-import downloadsRouter from './routes/downloads.js';
+import downloadsRouter, { queueBackgroundDownload } from './routes/downloads.js';
 import dataRouter from './routes/data.js';
 
 import { queue } from './queue.js';
@@ -502,30 +502,15 @@ async function runAutoCheck(forceAll = false) {
         }
 
         if (bookmark.autoDownload && trulyNewChapters.length > 0) {
-          for (const chapter of trulyNewChapters) {
-            try {
-              await taskQueue.addAndWait({
-                type: 'download',
-                description: `Auto-downloading Ch.${chapter.number} of ${manga.alias || manga.title}`,
-                mangaId: manga.id,
-                mangaTitle: manga.alias || manga.title,
-                execute: async () => {
-                  const images = await scraper.getChapterImages(chapter.url);
-                  return await downloader.downloadChapter(
-                    manga.title,
-                    chapter.number,
-                    images,
-                    manga.alias,
-                    null,
-                    chapter.url
-                  );
-                }
-              });
-              results.downloaded++;
-            } catch (dlErr) {
-              console.error(`[Auto-Check] Download failed: ${dlErr.message}`);
-              results.errors.push({ manga: manga.title, chapter: chapter.number, error: dlErr.message });
+          try {
+            console.log(`[Auto-Check] Queueing background download for ${trulyNewChapters.length} chapters of ${manga.title}`);
+            const taskId = queueBackgroundDownload(bookmark, trulyNewChapters.map(c => ({ number: c.number, url: c.url })));
+            if (taskId) {
+              results.downloaded += trulyNewChapters.length;
             }
+          } catch (dlErr) {
+            console.error(`[Auto-Check] Download queue failed: ${dlErr.message}`);
+            results.errors.push({ manga: manga.title, error: dlErr.message });
           }
         }
       } else {
