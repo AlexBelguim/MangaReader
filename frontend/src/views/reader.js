@@ -1614,8 +1614,14 @@ async function navigateChapter(delta) {
         if (!state.navigationDirection) {
             state.navigationDirection = delta < 0 ? 'prev' : null;
         }
-        console.log('[Nav] Calling router.go with:', `/read/${state.manga.id}/${sorted[newIdx]}`);
-        router.go(`/read/${state.manga.id}/${sorted[newIdx]}`);
+        const nextChapterNum = sorted[newIdx];
+        // Find downloaded version URL for the next chapter
+        const downloadedVersions = state.manga.downloadedVersions || {};
+        const versions = downloadedVersions[nextChapterNum] || [];
+        const versionUrl = Array.isArray(versions) ? versions[0] : versions;
+        const versionParam = versionUrl ? `?version=${encodeURIComponent(versionUrl)}` : '';
+        console.log('[Nav] Calling router.go with:', `/read/${state.manga.id}/${nextChapterNum}${versionParam}`);
+        router.go(`/read/${state.manga.id}/${nextChapterNum}${versionParam}`);
     } else {
         showToast(delta > 0 ? 'Last chapter' : 'First chapter', 'info');
     }
@@ -1758,8 +1764,8 @@ async function loadData(mangaId, chapterNum, versionUrl) {
 
             // Get images (optionally from a specific version)
             const imagesEndpoint = versionUrl
-                ? `/bookmarks/${mangaId}/chapters/${chapterNum}/images?versionUrl=${encodeURIComponent(versionUrl)}`
-                : `/bookmarks/${mangaId}/chapters/${chapterNum}/images`;
+                ? `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images?version=${encodeURIComponent(versionUrl)}`
+                : `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images`;
             const result = await api.get(imagesEndpoint);
             console.log('[Reader] images loaded, count:', result.images?.length);
             state.images = result.images || [];
@@ -1924,8 +1930,17 @@ export async function init(mangaId, chapterNum, versionUrl) {
  */
 export async function mount(params = []) {
     console.log('[Reader] mount called with params:', params);
-    const [mangaId, chapterNum] = params;
-    console.log('[Reader] mangaId:', mangaId, 'chapterNum:', chapterNum);
+    let [mangaId, chapterNum] = params;
+    
+    // Parse ?version= from chapterNum (router concatenates query params with last path segment)
+    let urlVersionParam = null;
+    if (chapterNum && chapterNum.includes('?')) {
+        const [num, queryStr] = chapterNum.split('?');
+        chapterNum = num;
+        const queryParams = new URLSearchParams(queryStr);
+        urlVersionParam = queryParams.get('version');
+    }
+    console.log('[Reader] mangaId:', mangaId, 'chapterNum:', chapterNum, 'urlVersion:', urlVersionParam);
 
     if (!mangaId || !chapterNum) {
         router.go('/');
@@ -1944,33 +1959,41 @@ export async function mount(params = []) {
     state.nextChapterNum = null;
     app.innerHTML = render();
 
-    // Version-aware reading: check for multiple versions
-    try {
-        const manga = await api.getBookmark(mangaId);
-        const downloadedVersions = manga.downloadedVersions || {};
-        const deletedUrls = new Set(manga.deletedChapterUrls || []);
-        const versions = downloadedVersions[parseFloat(chapterNum)];
-        let visibleVersions = [];
-        if (Array.isArray(versions)) {
-            visibleVersions = versions.filter(url => !deletedUrls.has(url));
-        }
-        if (visibleVersions.length > 1) {
-            // Show version selection modal
-            const choice = await showVersionSelector(visibleVersions, chapterNum);
-            if (choice === null) {
-                // User cancelled — go back to manga page
-                router.go(`/manga/${mangaId}`);
-                return;
+    // If version URL was provided via URL parameter, use it directly
+    if (urlVersionParam) {
+        await loadData(mangaId, chapterNum, decodeURIComponent(urlVersionParam));
+    } else {
+        // Version-aware reading: check for multiple downloaded versions
+        try {
+            const manga = await api.getBookmark(mangaId);
+            const downloadedVersions = manga.downloadedVersions || {};
+            const deletedUrls = new Set(manga.deletedChapterUrls || []);
+            const versions = downloadedVersions[parseFloat(chapterNum)];
+            let visibleVersions = [];
+            if (Array.isArray(versions)) {
+                visibleVersions = versions.filter(url => !deletedUrls.has(url));
             }
-            // Pass version URL to loadData
-            await loadData(mangaId, chapterNum, choice);
-        } else {
+            if (visibleVersions.length > 1) {
+                // Show version selection modal
+                const choice = await showVersionSelector(visibleVersions, chapterNum);
+                if (choice === null) {
+                    // User cancelled — go back to manga page
+                    router.go(`/manga/${mangaId}`);
+                    return;
+                }
+                // Pass version URL to loadData
+                await loadData(mangaId, chapterNum, choice);
+            } else if (visibleVersions.length === 1) {
+                // Only one version — use it directly
+                await loadData(mangaId, chapterNum, visibleVersions[0]);
+            } else {
+                await loadData(mangaId, chapterNum);
+            }
+        } catch (e) {
+            console.log('[Reader] Error in version check, falling back:', e);
+            // Fallback: load without version check
             await loadData(mangaId, chapterNum);
         }
-    } catch (e) {
-        console.log('[Reader] Error in version check, falling back:', e);
-        // Fallback: load without version check
-        await loadData(mangaId, chapterNum);
     }
 
     app.innerHTML = render();
@@ -2039,6 +2062,7 @@ export async function continueReading(mangaId) {
         const downloadedChapters = manga.downloadedChapters || [];
         const readChapters = new Set(manga.readChapters || []);
         const readingProgress = manga.readingProgress || {};
+        const downloadedVersions = manga.downloadedVersions || {};
 
         const sortedDownloaded = [...downloadedChapters].sort((a, b) => a - b);
 
@@ -2069,7 +2093,11 @@ export async function continueReading(mangaId) {
         }
 
         if (targetChapter !== null) {
-            router.go(`/read/${mangaId}/${targetChapter}`);
+            // Find downloaded version URL for the target chapter
+            const versions = downloadedVersions[targetChapter] || [];
+            const versionUrl = Array.isArray(versions) ? versions[0] : versions;
+            const versionParam = versionUrl ? `?version=${encodeURIComponent(versionUrl)}` : '';
+            router.go(`/read/${mangaId}/${targetChapter}${versionParam}`);
         } else {
             showToast('No downloaded chapters to read', 'info');
         }

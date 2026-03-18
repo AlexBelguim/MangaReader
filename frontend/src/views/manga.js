@@ -647,6 +647,18 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     // User said "only show the downloaded version", implies hiding others.
   }
 
+  // Sort displayVersions so downloaded ones come first - ensures the primary
+  // chapter row always targets a downloaded version when one exists
+  displayVersions.sort((a, b) => {
+    const aDownloaded = Array.isArray(downloadedVersions)
+      ? downloadedVersions.includes(a.url)
+      : downloadedVersions === a.url;
+    const bDownloaded = Array.isArray(downloadedVersions)
+      ? downloadedVersions.includes(b.url)
+      : downloadedVersions === b.url;
+    return (bDownloaded ? 1 : 0) - (aDownloaded ? 1 : 0);
+  });
+
   const hasMultiple = displayVersions.length > 1;
 
   // Get the first version URL for single-version operations
@@ -1339,7 +1351,14 @@ export function setupListeners() {
       const downloaded = manga.downloadedChapters || [];
 
       if (downloaded.includes(num)) {
-        router.go(`/read/${manga.id}/${num}`);
+        // Find the first downloaded version URL so we open the correct version
+        const versions = manga.downloadedVersions?.[num] || [];
+        const versionUrl = Array.isArray(versions) ? versions[0] : versions;
+        if (versionUrl) {
+          router.go(`/read/${manga.id}/${num}?version=${encodeURIComponent(versionUrl)}`);
+        } else {
+          router.go(`/read/${manga.id}/${num}`);
+        }
       } else {
         showToast('Chapter not downloaded', 'info');
       }
@@ -1489,9 +1508,23 @@ async function toggleRead(chapterNum) {
 async function downloadChapter(chapterNum) {
   const manga = state.manga;
 
+  // Find the first visible, non-hidden version URL for this chapter
+  const deletedUrls = new Set(manga.deletedChapterUrls || []);
+  const firstVersion = (manga.chapters || []).find(
+    c => c.number === chapterNum && !deletedUrls.has(c.url)
+  );
+
   try {
     showToast(`Downloading chapter ${chapterNum}...`, 'info');
-    await api.post(`/bookmarks/${manga.id}/download`, { chapters: [chapterNum] });
+    if (firstVersion) {
+      // Use download-version to target the specific version URL
+      await api.post(`/bookmarks/${manga.id}/download-version`, {
+        chapterNumber: chapterNum,
+        url: firstVersion.url
+      });
+    } else {
+      await api.post(`/bookmarks/${manga.id}/download`, { chapters: [chapterNum] });
+    }
     showToast('Download queued!', 'success');
   } catch (error) {
     showToast('Failed: ' + error.message, 'error');
@@ -1542,7 +1575,7 @@ async function deleteVersion(chapterNum, url) {
   try {
     await api.request(`/bookmarks/${manga.id}/chapters`, {
       method: 'DELETE',
-      body: JSON.stringify({ chapterNumber: chapterNum, url: decodeURIComponent(url) })
+      body: JSON.stringify({ chapterNumber: chapterNum, url: url })
     });
     showToast('Version deleted', 'success');
     await loadData(manga.id);
@@ -1559,7 +1592,7 @@ async function hideVersion(chapterNum, url) {
   const manga = state.manga;
 
   try {
-    await api.hideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    await api.hideVersion(manga.id, chapterNum, url);
     showToast('Version hidden', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -1573,7 +1606,7 @@ async function hideVersion(chapterNum, url) {
 async function restoreVersion(chapterNum, url) {
   const manga = state.manga;
   try {
-    await api.unhideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    await api.unhideVersion(manga.id, chapterNum, url);
     showToast('Version restored', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -1608,7 +1641,7 @@ async function deleteChapter(chapterNum, url) {
   try {
     await api.request(`/bookmarks/${manga.id}/chapters`, {
       method: 'DELETE',
-      body: JSON.stringify({ chapterNumber: chapterNum, url: decodeURIComponent(url) })
+      body: JSON.stringify({ chapterNumber: chapterNum, url: url })
     });
     showToast('Chapter files deleted', 'success');
     await loadData(manga.id);
@@ -1627,7 +1660,7 @@ async function hideChapter(chapterNum, url) {
   if (!confirm('Hide this chapter? It will be moved to the Hidden filter.')) return;
 
   try {
-    await api.hideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    await api.hideVersion(manga.id, chapterNum, url);
     showToast('Chapter hidden', 'success');
     await loadData(manga.id);
     mount([manga.id]);
@@ -1642,7 +1675,7 @@ async function hideChapter(chapterNum, url) {
 async function unhideChapter(chapterNum, url) {
   const manga = state.manga;
   try {
-    await api.unhideVersion(manga.id, chapterNum, decodeURIComponent(url));
+    await api.unhideVersion(manga.id, chapterNum, url);
     showToast('Chapter unhidden', 'success');
     await loadData(manga.id);
     mount([manga.id]);

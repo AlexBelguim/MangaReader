@@ -197,9 +197,17 @@ export function render() {
     `;
   } else {
     // Render manga view
-    let filtered = state.activeCategory
-      ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
-      : state.bookmarks;
+    let filtered = state.bookmarks;
+
+    // Special 'nsfw' filter: show manga in ANY NSFW-marked category
+    if (state.activeCategory === '__nsfw__') {
+      const nsfwCategoryNames = (Array.isArray(state.categories) ? state.categories : [])
+        .filter(c => typeof c === 'object' ? c.isNsfw : false)
+        .map(c => c.name);
+      filtered = filtered.filter(m => (m.categories || []).some(c => nsfwCategoryNames.includes(c)));
+    } else if (state.activeCategory) {
+      filtered = filtered.filter(m => (m.categories || []).includes(state.activeCategory));
+    }
 
     if (state.artistFilter) {
       filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
@@ -268,12 +276,15 @@ export function render() {
 
 function renderCategoryFab() {
   const { activeCategory } = state;
-  const categories = Array.isArray(state.categories) ? state.categories : [];
+  const rawCategories = Array.isArray(state.categories) ? state.categories : [];
+  // Normalize: support both string[] and {name, isNsfw}[] formats
+  const categories = rawCategories.map(c => typeof c === 'object' ? c : { name: c, isNsfw: false });
+  const hasNsfwCategories = categories.some(c => c.isNsfw);
 
   return `
       <div class="category-fab" id="category-fab">
       <button class="category-fab-btn ${activeCategory ? 'has-filter' : ''}" id="category-fab-btn">
-        ${activeCategory || '🏷️'}
+        ${activeCategory === '__nsfw__' ? '🔞' : activeCategory || '🏷️'}
       </button>
       <div class="category-fab-menu hidden" id="category-fab-menu">
         <div class="category-fab-menu-header">
@@ -282,15 +293,58 @@ function renderCategoryFab() {
         </div>
         <div class="category-fab-menu-items">
           <button class="category-menu-item ${!activeCategory ? 'active' : ''}" data-category="">All</button>
+          ${hasNsfwCategories ? `<button class="category-menu-item ${activeCategory === '__nsfw__' ? 'active' : ''}" data-category="__nsfw__" style="color: #f44336;">🔞 All 18+</button>` : ''}
           ${categories.map(cat => `
-            <button class="category-menu-item ${activeCategory === cat ? 'active' : ''}" data-category="${cat}">
-              ${cat}
+            <button class="category-menu-item ${activeCategory === cat.name ? 'active' : ''}" data-category="${cat.name}">
+              ${cat.name}${cat.isNsfw ? ' <span style="color:#f44336;font-size:0.75em;">18+</span>' : ''}
             </button>
           `).join('')}
         </div>
       </div>
     </div>
+    ${renderManageCategoriesModal()}
       `;
+}
+
+function renderManageCategoriesModal() {
+  const rawCategories = Array.isArray(state.categories) ? state.categories : [];
+  const categories = rawCategories.map(c => typeof c === 'object' ? c : { name: c, isNsfw: false });
+
+  return `
+    <div class="modal" id="manage-categories-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content" style="max-width: 450px;">
+        <div class="modal-header">
+          <h2>⚙️ Manage Categories</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group" style="display: flex; gap: 8px; margin-bottom: 16px;">
+            <input type="text" id="new-category-input" placeholder="New category name..." style="flex: 1;">
+            <button class="btn btn-primary" id="add-category-btn">Add</button>
+          </div>
+          <div id="categories-list" style="max-height: 300px; overflow-y: auto;">
+            ${categories.length === 0 ? '<p class="text-muted">No categories yet</p>' : ''}
+            ${categories.map(cat => `
+              <div class="category-manage-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid var(--border-color, #333);">
+                <span style="flex: 1;">${cat.name}</span>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.85em; color: ${cat.isNsfw ? '#f44336' : 'var(--text-secondary)'}">
+                    <input type="checkbox" class="nsfw-toggle" data-category="${cat.name}" ${cat.isNsfw ? 'checked' : ''} style="width: 16px; height: 16px;">
+                    18+
+                  </label>
+                  <button class="btn-icon small danger delete-category-btn" data-category="${cat.name}" title="Delete">🗑️</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="close-manage-categories-btn">Close</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -468,6 +522,76 @@ export function setupListeners() {
       }
     });
   }
+
+  // Manage categories button
+  document.getElementById('manage-categories-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const modal = document.getElementById('manage-categories-modal');
+    if (modal) modal.classList.add('open');
+  });
+
+  // Close manage categories modal
+  document.getElementById('close-manage-categories-btn')?.addEventListener('click', () => {
+    document.getElementById('manage-categories-modal')?.classList.remove('open');
+  });
+  document.querySelector('#manage-categories-modal .modal-overlay')?.addEventListener('click', () => {
+    document.getElementById('manage-categories-modal')?.classList.remove('open');
+  });
+  document.querySelector('#manage-categories-modal .modal-close')?.addEventListener('click', () => {
+    document.getElementById('manage-categories-modal')?.classList.remove('open');
+  });
+
+  // Add category
+  document.getElementById('add-category-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('new-category-input');
+    const name = input?.value?.trim();
+    if (!name) return;
+    try {
+      await api.post('/categories', { name });
+      input.value = '';
+      showToast('Category added', 'success');
+      await loadData(true);
+      mount();
+    } catch (error) {
+      showToast('Failed: ' + error.message, 'error');
+    }
+  });
+
+  // NSFW toggles
+  document.querySelectorAll('.nsfw-toggle').forEach(toggle => {
+    toggle.addEventListener('change', async (e) => {
+      const catName = toggle.dataset.category;
+      try {
+        await api.put(`/categories/${encodeURIComponent(catName)}/nsfw`, { isNsfw: toggle.checked });
+        showToast(`${catName} ${toggle.checked ? 'marked as 18+' : 'unmarked'}`, 'success');
+        await loadData(true);
+        mount();
+      } catch (error) {
+        showToast('Failed: ' + error.message, 'error');
+        toggle.checked = !toggle.checked;
+      }
+    });
+  });
+
+  // Delete category buttons
+  document.querySelectorAll('.delete-category-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const catName = btn.dataset.category;
+      if (!confirm(`Delete category "${catName}"?`)) return;
+      try {
+        await api.delete(`/categories/${encodeURIComponent(catName)}`);
+        showToast('Category deleted', 'success');
+        if (state.activeCategory === catName) {
+          state.activeCategory = null;
+          localStorage.removeItem('library_active_category');
+        }
+        await loadData(true);
+        mount();
+      } catch (error) {
+        showToast('Failed: ' + error.message, 'error');
+      }
+    });
+  });
 
   // Artist filter clear
   const artistBadge = document.getElementById('artist-filter-badge');
