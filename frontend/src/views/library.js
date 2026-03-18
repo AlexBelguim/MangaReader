@@ -199,14 +199,21 @@ export function render() {
     // Render manga view
     let filtered = state.bookmarks;
 
+    // Get NSFW category names for filtering
+    const nsfwCategoryNames = (Array.isArray(state.categories) ? state.categories : [])
+      .filter(c => typeof c === 'object' ? c.isNsfw : false)
+      .map(c => c.name);
+
     // Special 'nsfw' filter: show manga in ANY NSFW-marked category
     if (state.activeCategory === '__nsfw__') {
-      const nsfwCategoryNames = (Array.isArray(state.categories) ? state.categories : [])
-        .filter(c => typeof c === 'object' ? c.isNsfw : false)
-        .map(c => c.name);
       filtered = filtered.filter(m => (m.categories || []).some(c => nsfwCategoryNames.includes(c)));
     } else if (state.activeCategory) {
       filtered = filtered.filter(m => (m.categories || []).includes(state.activeCategory));
+    } else {
+      // "All" — exclude manga that belongs to any NSFW category
+      if (nsfwCategoryNames.length > 0) {
+        filtered = filtered.filter(m => !(m.categories || []).some(c => nsfwCategoryNames.includes(c)));
+      }
     }
 
     if (state.artistFilter) {
@@ -854,6 +861,12 @@ export async function mount() {
   const storedArtist = localStorage.getItem('library_artist_filter');
   if (storedArtist && state.artistFilter !== storedArtist) {
     state.artistFilter = storedArtist;
+  }
+
+  // Sync searchQuery with localStorage (e.g. set by artist link click from manga detail)
+  const storedSearch = localStorage.getItem('library_search') || '';
+  if (state.searchQuery !== storedSearch) {
+    state.searchQuery = storedSearch;
   }
 
   // Show loading first
