@@ -29,7 +29,8 @@ let state = {
     allFavorites: null, // cached entire favorites list
     navigationDirection: null, // 'prev', 'next-linked', or null
     nextChapterImage: null, // URL of next chapter's first image (for link mode)
-    nextChapterNum: null // chapter number of the next chapter
+    nextChapterNum: null, // chapter number of the next chapter
+    _preloadCache: null // { chapterNum, mangaId, images[], imageObjects[] }
 };
 
 // ==================== HELPERS ====================
@@ -1177,6 +1178,56 @@ async function fetchNextPreview() {
 }
 
 /**
+ * Preload next chapter images in the background
+ * Creates Image() objects to cache them in the browser
+ */
+async function preloadNextChapter() {
+    if (!state.manga?.id || !state.chapter?.number || state.isCollectionMode) return;
+    
+    const chapters = state.manga.downloadedChapters || [];
+    const sorted = [...chapters].sort((a, b) => a - b);
+    const currentIdx = sorted.indexOf(state.chapter.number);
+    if (currentIdx < 0 || currentIdx >= sorted.length - 1) return;
+    
+    const nextNum = sorted[currentIdx + 1];
+    const mangaId = state.manga.id;
+    
+    // Skip if already preloaded
+    if (state._preloadCache && state._preloadCache.chapterNum === nextNum && state._preloadCache.mangaId === mangaId) {
+        return;
+    }
+    
+    try {
+        // Find version URL for next chapter
+        const downloadedVersions = state.manga.downloadedVersions || {};
+        const versions = downloadedVersions[nextNum] || [];
+        const versionUrl = Array.isArray(versions) ? versions[0] : versions;
+        
+        const endpoint = versionUrl
+            ? `/bookmarks/${mangaId}/chapters/${nextNum}/reader-images?version=${encodeURIComponent(versionUrl)}`
+            : `/bookmarks/${mangaId}/chapters/${nextNum}/reader-images`;
+        
+        const result = await api.get(endpoint);
+        const images = result.images || [];
+        
+        if (images.length === 0) return;
+        
+        // Create Image objects to cache in browser
+        const imageObjects = images.map(img => {
+            const imgObj = new Image();
+            const url = typeof img === 'string' ? img : img.url;
+            if (url) imgObj.src = url;
+            return imgObj;
+        });
+        
+        state._preloadCache = { chapterNum: nextNum, mangaId, images, imageObjects, versionUrl };
+        console.log(`[Reader] Preloaded ${images.length} images for chapter ${nextNum}`);
+    } catch (e) {
+        console.warn('[Reader] Failed to preload next chapter:', e);
+    }
+}
+
+/**
  * Show a version selection modal and return the chosen URL
  * Returns the selected version URL, or null if cancelled
  */
@@ -1764,13 +1815,20 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             console.log('[Reader] manga loaded, finding chapter...');
             state.chapter = manga.chapters?.find(c => c.number === parseFloat(chapterNum)) || { number: parseFloat(chapterNum) };
 
-            // Get images (optionally from a specific version)
-            const imagesEndpoint = versionUrl
-                ? `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images?version=${encodeURIComponent(versionUrl)}`
-                : `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images`;
-            const result = await api.get(imagesEndpoint);
-            console.log('[Reader] images loaded, count:', result.images?.length);
-            state.images = result.images || [];
+            // Get images — use preload cache if available
+            const chapterNumFloat = parseFloat(chapterNum);
+            if (state._preloadCache && state._preloadCache.mangaId === mangaId && state._preloadCache.chapterNum === chapterNumFloat) {
+                console.log('[Reader] Using preloaded images for chapter', chapterNum);
+                state.images = state._preloadCache.images || [];
+                state._preloadCache = null;
+            } else {
+                const imagesEndpoint = versionUrl
+                    ? `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images?version=${encodeURIComponent(versionUrl)}`
+                    : `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images`;
+                const result = await api.get(imagesEndpoint);
+                console.log('[Reader] images loaded, count:', result.images?.length);
+                state.images = result.images || [];
+            }
 
             // Fetch chapter settings (with inheritance from previous chapter)
             try {
@@ -1909,6 +1967,9 @@ async function loadData(mangaId, chapterNum, versionUrl) {
 
     state.loading = false;
     fullReRender();
+
+    // Preload next chapter in the background (non-blocking)
+    preloadNextChapter();
 
     // Scroll to resumed page in webtoon mode
     if (state.mode === 'webtoon' && state._resumeScrollToPage) {
@@ -2062,6 +2123,7 @@ export async function unmount() {
     state.loading = true;
     state.singlePageMode = false;
     state._resumeScrollToPage = null;
+    state._preloadCache = null;
 }
 
 /**
