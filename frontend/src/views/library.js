@@ -49,6 +49,46 @@ function sortBookmarks(list) {
 }
 
 /**
+ * Get filtered bookmarks based on current state (category, NSFW, artist, search)
+ */
+function getFilteredBookmarks() {
+  let filtered = state.bookmarks;
+
+  // Get NSFW category names for filtering
+  const nsfwCategoryNames = (Array.isArray(state.categories) ? state.categories : [])
+    .filter(c => typeof c === 'object' ? c.isNsfw : false)
+    .map(c => c.name);
+
+  // Special 'nsfw' filter: show manga in ANY NSFW-marked category
+  if (state.activeCategory === '__nsfw__') {
+    filtered = filtered.filter(m => (m.categories || []).some(c => nsfwCategoryNames.includes(c)));
+  } else if (state.activeCategory) {
+    filtered = filtered.filter(m => (m.categories || []).includes(state.activeCategory));
+  } else {
+    // "All" — exclude manga that belongs to any NSFW category
+    if (nsfwCategoryNames.length > 0) {
+      filtered = filtered.filter(m => !(m.categories || []).some(c => nsfwCategoryNames.includes(c)));
+    }
+  }
+
+  if (state.artistFilter) {
+    filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
+  }
+
+  // Search filter
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    filtered = filtered.filter(m =>
+      (m.title || '').toLowerCase().includes(q) ||
+      (m.alias || '').toLowerCase().includes(q) ||
+      (m.artists || []).some(a => a.toLowerCase().includes(q))
+    );
+  }
+
+  return sortBookmarks(filtered);
+}
+
+/**
  * Render a manga card
  */
 function renderMangaCard(manga) {
@@ -196,42 +236,8 @@ export function render() {
       </div>
     `;
   } else {
-    // Render manga view
-    let filtered = state.bookmarks;
-
-    // Get NSFW category names for filtering
-    const nsfwCategoryNames = (Array.isArray(state.categories) ? state.categories : [])
-      .filter(c => typeof c === 'object' ? c.isNsfw : false)
-      .map(c => c.name);
-
-    // Special 'nsfw' filter: show manga in ANY NSFW-marked category
-    if (state.activeCategory === '__nsfw__') {
-      filtered = filtered.filter(m => (m.categories || []).some(c => nsfwCategoryNames.includes(c)));
-    } else if (state.activeCategory) {
-      filtered = filtered.filter(m => (m.categories || []).includes(state.activeCategory));
-    } else {
-      // "All" — exclude manga that belongs to any NSFW category
-      if (nsfwCategoryNames.length > 0) {
-        filtered = filtered.filter(m => !(m.categories || []).some(c => nsfwCategoryNames.includes(c)));
-      }
-    }
-
-    if (state.artistFilter) {
-      filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
-    }
-
-    // Search filter
-    if (state.searchQuery) {
-      const q = state.searchQuery.toLowerCase();
-      filtered = filtered.filter(m =>
-        (m.title || '').toLowerCase().includes(q) ||
-        (m.alias || '').toLowerCase().includes(q) ||
-        (m.artists || []).some(a => a.toLowerCase().includes(q))
-      );
-    }
-
-    // Sort
-    filtered = sortBookmarks(filtered);
+    // Render manga view — use shared filter function
+    const filtered = getFilteredBookmarks();
 
     const cards = filtered.map(renderMangaCard).join('');
 
@@ -618,20 +624,7 @@ export function setupListeners() {
       // Re-render grid only
       const grid = document.getElementById('library-grid');
       if (grid) {
-        let filtered = state.activeCategory
-          ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
-          : state.bookmarks;
-        if (state.artistFilter) {
-          filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
-        }
-        if (state.searchQuery) {
-          const q = state.searchQuery.toLowerCase();
-          filtered = filtered.filter(m =>
-            (m.title || '').toLowerCase().includes(q) ||
-            (m.alias || '').toLowerCase().includes(q)
-          );
-        }
-        filtered = sortBookmarks(filtered);
+        const filtered = getFilteredBookmarks();
         grid.innerHTML = filtered.map(renderMangaCard).join('') || renderEmptyState();
         // Show/hide clear button
         const clearBtn = document.getElementById('search-clear');
@@ -890,15 +883,7 @@ export async function mount() {
       state.bookmarks = bookmarks;
       const grid = document.getElementById('library-grid');
       if (grid) {
-        let filtered = state.activeCategory
-          ? state.bookmarks.filter(m => (m.categories || []).includes(state.activeCategory))
-          : state.bookmarks;
-        if (state.artistFilter) filtered = filtered.filter(m => (m.artists || []).includes(state.artistFilter));
-        if (state.searchQuery) {
-          const q = state.searchQuery.toLowerCase();
-          filtered = filtered.filter(m => (m.title || '').toLowerCase().includes(q) || (m.alias || '').toLowerCase().includes(q));
-        }
-        filtered = sortBookmarks(filtered);
+        const filtered = getFilteredBookmarks();
         grid.innerHTML = filtered.map(renderMangaCard).join('') || renderEmptyState();
       }
     })
