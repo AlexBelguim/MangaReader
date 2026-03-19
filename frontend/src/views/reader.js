@@ -675,6 +675,7 @@ export function setupListeners() {
     // Close button - save progress first
     document.getElementById('reader-close-btn')?.addEventListener('click', async () => {
         await saveCurrentProgress();
+        await saveSettings();
         if (state.manga && state.manga.id !== 'gallery') {
             router.go(`/manga/${state.manga.id}`);
         } else {
@@ -1599,8 +1600,9 @@ async function navigateChapter(delta) {
         return;
     }
 
-    // Save progress before navigating
+    // Save progress and settings before navigating
     await saveCurrentProgress();
+    await saveSettings();
 
     const chapters = state.manga.downloadedChapters || [];
     const sorted = [...chapters].sort((a, b) => a - b);
@@ -1770,14 +1772,43 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             console.log('[Reader] images loaded, count:', result.images?.length);
             state.images = result.images || [];
 
-            // Fetch chapter settings
+            // Fetch chapter settings (with inheritance from previous chapter)
             try {
                 const settings = await api.getChapterSettings(mangaId, chapterNum);
-                if (settings) {
+                const hasSettings = settings && (settings.mode || settings.direction || settings.firstPageSingle !== undefined || settings.lastPageSingle !== undefined);
+                
+                if (hasSettings) {
                     if (settings.mode) state.mode = settings.mode;
                     if (settings.direction) state.direction = settings.direction;
                     if (settings.firstPageSingle !== undefined) state.firstPageSingle = settings.firstPageSingle;
                     if (settings.lastPageSingle !== undefined) state.lastPageSingle = settings.lastPageSingle;
+                } else {
+                    // No saved settings for this chapter — inherit from nearest chapter
+                    try {
+                        const downloadedChapters = state.manga.downloadedChapters || [];
+                        const sorted = [...downloadedChapters].sort((a, b) => a - b);
+                        const currentNum = parseFloat(chapterNum);
+                        const currentIdx = sorted.indexOf(currentNum);
+                        
+                        // Try previous chapter first, then next
+                        const tryOrder = [];
+                        if (currentIdx > 0) tryOrder.push(sorted[currentIdx - 1]);
+                        if (currentIdx < sorted.length - 1) tryOrder.push(sorted[currentIdx + 1]);
+                        
+                        for (const neighborNum of tryOrder) {
+                            const neighborSettings = await api.getChapterSettings(mangaId, neighborNum);
+                            if (neighborSettings && (neighborSettings.mode || neighborSettings.direction || neighborSettings.firstPageSingle !== undefined || neighborSettings.lastPageSingle !== undefined)) {
+                                if (neighborSettings.mode) state.mode = neighborSettings.mode;
+                                if (neighborSettings.direction) state.direction = neighborSettings.direction;
+                                if (neighborSettings.firstPageSingle !== undefined) state.firstPageSingle = neighborSettings.firstPageSingle;
+                                if (neighborSettings.lastPageSingle !== undefined) state.lastPageSingle = neighborSettings.lastPageSingle;
+                                console.log('[Reader] Inherited settings from chapter', neighborNum);
+                                break;
+                            }
+                        }
+                    } catch (inheritErr) {
+                        console.warn('Failed to inherit chapter settings', inheritErr);
+                    }
                 }
             } catch (e) {
                 console.warn('Failed to load chapter settings', e);
@@ -2022,6 +2053,7 @@ export async function mount(params = []) {
 export async function unmount() {
     console.log('[Reader] unmount called');
     await saveCurrentProgress();
+    await saveSettings();
     document.body.classList.remove('reader-active');
     document.removeEventListener('keydown', handleKeyboard);
     state.manga = null;
