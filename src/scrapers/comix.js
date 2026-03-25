@@ -111,7 +111,25 @@ export class ComixScraper extends BaseScraper {
       console.log(`  Quick check: ${url}`);
 
       const { html } = await fetchPage(url);
+
+      // Debug: log page title from the HTML
+      const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+      console.log(`  [FlareSolverr] Page title: "${titleMatch ? titleMatch[1] : 'no title'}"`);
+
       const firstPageChapters = this.parseChaptersFromHtml(html);
+
+      // Debug: if no chapters found, log a snippet of the HTML for diagnosis
+      if (firstPageChapters.length === 0) {
+        console.log(`  [FlareSolverr] WARNING: 0 chapters parsed from ${html.length} chars of HTML`);
+        // Check if we got past Cloudflare
+        const hasChapterHref = html.includes('chapter-');
+        console.log(`  [FlareSolverr] HTML contains 'chapter-': ${hasChapterHref}`);
+        if (!hasChapterHref) {
+          // Log first 500 chars of body for debugging
+          const bodyMatch = html.match(/<body[^>]*>([\s\S]{0,500})/i);
+          console.log(`  [FlareSolverr] Body start: ${bodyMatch ? bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 200) : 'no body'}`);
+        }
+      }
 
       // Find new chapters (URLs we haven't seen before)
       const knownUrlSet = new Set(knownChapterUrls);
@@ -133,6 +151,7 @@ export class ComixScraper extends BaseScraper {
 
     } catch (error) {
       console.error(`  FlareSolverr quickCheck failed: ${error.message}`);
+      console.error(`  Full error:`, error.stack || error);
       // Fallback: try direct puppeteer (may work if Cloudflare is down)
       return this.quickCheckUpdatesDirect(url, knownChapterUrls);
     }

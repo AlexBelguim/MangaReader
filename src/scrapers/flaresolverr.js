@@ -35,33 +35,47 @@ export async function isAvailable() {
  * @returns {{ html: string, cookies: Array, userAgent: string, status: number, url: string }}
  */
 export async function fetchPage(url, maxTimeout = 60000) {
-  console.log(`  [FlareSolverr] Fetching: ${url}`);
+  console.log(`  [FlareSolverr] Fetching: ${url} (via ${FLARESOLVERR_URL})`);
 
-  const response = await fetch(FLARESOLVERR_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      cmd: 'request.get',
-      url: url,
-      maxTimeout: maxTimeout
-    })
-  });
+  let response;
+  try {
+    response = await fetch(FLARESOLVERR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cmd: 'request.get',
+        url: url,
+        maxTimeout: maxTimeout
+      })
+    });
+  } catch (fetchErr) {
+    throw new Error(`FlareSolverr connection failed: ${fetchErr.message}`);
+  }
 
   if (!response.ok) {
-    throw new Error(`FlareSolverr request failed with status ${response.status}`);
+    const body = await response.text().catch(() => '');
+    throw new Error(`FlareSolverr HTTP ${response.status}: ${body.substring(0, 200)}`);
   }
 
   const data = await response.json();
 
   if (data.status !== 'ok') {
-    throw new Error(`FlareSolverr error: ${data.message || 'Unknown error'}`);
+    throw new Error(`FlareSolverr error: ${data.message || JSON.stringify(data).substring(0, 200)}`);
   }
 
   const solution = data.solution;
   console.log(`  [FlareSolverr] Got response (status ${solution.status}, ${solution.response.length} chars)`);
 
+  // Check if FlareSolverr returned a Cloudflare challenge page instead of real content
+  const html = solution.response;
+  if (html.includes('Just a moment') || html.includes('Even geduld') || 
+      html.includes('Checking your browser') || html.includes('challenge-platform')) {
+    console.log(`  [FlareSolverr] WARNING: Response appears to be a Cloudflare challenge page!`);
+    console.log(`  [FlareSolverr] Title: ${(html.match(/<title>(.*?)<\/title>/i) || ['', 'unknown'])[1]}`);
+  }
+
   return {
-    html: solution.response,
+    html: html,
     cookies: solution.cookies || [],
     userAgent: solution.userAgent || '',
     status: solution.status,
