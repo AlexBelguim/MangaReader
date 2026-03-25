@@ -1,7 +1,11 @@
 import { BaseScraper } from './base.js';
+import { fetchPage, toPuppeteerCookies, isAvailable } from './flaresolverr.js';
 
 /**
  * Scraper for comix.to website
+ * 
+ * Uses FlareSolverr to bypass Cloudflare challenges for page fetching.
+ * For chapter images, uses FlareSolverr cookies passed to puppeteer for lazy-load scrolling.
  */
 export class ComixScraper extends BaseScraper {
   get websiteName() {
@@ -16,48 +20,98 @@ export class ComixScraper extends BaseScraper {
     return true;
   }
 
+  /**
+   * Parse chapter links from HTML string
+   * @param {string} html - Page HTML
+   * @returns {Array} chapters found
+   */
+  parseChaptersFromHtml(html) {
+    const chapters = [];
+    // Match all <a> tags with href containing "chapter-"
+    const linkRegex = /<a[^>]*href="([^"]*chapter-[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+
+    while ((match = linkRegex.exec(html)) !== null) {
+      const href = match[1];
+      const text = match[2].replace(/<[^>]*>/g, '').trim(); // Strip inner HTML tags
+
+      // Extract chapter number from URL (most reliable)
+      const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+        text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+        text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+
+      if (numMatch) {
+        const fullUrl = href.startsWith('http') ? href : `https://comix.to${href}`;
+        chapters.push({
+          number: parseFloat(numMatch[1]),
+          title: text || `Chapter ${numMatch[1]}`,
+          url: fullUrl
+        });
+      }
+    }
+
+    return chapters;
+  }
+
+  /**
+   * Parse release group and upload time from HTML for chapters
+   * Each chapter link is followed by sibling spans with metadata
+   */
+  parseChaptersWithMetadata(html) {
+    const chapters = [];
+    // Match chapter link blocks - each chapter row has similar structure
+    // <a href="...chapter-X...">Ch. X</a><span>pages</span><span>time</span><span>group</span>
+    const linkRegex = /<a[^>]*href="([^"]*chapter-[^"]*)"[^>]*>([\s\S]*?)<\/a>([\s\S]*?)(?=<a[^>]*href="[^"]*chapter-|$)/gi;
+    let match;
+
+    while ((match = linkRegex.exec(html)) !== null) {
+      const href = match[1];
+      const text = match[2].replace(/<[^>]*>/g, '').trim();
+      const afterLink = match[3];
+
+      const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+        text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+        text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+
+      if (numMatch) {
+        const fullUrl = href.startsWith('http') ? href : `https://comix.to${href}`;
+
+        // Extract sibling spans for metadata
+        const spanRegex = /<span[^>]*>([\s\S]*?)<\/span>/gi;
+        const spans = [];
+        let spanMatch;
+        while ((spanMatch = spanRegex.exec(afterLink)) !== null) {
+          const spanText = spanMatch[1].replace(/<[^>]*>/g, '').trim();
+          if (spanText) spans.push(spanText);
+        }
+
+        let releaseGroup = '';
+        let uploadedAt = '';
+
+        // spans[0] = page count, spans[1] = time ago, spans[2] = release group
+        if (spans.length >= 2) uploadedAt = spans[1] || '';
+        if (spans.length >= 3) releaseGroup = spans[2] || '';
+
+        chapters.push({
+          number: parseFloat(numMatch[1]),
+          title: text || `Chapter ${numMatch[1]}`,
+          url: fullUrl,
+          releaseGroup,
+          uploadedAt
+        });
+      }
+    }
+
+    return chapters;
+  }
+
   // Quick check - only scrapes the first page to find new chapters
   async quickCheckUpdates(url, knownChapterUrls = []) {
-    await this.createPage();
-
     try {
       console.log(`  Quick check: ${url}`);
-      await this.page.goto(url, {
-        waitUntil: 'networkidle2',
-        timeout: 30000
-      });
 
-      await this.randomDelay(500, 1000);
-      await this.page.waitForSelector('a[href*="chapter"]', { timeout: 10000 }).catch(() => { });
-
-      // Get chapters from first page only
-      const firstPageChapters = await this.page.evaluate(() => {
-        const chapters = [];
-        const links = document.querySelectorAll('a[href*="chapter-"]');
-
-        links.forEach((link) => {
-          const href = link.getAttribute('href');
-          if (!href) return;
-
-          const text = link.textContent.trim();
-          // Extract chapter number - prefer URL as it's more reliable
-          // Text can have issues like "Ch. 1048" + "20 Years" being concatenated as "Ch. 104820 Years"
-          const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
-            text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
-            text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
-
-          if (numMatch) {
-            const fullUrl = href.startsWith('http') ? href : window.location.origin + href;
-            chapters.push({
-              number: parseFloat(numMatch[1]),
-              title: text || `Chapter ${numMatch[1]}`,
-              url: fullUrl
-            });
-          }
-        });
-
-        return chapters;
-      });
+      const { html } = await fetchPage(url);
+      const firstPageChapters = this.parseChaptersFromHtml(html);
 
       // Find new chapters (URLs we haven't seen before)
       const knownUrlSet = new Set(knownChapterUrls);
@@ -77,189 +131,149 @@ export class ComixScraper extends BaseScraper {
         firstPageChapters
       };
 
+    } catch (error) {
+      console.error(`  FlareSolverr quickCheck failed: ${error.message}`);
+      // Fallback: try direct puppeteer (may work if Cloudflare is down)
+      return this.quickCheckUpdatesDirect(url, knownChapterUrls);
+    }
+  }
+
+  // Direct puppeteer fallback for quickCheck
+  async quickCheckUpdatesDirect(url, knownChapterUrls = []) {
+    await this.createPage();
+    try {
+      console.log(`  Quick check (direct fallback): ${url}`);
+      await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.randomDelay(500, 1000);
+      await this.page.waitForSelector('a[href*="chapter"]', { timeout: 10000 }).catch(() => { });
+
+      const firstPageChapters = await this.page.evaluate(() => {
+        const chapters = [];
+        const links = document.querySelectorAll('a[href*="chapter-"]');
+        links.forEach((link) => {
+          const href = link.getAttribute('href');
+          if (!href) return;
+          const text = link.textContent.trim();
+          const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+            text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+            text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+          if (numMatch) {
+            const fullUrl = href.startsWith('http') ? href : window.location.origin + href;
+            chapters.push({
+              number: parseFloat(numMatch[1]),
+              title: text || `Chapter ${numMatch[1]}`,
+              url: fullUrl
+            });
+          }
+        });
+        return chapters;
+      });
+
+      const knownUrlSet = new Set(knownChapterUrls);
+      const newChapters = firstPageChapters.filter(ch => !knownUrlSet.has(ch.url));
+      const latestChapter = firstPageChapters.length > 0
+        ? Math.max(...firstPageChapters.map(c => c.number))
+        : null;
+
+      console.log(`  Found ${firstPageChapters.length} chapters on first page, ${newChapters.length} new`);
+      return { hasUpdates: newChapters.length > 0, latestChapter, newChapters, firstPageChapters };
     } finally {
       await this.closePage();
     }
   }
 
   async getMangaInfo(url) {
-    await this.createPage();
-
     try {
       console.log(`  Navigating to: ${url}`);
-      await this.page.goto(url, {
-        waitUntil: 'networkidle2',
-        timeout: 30000
-      });
 
-      await this.randomDelay(1000, 2000);
+      // Fetch the first page via FlareSolverr
+      const { html, cookies, userAgent } = await fetchPage(url);
 
-      // Wait for chapter list to load - comix.to uses 'chapter' in the URL
-      await this.page.waitForSelector('a[href*="chapter"]', { timeout: 10000 }).catch(() => { });
-      await this.randomDelay(500, 1000);
-
-      // Get title and total chapter count from page
-      const { title, totalFromPage } = await this.page.evaluate(() => {
-        const titleEl = document.querySelector('h1');
-        const title = titleEl ? titleEl.textContent.trim() : 'Unknown Title';
-
-        // Try to get total count from "Showing X to Y of Z items" text
-        const showingText = document.body.innerText.match(/of\s+(\d+)\s+items/i);
-        const totalFromPage = showingText ? parseInt(showingText[1]) : 0;
-
-        return { title, totalFromPage };
-      });
-
+      // Parse title
+      const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+      const title = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : 'Unknown Title';
       console.log(`  Title: ${title}`);
+
+      // Parse total chapter count from "Showing X to Y of Z items"
+      const showingMatch = html.match(/of\s+(\d+)\s+items/i);
+      const totalFromPage = showingMatch ? parseInt(showingMatch[1]) : 0;
       if (totalFromPage > 0) {
         console.log(`  Total chapters from page: ${totalFromPage}`);
       }
 
-      // Get cover and description
-      const { cover, description } = await this.page.evaluate(() => {
-        // comix.to uses static.comix.to for images
-        const allImages = document.querySelectorAll('img[src*="static.comix.to"]');
-        let coverEl = null;
-        for (const img of allImages) {
-          // Skip small icons/avatars
-          if (img.src && !img.src.includes('avatar') && !img.src.includes('icon') && !img.src.includes('svg')) {
-            coverEl = img;
+      // Parse cover image - look for img with static.comix.to
+      let cover = null;
+      const coverMatch = html.match(/<img[^>]*src="(https?:\/\/static\.comix\.to\/[^"]*)"[^>]*>/i);
+      if (coverMatch && !coverMatch[1].includes('avatar') && !coverMatch[1].includes('icon')) {
+        cover = coverMatch[1];
+      }
+      // Fallback: look for any img in a figure tag
+      if (!cover) {
+        const figMatch = html.match(/<figure[^>]*>[\s\S]*?<img[^>]*src="([^"]*)"[^>]*>/i);
+        if (figMatch) cover = figMatch[1];
+      }
+
+      // Parse description
+      let description = '';
+      const descMatch = html.match(/<(?:div|p)[^>]*class="[^"]*(?:description|summary|synopsis|prose)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|p)>/i);
+      if (descMatch) {
+        description = descMatch[1].replace(/<[^>]*>/g, '').trim();
+      }
+
+      // Collect chapters from first page
+      let allChapters = this.parseChaptersWithMetadata(html);
+      console.log(`    Found ${allChapters.length} chapters on page 1`);
+
+      // Handle pagination - check for page links and fetch subsequent pages
+      let pageNum = 1;
+      const pageUrlRegex = /href="([^"]*#(\d+))"/g;
+      const pageNumbers = new Set();
+      let pageMatch;
+      while ((pageMatch = pageUrlRegex.exec(html)) !== null) {
+        pageNumbers.add(parseInt(pageMatch[2]));
+      }
+
+      // Also check for "Next" pagination patterns
+      const maxPage = pageNumbers.size > 0 ? Math.max(...pageNumbers) : 1;
+
+      if (maxPage > 1) {
+        console.log(`  Found ${maxPage} pages of chapters`);
+
+        // Pagination on comix.to uses hash-based navigation (#2, #3, etc.)
+        // These are client-side rendered, so we need to fetch each page URL
+        // For hash-based pagination, the server may use query params instead
+        // Try fetching with page parameter
+        for (let p = 2; p <= maxPage; p++) {
+          try {
+            console.log(`  Scraping page ${p}...`);
+            // comix.to typically uses the same URL with different page hash
+            // FlareSolverr may need the page URL with query params
+            const pageUrl = `${url}?page=${p}`;
+            const { html: pageHtml } = await fetchPage(pageUrl);
+            const pageChapters = this.parseChaptersWithMetadata(pageHtml);
+            console.log(`    Found ${pageChapters.length} chapters on page ${p}`);
+
+            if (pageChapters.length === 0) break;
+
+            // Check for duplicate page (same first chapter)
+            if (allChapters.length > 0 && pageChapters.length > 0 &&
+              pageChapters[0].number === allChapters[0].number) {
+              console.log(`  Detected duplicate page, stopping pagination`);
+              break;
+            }
+
+            allChapters = allChapters.concat(pageChapters);
+            await this.randomDelay(1000, 1500);
+          } catch (err) {
+            console.log(`  Error fetching page ${p}: ${err.message}`);
             break;
           }
         }
-
-        // Fallback selectors
-        if (!coverEl) {
-          coverEl = document.querySelector('figure img, img.rounded-lg, article img');
-        }
-
-        const descEl = document.querySelector('.description, .summary, .synopsis, p.text-sm, .prose p');
-        return {
-          cover: coverEl ? coverEl.src : null,
-          description: descEl ? descEl.textContent.trim() : ''
-        };
-      });
-
-      // Collect chapters from all pages
-      let allChapters = [];
-      let pageNum = 1;
-      let previousFirstChapter = null;
-
-      while (true) {
-        console.log(`  Scraping page ${pageNum}...`);
-
-        // Get chapters from current page - comix.to uses 'chapter' in URL
-        const pageChapters = await this.page.evaluate(() => {
-          const chapters = [];
-          // Match links containing 'chapter' in the href
-          const links = document.querySelectorAll('a[href*="chapter-"]');
-
-          links.forEach((link) => {
-            const href = link.getAttribute('href');
-            if (!href) return;
-
-            const text = link.textContent.trim();
-
-            // Extract chapter number - prefer URL as it's more reliable
-            // Text can have issues like "Ch. 1048" + "20 Years" being concatenated as "Ch. 104820 Years"
-            const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
-              text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
-              text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
-
-            if (numMatch) {
-              // Find sibling spans after the link
-              // Structure: <a>Ch. X</a><span>pageCount</span><span>time ago</span><span>release group</span>
-              let releaseGroup = '';
-              let uploadedAt = '';
-
-              // Get all sibling spans that come after the link
-              let sibling = link.nextElementSibling;
-              const siblingSpans = [];
-              while (sibling) {
-                if (sibling.tagName === 'SPAN') {
-                  siblingSpans.push(sibling.textContent?.trim() || '');
-                }
-                sibling = sibling.nextElementSibling;
-              }
-
-              // siblingSpans[0] = page count (number)
-              // siblingSpans[1] = time ago (e.g., "6 days ago")
-              // siblingSpans[2] = release group (can be empty)
-              if (siblingSpans.length >= 2) {
-                uploadedAt = siblingSpans[1] || '';
-              }
-              if (siblingSpans.length >= 3) {
-                releaseGroup = siblingSpans[2] || '';
-              }
-
-              chapters.push({
-                number: parseFloat(numMatch[1]),
-                title: text || `Chapter ${numMatch[1]}`,
-                url: href.startsWith('http') ? href : window.location.origin + href,
-                releaseGroup: releaseGroup,
-                uploadedAt: uploadedAt
-              });
-            }
-          });
-
-          return chapters;
-        });
-
-        // Check if we're seeing the same page again (pagination didn't work)
-        const currentFirstChapter = pageChapters.length > 0 ? pageChapters[0].number : null;
-        if (previousFirstChapter !== null && currentFirstChapter === previousFirstChapter) {
-          console.log(`  Detected duplicate page, stopping pagination`);
-          break;
-        }
-        previousFirstChapter = currentFirstChapter;
-
-        allChapters = allChapters.concat(pageChapters);
-        console.log(`    Found ${pageChapters.length} chapters on page ${pageNum}`);
-
-        // Check if there's a next page by looking at pagination state
-        const hasNextPage = await this.page.evaluate(() => {
-          // Find all pagination links
-          const pageLinks = document.querySelectorAll('a.page-link, .pagination a, nav a');
-
-          for (const link of pageLinks) {
-            const text = link.textContent.trim();
-            // Look for "Next" button
-            if (text === 'Next' || text === '›' || text === '>') {
-              const href = link.getAttribute('href');
-              // Check if this is the last page - Next button might link to current page
-              // Extract page number from href like "#15"
-              const currentPageMatch = href ? href.match(/#(\d+)/) : null;
-              const currentPageNum = currentPageMatch ? parseInt(currentPageMatch[1]) : 0;
-
-              // If we're already at this page, we're at the end
-              const activePageEl = document.querySelector('a.page-link.active, .pagination .active');
-              const activePage = activePageEl ? parseInt(activePageEl.textContent.trim()) : 1;
-
-              if (currentPageNum > activePage || (!currentPageMatch && href !== '#')) {
-                link.click();
-                return true;
-              }
-              return false;
-            }
-          }
-          return false;
-        });
-
-        if (!hasNextPage) {
-          console.log(`  No more pages after page ${pageNum}`);
-          break;
-        }
-
-        pageNum++;
-        await this.randomDelay(1000, 1500);
-        // Wait for content to update
-        await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => { });
       }
 
       // Process chapters - keep ALL versions but track duplicates
       const chaptersByNumber = new Map();
       for (const ch of allChapters) {
-        // Skip exact URL duplicates (same scrape from pagination)
         const existing = chaptersByNumber.get(ch.number) || [];
         const isDuplicateUrl = existing.some(e => e.url === ch.url);
         if (!isDuplicateUrl) {
@@ -270,13 +284,12 @@ export class ComixScraper extends BaseScraper {
 
       // Build final chapter list with version info
       const chapters = [];
-      const duplicateChapters = []; // Chapters with multiple versions
+      const duplicateChapters = [];
 
       for (const [num, versions] of chaptersByNumber) {
         if (versions.length === 1) {
           chapters.push(versions[0]);
         } else {
-          // Multiple versions - add all with version suffix
           versions.forEach((v, i) => {
             chapters.push({
               ...v,
@@ -287,17 +300,13 @@ export class ComixScraper extends BaseScraper {
           });
           duplicateChapters.push({
             number: num,
-            versions: versions.map((v, i) => ({
-              ...v,
-              version: i + 1
-            }))
+            versions: versions.map((v, i) => ({ ...v, version: i + 1 }))
           });
         }
       }
 
       chapters.sort((a, b) => a.number - b.number);
 
-      // Use the count from page if available, otherwise use scraped count
       const uniqueCount = chaptersByNumber.size;
       console.log(`  Found ${chapters.length} total chapters (${uniqueCount} unique, ${duplicateChapters.length} have duplicates)`);
 
@@ -313,16 +322,120 @@ export class ComixScraper extends BaseScraper {
         description
       };
 
+    } catch (error) {
+      console.error(`  FlareSolverr getMangaInfo failed: ${error.message}`);
+      // Fallback to direct puppeteer
+      return this.getMangaInfoDirect(url);
+    }
+  }
+
+  // Direct puppeteer fallback for getMangaInfo
+  async getMangaInfoDirect(url) {
+    await this.createPage();
+
+    try {
+      console.log(`  getMangaInfo (direct fallback): ${url}`);
+      await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.randomDelay(1000, 2000);
+      await this.page.waitForSelector('a[href*="chapter"]', { timeout: 10000 }).catch(() => { });
+      await this.randomDelay(500, 1000);
+
+      const { title, totalFromPage } = await this.page.evaluate(() => {
+        const titleEl = document.querySelector('h1');
+        const title = titleEl ? titleEl.textContent.trim() : 'Unknown Title';
+        const showingText = document.body.innerText.match(/of\s+(\d+)\s+items/i);
+        const totalFromPage = showingText ? parseInt(showingText[1]) : 0;
+        return { title, totalFromPage };
+      });
+
+      const { cover, description } = await this.page.evaluate(() => {
+        const allImages = document.querySelectorAll('img[src*="static.comix.to"]');
+        let coverEl = null;
+        for (const img of allImages) {
+          if (img.src && !img.src.includes('avatar') && !img.src.includes('icon') && !img.src.includes('svg')) {
+            coverEl = img;
+            break;
+          }
+        }
+        if (!coverEl) {
+          coverEl = document.querySelector('figure img, img.rounded-lg, article img');
+        }
+        const descEl = document.querySelector('.description, .summary, .synopsis, p.text-sm, .prose p');
+        return {
+          cover: coverEl ? coverEl.src : null,
+          description: descEl ? descEl.textContent.trim() : ''
+        };
+      });
+
+      // Get chapters from first page only (simplified fallback)
+      const chapters = await this.page.evaluate(() => {
+        const chapters = [];
+        const links = document.querySelectorAll('a[href*="chapter-"]');
+        links.forEach((link) => {
+          const href = link.getAttribute('href');
+          if (!href) return;
+          const text = link.textContent.trim();
+          const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+            text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+            text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+          if (numMatch) {
+            chapters.push({
+              number: parseFloat(numMatch[1]),
+              title: text || `Chapter ${numMatch[1]}`,
+              url: href.startsWith('http') ? href : window.location.origin + href
+            });
+          }
+        });
+        return chapters;
+      });
+
+      chapters.sort((a, b) => a.number - b.number);
+
+      return {
+        url,
+        website: this.websiteName,
+        title,
+        totalChapters: totalFromPage || chapters.length,
+        uniqueChapters: chapters.length,
+        chapters,
+        duplicateChapters: [],
+        cover,
+        description
+      };
+
     } finally {
       await this.closePage();
     }
   }
 
   async getChapterImages(chapterUrl) {
+    // Strategy: Use FlareSolverr to get cookies, then pass them to puppeteer
+    // for scrolling and lazy-loaded image extraction
+    let fsCookies = [];
+    let fsUserAgent = '';
+
+    try {
+      // Get cookies from FlareSolverr first
+      const fsResult = await fetchPage(chapterUrl);
+      fsCookies = toPuppeteerCookies(fsResult.cookies, '.comix.to');
+      fsUserAgent = fsResult.userAgent;
+    } catch (error) {
+      console.log(`  FlareSolverr cookie fetch failed: ${error.message}, trying direct...`);
+    }
+
     // Use clean page without blocking - needed for lazy loading to work
     await this.createPageClean();
 
     try {
+      // Set cookies from FlareSolverr if available
+      if (fsCookies.length > 0) {
+        await this.page.setCookie(...fsCookies);
+        console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
+      }
+      if (fsUserAgent) {
+        await this.page.setUserAgent(fsUserAgent);
+      }
+
       console.log(`  Loading chapter: ${chapterUrl}`);
       await this.page.goto(chapterUrl, {
         waitUntil: 'networkidle2',

@@ -30,6 +30,9 @@ export const CONFIG = {
   dataDir: resolvePath(process.env.DATA_DIR, 'data'),
   downloadsDir: resolvePath(process.env.DOWNLOADS_DIR, 'downloads'),
 
+  // FlareSolverr - Cloudflare bypass proxy
+  flareSolverrUrl: process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1',
+
   puppeteer: {
     headless: true, // Always headless in production typically
     executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,
