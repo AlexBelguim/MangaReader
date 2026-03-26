@@ -185,6 +185,10 @@ export class ComixScraper extends BaseScraper {
       await this.createPageClean();
       
       try {
+        // Set a very large viewport so all items are "above the fold"
+        // React may not render off-screen items in a small viewport
+        await this.page.setViewport({ width: 1920, height: 8000 });
+        
         // Set cookies from FlareSolverr if available
         if (fsCookies.length > 0) {
           await this.page.setCookie(...fsCookies);
@@ -199,50 +203,96 @@ export class ComixScraper extends BaseScraper {
           timeout: 60000
         });
         
+        // Debug: check page title for CF challenge
+        const pageTitle = await this.page.title();
+        console.log(`  [COMIX] Page title: "${pageTitle}"`);
+        if (pageTitle.includes('moment') || pageTitle.includes('Checking')) {
+          console.log(`  [COMIX] WARNING: Cloudflare challenge page detected in Puppeteer!`);
+          // Wait for challenge to resolve
+          await new Promise(r => setTimeout(r, 10000));
+        }
+        
         // Wait for initial React render
         await new Promise(r => setTimeout(r, 3000));
         
         // Wait for at least one search result item to appear
-        await this.page.waitForSelector('.item .title', { timeout: 15000 }).catch(() => {
-          console.log(`  [COMIX] No .item .title found after 15s, continuing anyway...`);
+        await this.page.waitForSelector('.item a.title', { timeout: 15000 }).catch(() => {
+          console.log(`  [COMIX] No .item a.title found after 15s, continuing anyway...`);
         });
         
-        // Scroll to bottom to trigger lazy loading of items and images
-        console.log(`  [COMIX] Scrolling to load all results...`);
+        // Poll until item count stabilizes (React may render in batches)
+        let lastCount = 0;
+        let stableChecks = 0;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const currentCount = await this.page.evaluate(() => {
+            return document.querySelectorAll('.item a.title').length;
+          });
+          
+          if (currentCount === lastCount && currentCount > 0) {
+            stableChecks++;
+            if (stableChecks >= 3) {
+              console.log(`  [COMIX] Item count stable at ${currentCount} after ${attempt + 1} checks`);
+              break;
+            }
+          } else {
+            stableChecks = 0;
+          }
+          lastCount = currentCount;
+          await new Promise(r => setTimeout(r, 500));
+        }
+        
+        // Scroll down and back up to trigger any lazy rendering
+        console.log(`  [COMIX] Scrolling to load all results and images...`);
         await this.page.evaluate(async () => {
-          await new Promise((resolve) => {
-            let lastScrollY = -1;
-            let sameCount = 0;
-            
-            const timer = setInterval(() => {
-              window.scrollBy(0, 500);
-              
-              if (window.scrollY === lastScrollY) {
-                sameCount++;
-                if (sameCount >= 3) {
-                  clearInterval(timer);
-                  resolve();
-                }
-              } else {
-                sameCount = 0;
-              }
-              lastScrollY = window.scrollY;
-            }, 200);
-            
-            // Safety timeout
-            setTimeout(() => {
-              clearInterval(timer);
-              resolve();
-            }, 15000);
+          // Scroll down slowly
+          const scrollStep = 500;
+          const scrollDelay = 200;
+          const maxHeight = document.body.scrollHeight;
+          
+          for (let y = 0; y < maxHeight; y += scrollStep) {
+            window.scrollTo(0, y);
+            await new Promise(r => setTimeout(r, scrollDelay));
+          }
+          // Ensure we're at the very bottom
+          window.scrollTo(0, document.body.scrollHeight);
+          await new Promise(r => setTimeout(r, 500));
+          
+          // Scroll back to top  
+          window.scrollTo(0, 0);
+          await new Promise(r => setTimeout(r, 500));
+        });
+        
+        // Final wait for images to load
+        await new Promise(r => setTimeout(r, 2000));
+        
+        // Final item count
+        const finalCount = await this.page.evaluate(() => {
+          return document.querySelectorAll('.item a.title').length;
+        });
+        console.log(`  [COMIX] Final item count in DOM: ${finalCount}`);
+        
+        // Debug: log all items found
+        const debugItems = await this.page.evaluate(() => {
+          const items = document.querySelectorAll('.item');
+          return Array.from(items).map((item, i) => {
+            const titleEl = item.querySelector('a.title');
+            const img = item.querySelector('.poster img');
+            return {
+              index: i,
+              title: titleEl ? titleEl.textContent.trim() : '(no title)',
+              hasImg: !!img,
+              imgSrc: img ? (img.src || img.getAttribute('data-src') || '').substring(0, 60) : 'none'
+            };
           });
         });
-        
-        // Wait for images to load after scrolling
-        await new Promise(r => setTimeout(r, 2000));
+        console.log(`  [COMIX] All items in DOM:`);
+        debugItems.forEach(d => {
+          console.log(`    ${d.index}: "${d.title}" img: ${d.imgSrc}`);
+        });
         
         // Extract results from the fully rendered DOM
         const results = await this.page.evaluate(() => {
-          const items = document.querySelectorAll('.comic .item');
+          const items = document.querySelectorAll('.item');
           const results = [];
           const seen = new Set();
           
@@ -254,15 +304,18 @@ export class ComixScraper extends BaseScraper {
             const title = titleEl.textContent.trim();
             if (!title || !href) return;
             
-            const url = 'https://comix.to' + href;
+            const url = href.startsWith('http') ? href : 'https://comix.to' + href;
             if (seen.has(url)) return;
             seen.add(url);
             
-            // Cover image - get the actual loaded src
+            // Cover image - get the actual loaded src or data-src
             let cover = null;
             const img = item.querySelector('.poster img');
-            if (img && img.src && img.src.startsWith('http') && !img.src.endsWith('.svg')) {
-              cover = img.src;
+            if (img) {
+              const src = img.src || img.getAttribute('data-src') || '';
+              if (src.startsWith('http') && !src.endsWith('.svg')) {
+                cover = src;
+              }
             }
             
             // Chapter count from metachip

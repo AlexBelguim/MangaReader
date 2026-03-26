@@ -30,9 +30,18 @@ async function cacheSearchCover(coverUrl, index) {
     const fileName = `search_${index}${ext}`;
     const filePath = path.join(SEARCH_CACHE_DIR, fileName);
 
+    // Use the parent site as referer, not the CDN host
+    // e.g. for static.comix.to images, referer should be comix.to
+    const urlObj = new URL(fullUrl);
+    const hostParts = urlObj.hostname.split('.');
+    const parentDomain = hostParts.length > 2 
+      ? hostParts.slice(-2).join('.') 
+      : urlObj.hostname;
+    const referer = `https://${parentDomain}/`;
+
     const response = await fetch(fullUrl, {
       headers: {
-        'Referer': new URL(fullUrl).origin + '/',
+        'Referer': referer,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
