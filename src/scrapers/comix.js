@@ -107,10 +107,11 @@ export class ComixScraper extends BaseScraper {
 
   // Quick check - only scrapes the first page to find new chapters
   async quickCheckUpdates(url, knownChapterUrls = []) {
+    console.log(`  Quick check: ${url}`);
+    console.log(`  [COMIX] Attempting FlareSolverr fetch...`);
     try {
-      console.log(`  Quick check: ${url}`);
-
       const { html } = await fetchPage(url);
+      console.log(`  [COMIX] FlareSolverr returned ${html.length} chars`);
 
       // Debug: log page title from the HTML
       const titleMatch = html.match(/<title>(.*?)<\/title>/i);
@@ -150,8 +151,8 @@ export class ComixScraper extends BaseScraper {
       };
 
     } catch (error) {
-      console.error(`  FlareSolverr quickCheck failed: ${error.message}`);
-      console.error(`  Full error:`, error.stack || error);
+      console.log(`  [COMIX] FlareSolverr FAILED: ${error.message}`);
+      console.log(`  [COMIX] Falling back to direct puppeteer...`);
       // Fallback: try direct puppeteer (may work if Cloudflare is down)
       return this.quickCheckUpdatesDirect(url, knownChapterUrls);
     }
