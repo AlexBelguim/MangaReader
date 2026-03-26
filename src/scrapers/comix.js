@@ -1,5 +1,6 @@
 import { BaseScraper } from './base.js';
 import { fetchPage, isAvailable } from './flaresolverr.js';
+import { CONFIG } from '../config.js';
 
 /**
  * Scraper for comix.to website
@@ -166,39 +167,68 @@ export class ComixScraper extends BaseScraper {
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      // Step 1: Use FlareSolverr to solve Cloudflare and get bypass cookies
-      const { cookies, userAgent } = await fetchPage(searchUrl);
+      // Use FlareSolverr sessions: first request solves CF, second request  
+      // gets a clean render without the challenge delay, giving React more time
+      const sessionId = 'comix-search-' + Date.now();
+      let html = '';
       
-      // Step 2: Make a direct HTTP request with the CF bypass cookies
-      // This gets the full server-rendered HTML (FlareSolverr's browser may not render all React content)
-      const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      console.log(`  [COMIX] Making direct fetch with ${cookies.length} cookies...`);
-      
-      let html;
       try {
-        const directResponse = await fetch(searchUrl, {
-          headers: {
-            'Cookie': cookieHeader,
-            'User-Agent': userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://comix.to/',
-          }
+        // Create a persistent browser session
+        await fetch(CONFIG.flareSolverrUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cmd: 'sessions.create', session: sessionId })
         });
+        console.log(`  [COMIX] Created session: ${sessionId}`);
         
-        if (directResponse.ok) {
-          html = await directResponse.text();
-          console.log(`  [COMIX] Direct fetch returned ${html.length} chars`);
-        } else {
-          console.log(`  [COMIX] Direct fetch returned ${directResponse.status}, falling back to FlareSolverr HTML`);
-          // Fall back to FlareSolverr's HTML
-          const fsResult = await fetchPage(searchUrl);
-          html = fsResult.html;
-        }
-      } catch (fetchErr) {
-        console.log(`  [COMIX] Direct fetch failed: ${fetchErr.message}, using FlareSolverr HTML`);
-        const fsResult = await fetchPage(searchUrl);
-        html = fsResult.html;
+        // First request: solves Cloudflare challenge
+        const res1 = await fetch(CONFIG.flareSolverrUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cmd: 'request.get',
+            url: searchUrl,
+            session: sessionId,
+            maxTimeout: 60000
+          })
+        });
+        const data1 = await res1.json();
+        const html1 = data1.solution?.response || '';
+        const count1 = (html1.match(/class="item"/g) || []).length;
+        console.log(`  [COMIX] First request: ${html1.length} chars, ${count1} items`);
+        
+        // Second request: same session, CF already solved, browser navigates fresh
+        console.log(`  [COMIX] Making second request (no CF challenge)...`);
+        const res2 = await fetch(CONFIG.flareSolverrUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cmd: 'request.get',
+            url: searchUrl,
+            session: sessionId,
+            maxTimeout: 60000
+          })
+        });
+        const data2 = await res2.json();
+        const html2 = data2.solution?.response || '';
+        const count2 = (html2.match(/class="item"/g) || []).length;
+        console.log(`  [COMIX] Second request: ${html2.length} chars, ${count2} items`);
+        
+        // Use whichever response has more items
+        html = count2 >= count1 ? html2 : html1;
+        console.log(`  [COMIX] Using ${count2 >= count1 ? 'second' : 'first'} response`);
+        
+      } catch (sessionErr) {
+        console.log(`  [COMIX] Session approach failed: ${sessionErr.message}, falling back`);
+        const { html: fallbackHtml } = await fetchPage(searchUrl);
+        html = fallbackHtml;
+      } finally {
+        // Clean up session
+        fetch(CONFIG.flareSolverrUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cmd: 'sessions.destroy', session: sessionId })
+        }).catch(() => {});
       }
       
       // Guard: check for unresolved Cloudflare challenge
