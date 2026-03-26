@@ -163,7 +163,7 @@ export class ComixScraper extends BaseScraper {
 
 
   async search(query) {
-    const searchUrl = `https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`;
+    const searchUrl = `https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc&genres_mode=and`;
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
