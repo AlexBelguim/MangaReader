@@ -4,7 +4,7 @@ import { Server as SocketServer } from 'socket.io';
 import path from 'path';
 import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
-import { scraperFactory } from './scrapers/templates/index.js';
+import { scraperFactory } from './scrapers/index.js';
 import { downloader } from './downloader.js';
 import { CONFIG } from './config.js';
 import { requestLogger, logger } from './logger.js';
