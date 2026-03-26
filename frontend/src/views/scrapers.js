@@ -169,19 +169,22 @@ class ScraperView {
     let html = '<div class="library-grid">';
 
     this.results.forEach(result => {
-      const coverUrl = result.cover || '/icon-192.png';
+      const coverUrl = result.cover || '';
+      const coverHtml = coverUrl 
+        ? `<img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
+        : `<div class="placeholder">📖</div>`;
       html += `
-        <div class="manga-card scraper-result-card" style="display: flex; flex-direction: column;">
+        <div class="manga-card scraper-result-card" data-url="${result.url}" style="cursor: pointer;">
           <div class="manga-card-cover">
-            <img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'placeholder\\'>🖼️</div>'">
+            ${coverHtml}
             <div class="manga-card-badges">
               <span class="badge badge-scraper">${result.website}</span>
               ${result.chapterCount ? `<span class="badge badge-chapters">${result.chapterCount} ch</span>` : ''}
             </div>
           </div>
-          <div class="manga-info" style="padding: 8px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between;">
-            <div class="manga-card-title" title="${result.title}" style="margin-bottom: 8px;">${result.title}</div>
-            <button class="btn btn-primary add-from-search-btn" data-url="${result.url}">+ Add</button>
+          <div class="manga-card-title" title="${result.title}">${result.title}</div>
+          <div style="padding: 0 8px 8px;">
+            <button class="btn btn-primary add-from-search-btn" data-url="${result.url}" style="width: 100%; font-size: 0.8rem;">+ Add to Library</button>
           </div>
         </div>
       `;
@@ -190,10 +193,19 @@ class ScraperView {
     html += '</div>';
     container.innerHTML = html;
 
-    // Bind add buttons
+    // Bind card clicks - open URL in new tab
     setTimeout(() => {
+      document.querySelectorAll('.scraper-result-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          // Don't navigate if they clicked the Add button
+          if (e.target.closest('.add-from-search-btn')) return;
+          window.open(card.dataset.url, '_blank');
+        });
+      });
+
       document.querySelectorAll('.add-from-search-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
+          e.stopPropagation();
           const url = e.target.dataset.url;
           this.openAddModal(url);
         });

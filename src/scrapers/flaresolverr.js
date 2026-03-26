@@ -68,10 +68,11 @@ export async function fetchPage(url, maxTimeout = 60000) {
 
   // Check if FlareSolverr returned a Cloudflare challenge page instead of real content
   const html = solution.response;
-  if (html.includes('Just a moment') || html.includes('Even geduld') || 
-      html.includes('Checking your browser') || html.includes('challenge-platform')) {
-    console.log(`  [FlareSolverr] WARNING: Response appears to be a Cloudflare challenge page!`);
-    console.log(`  [FlareSolverr] Title: ${(html.match(/<title>(.*?)<\/title>/i) || ['', 'unknown'])[1]}`);
+  const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+  const pageTitle = titleMatch ? titleMatch[1] : '';
+  if (pageTitle === 'Just a moment...' || pageTitle === 'Even geduld' || 
+      pageTitle === 'Checking your browser' || html.includes('cf-browser-verification')) {
+    console.log(`  [FlareSolverr] WARNING: Response is an unresolved Cloudflare challenge page! Title: ${pageTitle}`);
   }
 
   return {

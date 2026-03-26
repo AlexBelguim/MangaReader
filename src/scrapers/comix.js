@@ -173,49 +173,58 @@ export class ComixScraper extends BaseScraper {
         throw new Error('FlareSolverr returned unresolved Cloudflare challenge HTML');
       }
       
-      // Debug: log HTML structure to understand parsing issues
-      console.log(`  [COMIX] HTML length: ${html.length}`);
-      console.log(`  [COMIX] Title: ${(html.match(/<title>(.*?)<\/title>/i) || ['','unknown'])[1]}`);
-      console.log(`  [COMIX] Contains /title/ links: ${(html.match(/\/title\//g) || []).length}`);
-      console.log(`  [COMIX] Contains <h3>: ${(html.match(/<h3/g) || []).length}`);
-      console.log(`  [COMIX] First 3000 chars of body:`, html.substring(html.indexOf('<body'), html.indexOf('<body') + 3000));
-      
-      // Parse search results - Comix uses a grid layout
+      // Parse search results from the /browser page
+      // Comix uses <a href="/title/..."> links. Extract all unique ones.
       const results = [];
-      const itemRegex = /<a[^>]*href="([^"]*\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+      const seen = new Set();
+      
+      // Match all <a> tags that link to /title/ pages with their full inner content
+      const linkRegex = /<a[^>]*href="(\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
       let match;
       
-      while ((match = itemRegex.exec(html)) !== null) {
-        let href = match[1];
-        if (href.startsWith('/')) href = 'https://comix.to' + href;
+      while ((match = linkRegex.exec(html)) !== null) {
+        let href = 'https://comix.to' + match[1];
+        if (seen.has(href)) continue;
         
         const content = match[2];
         
-        // Extract Title from h3
-        const titleMatch = content.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-        const titleFragment = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : '';
-        // If Title is empty, might be an image wrapper, skip it
-        if (!titleFragment) continue;
+        // Extract title: try any heading tag first, then fall back to stripped text
+        let title = '';
+        const headingMatch = content.match(/<(?:h[1-6]|span|div)[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/(?:h[1-6]|span|div)>/i);
+        if (headingMatch) {
+          title = headingMatch[1].replace(/<[^>]*>/g, '').trim();
+        }
+        if (!title) {
+          // Just strip all HTML tags and get the text
+          title = content.replace(/<[^>]*>/g, '').trim();
+        }
+        // Skip if no meaningful title or it's just whitespace/numbers
+        if (!title || title.length < 2) continue;
         
-        // Extract Cover from img
+        // Extract Cover from img (src or data-src)
         let cover = null;
-        const imgMatch = content.match(/<img[^>]*src="([^"]*)"/i);
-        if (imgMatch) cover = imgMatch[1];
+        const imgMatch = content.match(/<img[^>]*(?:src|data-src)="([^"]*(?:\.jpg|\.png|\.webp|cover)[^"]*)"/i);
+        if (imgMatch) {
+          cover = imgMatch[1];
+          if (cover.startsWith('/')) cover = 'https://comix.to' + cover;
+        }
         
-        // Extract Chapters from spans
-        const chapMatch = content.match(/>([\s\d]+)[\s]*Ch(apters?)?</i);
-        const chapterCount = chapMatch ? parseInt(chapMatch[1].trim()) : 0;
+        // Extract chapter count from text like "123 Chapters" or "45 Ch"
+        const chapMatch = content.match(/(\d+)\s*Ch(?:apter)?s?/i);
+        const chapterCount = chapMatch ? parseInt(chapMatch[1]) : 0;
         
+        seen.add(href);
         results.push({
-          title: titleFragment,
+          title,
           url: href,
           cover,
-          chapterCount
+          chapterCount,
+          website: this.websiteName
         });
       }
       
-      // Filter out weird or empty titles
-      return results.filter(r => r.title);
+      console.log(`  [COMIX] Parsed ${results.length} results from ${seen.size} unique links`);
+      return results;
     } catch (e) {
       console.error(`  [COMIX] Primary search failed: ${e.message}, attempting direct browser...`);
       return this.searchDirect(`https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`);

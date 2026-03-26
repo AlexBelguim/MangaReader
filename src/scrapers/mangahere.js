@@ -176,7 +176,7 @@ export class MangaHereScraper extends BaseScraper {
         return list;
       });
 
-      return results;
+      return results.map(r => ({ ...r, website: this.websiteName }));
     } finally {
       await this.closePage();
     }
