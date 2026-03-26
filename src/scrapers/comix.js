@@ -1,6 +1,5 @@
 import { BaseScraper } from './base.js';
-import { fetchPage, isAvailable } from './flaresolverr.js';
-import { CONFIG } from '../config.js';
+import { fetchPage, isAvailable, toPuppeteerCookies } from './flaresolverr.js';
 
 /**
  * Scraper for comix.to website
@@ -167,134 +166,137 @@ export class ComixScraper extends BaseScraper {
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      // Use FlareSolverr sessions: first request solves CF, second request  
-      // gets a clean render without the challenge delay, giving React more time
-      const sessionId = 'comix-search-' + Date.now();
-      let html = '';
+      // Hybrid approach: FlareSolverr bypasses CF → Puppeteer scrolls for full render
+      let fsCookies = [];
+      let fsUserAgent = '';
       
       try {
-        // Create a persistent browser session
-        await fetch(CONFIG.flareSolverrUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cmd: 'sessions.create', session: sessionId })
-        });
-        console.log(`  [COMIX] Created session: ${sessionId}`);
-        
-        // First request: solves Cloudflare challenge
-        const res1 = await fetch(CONFIG.flareSolverrUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cmd: 'request.get',
-            url: searchUrl,
-            session: sessionId,
-            maxTimeout: 60000,
-            wait: 5000
-          })
-        });
-        const data1 = await res1.json();
-        const html1 = data1.solution?.response || '';
-        const count1 = (html1.match(/class="item"/g) || []).length;
-        console.log(`  [COMIX] First request: ${html1.length} chars, ${count1} items`);
-        
-        // Second request: same session, CF already solved, browser navigates fresh
-        console.log(`  [COMIX] Making second request (no CF challenge)...`);
-        const res2 = await fetch(CONFIG.flareSolverrUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cmd: 'request.get',
-            url: searchUrl,
-            session: sessionId,
-            maxTimeout: 60000,
-            wait: 5000
-          })
-        });
-        const data2 = await res2.json();
-        const html2 = data2.solution?.response || '';
-        const count2 = (html2.match(/class="item"/g) || []).length;
-        console.log(`  [COMIX] Second request: ${html2.length} chars, ${count2} items`);
-        
-        // Use whichever response has more items
-        html = count2 >= count1 ? html2 : html1;
-        console.log(`  [COMIX] Using ${count2 >= count1 ? 'second' : 'first'} response`);
-        
-      } catch (sessionErr) {
-        console.log(`  [COMIX] Session approach failed: ${sessionErr.message}, falling back`);
-        const { html: fallbackHtml } = await fetchPage(searchUrl);
-        html = fallbackHtml;
-      } finally {
-        // Clean up session
-        fetch(CONFIG.flareSolverrUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cmd: 'sessions.destroy', session: sessionId })
-        }).catch(() => {});
+        // Get cookies from FlareSolverr to bypass Cloudflare
+        console.log(`  [COMIX] Getting CF cookies via FlareSolverr...`);
+        const fsResult = await fetchPage(searchUrl);
+        fsCookies = toPuppeteerCookies(fsResult.cookies, '.comix.to');
+        fsUserAgent = fsResult.userAgent;
+        console.log(`  [COMIX] Got ${fsCookies.length} cookies from FlareSolverr`);
+      } catch (error) {
+        console.log(`  [COMIX] FlareSolverr cookie fetch failed: ${error.message}, trying direct Puppeteer...`);
       }
       
-      // Guard: check for unresolved Cloudflare challenge
-      if (html.includes('<title>Just a moment...</title>')) {
-        throw new Error('Received unresolved Cloudflare challenge page');
-      }
+      // Use Puppeteer with CF cookies to load, scroll, and extract results
+      await this.createPageClean();
       
-      // Parse results from HTML
-      // DOM: div.comic.lg > div.item > div.inner >
-      //   div.poster > div > <img loading="lazy" alt="Title" src="https://static.comix.to/...">
-      //   div.detail > <a class="title" href="/title/slug">Title</a>
-      //                <div class="metachip"> <span>Ch.229</span> ... </div>
-      
-      const itemBlocks = html.split(/class="item"/g);
-      console.log(`  [COMIX] Found ${itemBlocks.length - 1} item blocks`);
-      
-      const results = [];
-      const seen = new Set();
-      
-      for (let i = 1; i < itemBlocks.length; i++) {
-        const block = itemBlocks[i];
-        const titleMatch = block.match(/<a\s+class="title"\s+href="(\/title\/[^"]+)"[^>]*>([^<]+)<\/a>/i);
-        if (!titleMatch) continue;
-        
-        const url = 'https://comix.to' + titleMatch[1];
-        if (seen.has(url)) continue;
-        seen.add(url);
-        
-        const title = titleMatch[2].trim();
-        if (!title) continue;
-        
-        // Cover image
-        let cover = null;
-        const imgMatch = block.match(/<img[^>]*src="(https:\/\/static\.comix\.to\/[^"]+)"/i);
-        if (imgMatch) {
-          cover = imgMatch[1];
-        } else {
-          const anyImg = block.match(/<img[^>]*src="(https?:\/\/[^"]+)"/i);
-          if (anyImg && !anyImg[1].endsWith('.svg')) cover = anyImg[1];
+      try {
+        // Set cookies from FlareSolverr if available
+        if (fsCookies.length > 0) {
+          await this.page.setCookie(...fsCookies);
+        }
+        if (fsUserAgent) {
+          await this.page.setUserAgent(fsUserAgent);
         }
         
-        // Chapter count from metachip spans
-        let chapterCount = 0;
-        const metachipMatch = block.match(/class="metachip">([\s\S]*?)<\/div>/i);
-        if (metachipMatch) {
-          const spans = metachipMatch[1].match(/<span[^>]*>([^<]*)<\/span>/gi) || [];
-          for (const span of spans) {
-            const text = span.replace(/<[^>]*>/g, '').trim();
-            const chMatch = text.match(/^Ch\.(\d+)/i);
-            if (chMatch) {
-              chapterCount = parseInt(chMatch[1]);
-              break;
+        console.log(`  [COMIX] Loading search page in Puppeteer...`);
+        await this.page.goto(searchUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 60000
+        });
+        
+        // Wait for initial React render
+        await new Promise(r => setTimeout(r, 3000));
+        
+        // Wait for at least one search result item to appear
+        await this.page.waitForSelector('.item .title', { timeout: 15000 }).catch(() => {
+          console.log(`  [COMIX] No .item .title found after 15s, continuing anyway...`);
+        });
+        
+        // Scroll to bottom to trigger lazy loading of items and images
+        console.log(`  [COMIX] Scrolling to load all results...`);
+        await this.page.evaluate(async () => {
+          await new Promise((resolve) => {
+            let lastScrollY = -1;
+            let sameCount = 0;
+            
+            const timer = setInterval(() => {
+              window.scrollBy(0, 500);
+              
+              if (window.scrollY === lastScrollY) {
+                sameCount++;
+                if (sameCount >= 3) {
+                  clearInterval(timer);
+                  resolve();
+                }
+              } else {
+                sameCount = 0;
+              }
+              lastScrollY = window.scrollY;
+            }, 200);
+            
+            // Safety timeout
+            setTimeout(() => {
+              clearInterval(timer);
+              resolve();
+            }, 15000);
+          });
+        });
+        
+        // Wait for images to load after scrolling
+        await new Promise(r => setTimeout(r, 2000));
+        
+        // Extract results from the fully rendered DOM
+        const results = await this.page.evaluate(() => {
+          const items = document.querySelectorAll('.comic .item');
+          const results = [];
+          const seen = new Set();
+          
+          items.forEach(item => {
+            const titleEl = item.querySelector('a.title');
+            if (!titleEl) return;
+            
+            const href = titleEl.getAttribute('href');
+            const title = titleEl.textContent.trim();
+            if (!title || !href) return;
+            
+            const url = 'https://comix.to' + href;
+            if (seen.has(url)) return;
+            seen.add(url);
+            
+            // Cover image - get the actual loaded src
+            let cover = null;
+            const img = item.querySelector('.poster img');
+            if (img && img.src && img.src.startsWith('http') && !img.src.endsWith('.svg')) {
+              cover = img.src;
             }
-          }
-        }
+            
+            // Chapter count from metachip
+            let chapterCount = 0;
+            const metachip = item.querySelector('.metachip');
+            if (metachip) {
+              const spans = metachip.querySelectorAll('span');
+              for (const span of spans) {
+                const text = span.textContent.trim();
+                const chMatch = text.match(/^Ch\.(\d+)/i);
+                if (chMatch) {
+                  chapterCount = parseInt(chMatch[1]);
+                  break;
+                }
+              }
+            }
+            
+            results.push({ title, url, cover, chapterCount });
+          });
+          
+          return results;
+        });
         
-        results.push({ title, url, cover, chapterCount, website: this.websiteName });
+        // Add website name
+        results.forEach(r => r.website = this.websiteName);
+        
+        console.log(`  [COMIX] Parsed ${results.length} results from Puppeteer DOM`);
+        if (results.length > 0) {
+          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? results[0].cover.substring(0, 50) + '...' : 'none'}`);
+        }
+        return results;
+      } finally {
+        await this.closePage();
       }
-      
-      console.log(`  [COMIX] Parsed ${results.length} results`);
-      if (results.length > 0) {
-        console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? results[0].cover.substring(0, 50) + '...' : 'none'}`);
-      }
-      return results;
     } catch (e) {
       console.error(`  [COMIX] Search failed: ${e.message}`);
       return [];
