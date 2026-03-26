@@ -185,9 +185,9 @@ export class ComixScraper extends BaseScraper {
       await this.createPageClean();
       
       try {
-        // Set a very large viewport so all items are "above the fold"
-        // React may not render off-screen items in a small viewport
-        await this.page.setViewport({ width: 1920, height: 8000 });
+        // Normal viewport so scrolling actually works 
+        // (8000px height prevented scrolling since all content fit)
+        await this.page.setViewport({ width: 1920, height: 1080 });
         
         // Set cookies from FlareSolverr if available
         if (fsCookies.length > 0) {
@@ -203,92 +203,72 @@ export class ComixScraper extends BaseScraper {
           timeout: 60000
         });
         
-        // Debug: check page title for CF challenge
+        // Check for CF challenge
         const pageTitle = await this.page.title();
         console.log(`  [COMIX] Page title: "${pageTitle}"`);
         if (pageTitle.includes('moment') || pageTitle.includes('Checking')) {
-          console.log(`  [COMIX] WARNING: Cloudflare challenge page detected in Puppeteer!`);
-          // Wait for challenge to resolve
-          await new Promise(r => setTimeout(r, 10000));
+          console.log(`  [COMIX] WARNING: CF challenge in Puppeteer, waiting...`);
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
         }
         
-        // Wait for initial React render
+        // Wait for React to render initial items
         await new Promise(r => setTimeout(r, 3000));
-        
-        // Wait for at least one search result item to appear
         await this.page.waitForSelector('.item a.title', { timeout: 15000 }).catch(() => {
-          console.log(`  [COMIX] No .item a.title found after 15s, continuing anyway...`);
+          console.log(`  [COMIX] No items found after 15s`);
         });
         
-        // Poll until item count stabilizes (React may render in batches)
-        let lastCount = 0;
-        let stableChecks = 0;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          const currentCount = await this.page.evaluate(() => {
-            return document.querySelectorAll('.item a.title').length;
-          });
+        // Scroll down incrementally, checking for new items after each scroll
+        // This triggers React lazy rendering and infinite scroll loading
+        console.log(`  [COMIX] Scrolling to load all results...`);
+        let prevCount = 0;
+        let stableScrolls = 0;
+        
+        for (let scrollAttempt = 0; scrollAttempt < 30; scrollAttempt++) {
+          // Count current items
+          const currentCount = await this.page.evaluate(() => 
+            document.querySelectorAll('.item a.title').length
+          );
           
-          if (currentCount === lastCount && currentCount > 0) {
-            stableChecks++;
-            if (stableChecks >= 3) {
-              console.log(`  [COMIX] Item count stable at ${currentCount} after ${attempt + 1} checks`);
-              break;
-            }
+          if (currentCount > prevCount) {
+            console.log(`  [COMIX] Items: ${currentCount} (was ${prevCount})`);
+            prevCount = currentCount;
+            stableScrolls = 0;
           } else {
-            stableChecks = 0;
+            stableScrolls++;
+            // After 5 stable checks while scrolling, we've likely loaded everything
+            if (stableScrolls >= 5) break;
           }
-          lastCount = currentCount;
+          
+          // Scroll down one viewport height
+          await this.page.evaluate(() => {
+            window.scrollBy(0, window.innerHeight);
+          });
           await new Promise(r => setTimeout(r, 500));
         }
         
-        // Scroll down and back up to trigger any lazy rendering
-        console.log(`  [COMIX] Scrolling to load all results and images...`);
+        // Scroll back to top for image loading
+        await this.page.evaluate(() => window.scrollTo(0, 0));
+        await new Promise(r => setTimeout(r, 1000));
+        
+        // Slow scroll through entire page to trigger all lazy-loaded images
         await this.page.evaluate(async () => {
-          // Scroll down slowly
-          const scrollStep = 500;
-          const scrollDelay = 200;
-          const maxHeight = document.body.scrollHeight;
-          
-          for (let y = 0; y < maxHeight; y += scrollStep) {
+          const step = 300;
+          const maxH = document.body.scrollHeight;
+          for (let y = 0; y < maxH; y += step) {
             window.scrollTo(0, y);
-            await new Promise(r => setTimeout(r, scrollDelay));
+            await new Promise(r => setTimeout(r, 150));
           }
-          // Ensure we're at the very bottom
-          window.scrollTo(0, document.body.scrollHeight);
-          await new Promise(r => setTimeout(r, 500));
-          
-          // Scroll back to top  
           window.scrollTo(0, 0);
-          await new Promise(r => setTimeout(r, 500));
         });
         
-        // Final wait for images to load
+        // Wait for images to finish loading
         await new Promise(r => setTimeout(r, 2000));
         
-        // Final item count
-        const finalCount = await this.page.evaluate(() => {
-          return document.querySelectorAll('.item a.title').length;
-        });
-        console.log(`  [COMIX] Final item count in DOM: ${finalCount}`);
-        
-        // Debug: log all items found
-        const debugItems = await this.page.evaluate(() => {
-          const items = document.querySelectorAll('.item');
-          return Array.from(items).map((item, i) => {
-            const titleEl = item.querySelector('a.title');
-            const img = item.querySelector('.poster img');
-            return {
-              index: i,
-              title: titleEl ? titleEl.textContent.trim() : '(no title)',
-              hasImg: !!img,
-              imgSrc: img ? (img.src || img.getAttribute('data-src') || '').substring(0, 60) : 'none'
-            };
-          });
-        });
-        console.log(`  [COMIX] All items in DOM:`);
-        debugItems.forEach(d => {
-          console.log(`    ${d.index}: "${d.title}" img: ${d.imgSrc}`);
-        });
+        const finalCount = await this.page.evaluate(() => 
+          document.querySelectorAll('.item a.title').length
+        );
+        console.log(`  [COMIX] Final item count: ${finalCount}`);
         
         // Extract results from the fully rendered DOM
         const results = await this.page.evaluate(() => {
@@ -308,7 +288,7 @@ export class ComixScraper extends BaseScraper {
             if (seen.has(url)) return;
             seen.add(url);
             
-            // Cover image - get the actual loaded src or data-src
+            // Cover image URL
             let cover = null;
             const img = item.querySelector('.poster img');
             if (img) {
@@ -318,7 +298,7 @@ export class ComixScraper extends BaseScraper {
               }
             }
             
-            // Chapter count from metachip
+            // Chapter count
             let chapterCount = 0;
             const metachip = item.querySelector('.metachip');
             if (metachip) {
@@ -339,12 +319,37 @@ export class ComixScraper extends BaseScraper {
           return results;
         });
         
+        // Capture cover images directly from Puppeteer using element screenshots
+        // This bypasses CDN hotlink protection since images are already loaded in the browser
+        const { default: fs } = await import('fs-extra');
+        const { default: pathMod } = await import('path');
+        const { CONFIG } = await import('../config.js');
+        
+        const cacheDir = pathMod.join(CONFIG.dataDir, 'covers', 'search-cache');
+        await fs.emptyDir(cacheDir);
+        
+        console.log(`  [COMIX] Capturing ${results.length} cover images from browser...`);
+        
+        // Get all poster img elements
+        const imgElements = await this.page.$$('.item .poster img');
+        
+        for (let i = 0; i < Math.min(results.length, imgElements.length); i++) {
+          try {
+            const filePath = pathMod.join(cacheDir, `search_${i}.jpg`);
+            await imgElements[i].screenshot({ path: filePath, type: 'jpeg', quality: 85 });
+            results[i].cover = `/covers/search-cache/search_${i}.jpg`;
+          } catch (e) {
+            // Keep the original URL as fallback
+            console.log(`  [COMIX] Failed to capture cover ${i}: ${e.message}`);
+          }
+        }
+        
         // Add website name
         results.forEach(r => r.website = this.websiteName);
         
-        console.log(`  [COMIX] Parsed ${results.length} results from Puppeteer DOM`);
+        console.log(`  [COMIX] Parsed ${results.length} results`);
         if (results.length > 0) {
-          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? results[0].cover.substring(0, 50) + '...' : 'none'}`);
+          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover}`);
         }
         return results;
       } finally {

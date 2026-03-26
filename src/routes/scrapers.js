@@ -114,14 +114,22 @@ router.get('/search', async (req, res) => {
     // Sort results by chapter count descending
     results.sort((a, b) => (b.chapterCount || 0) - (a.chapterCount || 0));
     
-    // Download covers in parallel and replace with local paths
-    console.log(`[API] Caching ${results.length} search cover images...`);
-    await Promise.all(results.map(async (result, i) => {
-      const localPath = await cacheSearchCover(result.cover, i);
-      if (localPath) {
-        result.cover = localPath;
-      }
-    }));
+    // Download covers in parallel for results that don't already have local paths
+    // (comix scraper captures covers directly via Puppeteer screenshots)
+    const needsDownload = results.filter(r => r.cover && !r.cover.startsWith('/covers/'));
+    if (needsDownload.length > 0) {
+      console.log(`[API] Caching ${needsDownload.length} search cover images...`);
+      await Promise.all(results.map(async (result, i) => {
+        if (result.cover && !result.cover.startsWith('/covers/')) {
+          const localPath = await cacheSearchCover(result.cover, i);
+          if (localPath) {
+            result.cover = localPath;
+          }
+        }
+      }));
+    } else {
+      console.log(`[API] All ${results.length} covers already cached locally`);
+    }
     
     res.json({
       success: true,
