@@ -858,6 +858,12 @@
     box-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
 
+/* Redefine scraper badge native wrapper style in case we use it */
+.badge-scraper {
+    background: var(--accent-secondary);
+    color: white;
+}
+
 .chapter-count-badge {
     position: absolute;
     bottom: var(--space-xs);

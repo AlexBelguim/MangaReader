@@ -168,6 +168,11 @@ export class ComixScraper extends BaseScraper {
     try {
       const { html } = await fetchPage(searchUrl);
       
+      // Guard against FlareSolverr returning the unsolved Cloudflare challenge HTML body
+      if (html.includes('Cloudflare') || html.includes('Ray ID:') || html.includes('Just a moment...')) {
+        throw new Error('FlareSolverr returned unresolved Cloudflare challenge page');
+      }
+      
       // Parse search results - Comix uses a grid layout
       const results = [];
       const itemRegex = /<a[^>]*href="([^"]*\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;

@@ -175,7 +175,7 @@ class ScraperView {
           <div class="manga-card-cover">
             <img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'placeholder\\'>🖼️</div>'">
             <div class="manga-card-badges">
-              <span class="badge badge-primary">${result.website}</span>
+              <span class="badge badge-scraper">${result.website}</span>
               ${result.chapterCount ? `<span class="badge badge-chapters">${result.chapterCount} ch</span>` : ''}
             </div>
           </div>
