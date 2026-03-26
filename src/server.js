@@ -32,6 +32,7 @@ import volumesRouter from './routes/volumes.js';
 import readerRouter from './routes/reader.js';
 import downloadsRouter, { queueBackgroundDownload } from './routes/downloads.js';
 import dataRouter from './routes/data.js';
+import scrapersRouter from './routes/scrapers.js';
 
 import { queue } from './queue.js';
 import { auth } from './middleware/auth.js';
@@ -293,6 +294,7 @@ app.use('/api/artists', artistsRouter);
 app.use('/api/series', seriesRouter);
 app.use('/api', downloadsRouter);             // Mixed prefixes: /api/bookmarks/:id/download, /api/downloads/*, /api/check-all, etc.
 app.use('/api', dataRouter);                  // /api/chapter-settings, /api/trophy-pages, /api/reader-settings, /api/push/*
+app.use('/api/scrapers', scrapersRouter);     // /api/scrapers/search, /api/scrapers/list
 
 // Queue Status
 app.get('/api/queue/status', (req, res) => {

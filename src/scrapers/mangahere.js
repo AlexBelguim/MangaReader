@@ -13,6 +13,10 @@ export class MangaHereScraper extends BaseScraper {
     return true;
   }
 
+  get supportsSearch() {
+    return true;
+  }
+
   async getMangaInfo(url) {
     await this.createPage();
     try {
@@ -132,6 +136,47 @@ export class MangaHereScraper extends BaseScraper {
 
       console.log(`  Found ${firstPageChapters.length} chapters, ${newChapters.length} new`);
       return { hasUpdates: newChapters.length > 0, latestChapter, newChapters, firstPageChapters };
+    } finally {
+      await this.closePage();
+    }
+  }
+
+  async search(query) {
+    await this.createPage();
+    try {
+      const searchUrl = `https://newm.mangahere.cc/search?title=${encodeURIComponent(query)}`;
+      console.log(`  [MangaHere] Searching: ${searchUrl}`);
+      await this.page.setCookie({ name: 'isAdult', value: '1', domain: '.mangahere.cc' });
+      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.randomDelay(1000, 2000);
+
+      const results = await this.page.evaluate(() => {
+        // Fallback for both desktop and mobile views
+        const items = document.querySelectorAll('.manga-list-4-list > li, .manga-list-2 > li, .manga-list-1-list > li');
+        const list = [];
+        items.forEach(li => {
+          // Mobile usually has .manga-list-2-title > a, desktop has .manga-list-4-item-title > a
+          const a = li.querySelector('.manga-list-4-item-title > a, .manga-list-2-title > a, .manga-list-1-item-title > a');
+          if (!a) return;
+          const url = a.href.startsWith('http') ? a.href : window.location.origin + a.getAttribute('href');
+          const title = a.title || a.textContent.trim();
+          
+          let img = li.querySelector('img.manga-list-4-cover, .manga-list-2-cover img, .manga-list-1-cover img');
+          const cover = img ? (img.src || img.dataset.src || img.getAttribute('data-src')) : null;
+          
+          let chapterCount = 0;
+          const sub = li.querySelector('.manga-list-4-item-subtitle > a, .manga-list-2-item-subtitle > a, .manga-list-1-item-subtitle > a');
+          if (sub) {
+            const match = sub.textContent.match(/(\d+(?:\.\d+)?)/);
+            if (match) chapterCount = parseFloat(match[1]);
+          }
+
+          list.push({ title, url, cover, chapterCount });
+        });
+        return list;
+      });
+
+      return results;
     } finally {
       await this.closePage();
     }

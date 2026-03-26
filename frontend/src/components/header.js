@@ -27,6 +27,7 @@ export function renderHeader(viewMode = 'manga') {
       : '<button class="btn btn-primary" id="add-manga-btn">+ Add Manga</button>'
     }
           <button class="btn btn-secondary" id="logout-btn">🚪</button>
+          <a href="#/scrapers" class="btn btn-secondary" title="Search Scrapers">🔍</a>
           <a href="#/admin" class="btn btn-secondary" title="Admin">🔧</a>
           <a href="#/settings" class="btn btn-secondary" title="Settings">⚙️</a>
         </div>
@@ -47,6 +48,7 @@ export function renderHeader(viewMode = 'manga') {
       : '<button class="mobile-menu-item primary" id="mobile-add-btn">+ Add Manga</button>'
     }
         <button class="mobile-menu-item" id="mobile-logout-btn">🚪 Logout</button>
+        <a href="#/scrapers" class="mobile-menu-item">🔍 Scrapers</a>
         <a href="#/admin" class="mobile-menu-item">🔧 Admin</a>
         <a href="#/settings" class="mobile-menu-item">⚙️ Settings</a>
       </div>

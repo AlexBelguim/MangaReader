@@ -106,6 +106,7 @@ import settingsView from './views/settings.js';
 import adminView from './views/admin.js';
 import favoritesView from './views/favorites.js';
 import queueView from './views/queue.js';
+import scraperView from './views/scrapers.js';
 
 // Register routes
 router.register('/', libraryView);
@@ -116,6 +117,7 @@ router.register('/settings', settingsView);
 router.register('/admin', adminView);
 router.register('/favorites', favoritesView);
 router.register('/queue', queueView);
+router.register('/scrapers', scraperView);
 
 export { router };
 export default router;

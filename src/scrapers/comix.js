@@ -20,6 +20,10 @@ export class ComixScraper extends BaseScraper {
     return true;
   }
 
+  get supportsSearch() {
+    return true;
+  }
+
   /**
    * Parse chapter links from HTML string
    * @param {string} html - Page HTML
@@ -153,8 +157,102 @@ export class ComixScraper extends BaseScraper {
     } catch (error) {
       console.log(`  [COMIX] FlareSolverr FAILED: ${error.message}`);
       console.log(`  [COMIX] Falling back to direct puppeteer...`);
-      // Fallback: try direct puppeteer (may work if Cloudflare is down)
       return this.quickCheckUpdatesDirect(url, knownChapterUrls);
+    }
+  }
+
+  async search(query) {
+    const searchUrl = `https://comix.to/search?q=${encodeURIComponent(query)}`;
+    console.log(`  [COMIX] Searching: ${searchUrl}`);
+    
+    try {
+      const { html } = await fetchPage(searchUrl);
+      
+      // Parse search results - Comix uses a grid layout
+      const results = [];
+      const itemRegex = /<a[^>]*href="([^"]*\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let match;
+      
+      while ((match = itemRegex.exec(html)) !== null) {
+        let href = match[1];
+        if (href.startsWith('/')) href = 'https://comix.to' + href;
+        
+        const content = match[2];
+        
+        // Extract Title from h3
+        const titleMatch = content.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+        const titleFragment = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+        // If Title is empty, might be an image wrapper, skip it
+        if (!titleFragment) continue;
+        
+        // Extract Cover from img
+        let cover = null;
+        const imgMatch = content.match(/<img[^>]*src="([^"]*)"/i);
+        if (imgMatch) cover = imgMatch[1];
+        
+        // Extract Chapters from spans
+        const chapMatch = content.match(/>([\s\d]+)[\s]*Ch(apters?)?</i);
+        const chapterCount = chapMatch ? parseInt(chapMatch[1].trim()) : 0;
+        
+        results.push({
+          title: titleFragment,
+          url: href,
+          cover,
+          chapterCount
+        });
+      }
+      
+      // Filter out weird or empty titles
+      return results.filter(r => r.title);
+    } catch (error) {
+      console.log(`  [COMIX] FlareSolverr search FAILED: ${error.message}, fallback to direct...`);
+      return this.searchDirect(searchUrl);
+    }
+  }
+
+  async searchDirect(searchUrl) {
+    await this.createPage();
+    try {
+      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.randomDelay(1000, 2000);
+      
+      return await this.page.evaluate(() => {
+        const items = document.querySelectorAll('a[href*="/title/"]');
+        const list = [];
+        items.forEach(a => {
+          const href = a.href.startsWith('http') ? a.href : window.location.origin + a.getAttribute('href');
+          const h3 = a.querySelector('h3');
+          if (!h3) return; // Ignore image wrapper links if they don't contain h3
+          
+          const title = h3.textContent.trim();
+          const img = a.querySelector('img');
+          const cover = img ? img.src : null;
+          
+          let chapterCount = 0;
+          const spans = a.querySelectorAll('span');
+          spans.forEach(span => {
+            if (span.textContent.toLowerCase().includes('ch')) {
+              chapterCount = parseInt(span.textContent) || 0;
+            }
+          });
+          
+          list.push({ title, url: href, cover, chapterCount });
+        });
+        
+        // Deduplicate by URL
+        const unique = [];
+        const seen = new Set();
+        list.forEach(i => {
+          if (!seen.has(i.url)) {
+            seen.add(i.url);
+            unique.push(i);
+          }
+        });
+        
+        return unique;
+      });
+    } finally {
+      await this.closePage();
     }
   }
 

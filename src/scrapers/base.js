@@ -22,6 +22,11 @@ export class BaseScraper {
     return false;
   }
 
+  // Whether this scraper supports searching
+  get supportsSearch() {
+    return false;
+  }
+
   // Check if this scraper can handle the given URL
   canHandle(url) {
     return this.urlPatterns.some(pattern => url.includes(pattern));
@@ -82,6 +87,12 @@ export class BaseScraper {
   // Returns: { hasUpdates: boolean, latestChapter: number|null, newChapters: array }
   async quickCheckUpdates(url, knownChapters = []) {
     throw new Error('quickCheckUpdates not supported by this scraper');
+  }
+
+  // Search for manga by query - optional, override in subclass
+  // Returns array of { title, url, cover, chapterCount }
+  async search(query) {
+    throw new Error('search not supported by this scraper');
   }
 
   // Helper to wait with random delay

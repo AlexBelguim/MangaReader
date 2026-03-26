@@ -51,6 +51,29 @@ class ScraperFactory {
   getSupportedWebsites() {
     return this.scrapers.map(s => s.websiteName);
   }
+
+  getSearchableScrapers() {
+    return this.scrapers.filter(s => s.supportsSearch);
+  }
+
+  async searchAll(query) {
+    const searchable = this.getSearchableScrapers();
+    if (searchable.length === 0) return [];
+
+    const promises = searchable.map(async scraper => {
+      try {
+        const results = await scraper.search(query);
+        // Tag each result with the website name
+        return results.map(r => ({ ...r, website: scraper.websiteName }));
+      } catch (e) {
+        console.error(`[ScraperFactory] search failed for ${scraper.websiteName}: ${e.message}`);
+        return [];
+      }
+    });
+
+    const resultsArray = await Promise.all(promises);
+    return resultsArray.flat();
+  }
 }
 
 export const scraperFactory = new ScraperFactory();
