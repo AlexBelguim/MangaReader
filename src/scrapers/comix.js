@@ -1,5 +1,5 @@
 import { BaseScraper } from './base.js';
-import { fetchPage, toPuppeteerCookies, isAvailable } from './flaresolverr.js';
+import { fetchPage, isAvailable } from './flaresolverr.js';
 
 /**
  * Scraper for comix.to website
@@ -166,152 +166,84 @@ export class ComixScraper extends BaseScraper {
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      // Step 1: Use FlareSolverr to solve Cloudflare and get cookies
-      const { html, cookies, userAgent } = await fetchPage(searchUrl);
+      // Fetch page via FlareSolverr (solves Cloudflare)
+      const { html } = await fetchPage(searchUrl);
       
-      // Debug: Check what FlareSolverr returned
-      console.log(`  [COMIX] FlareSolverr HTML length: ${html.length}`);
-      console.log(`  [COMIX] HTML contains "Dandadan": ${html.includes('Dandadan')}`);
-      console.log(`  [COMIX] HTML contains "dandadan": ${html.includes('dandadan')}`);
-      console.log(`  [COMIX] Count of class="item": ${(html.match(/class="item"/g) || []).length}`);
-      console.log(`  [COMIX] Count of class="title": ${(html.match(/class="title"/g) || []).length}`);
-      console.log(`  [COMIX] Count of /title/ hrefs: ${(html.match(/href="\/title\//g) || []).length}`);
-      
-      // Check for __NEXT_DATA__ or embedded API data
-      const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
-      if (nextDataMatch) {
-        console.log(`  [COMIX] Found __NEXT_DATA__ (${nextDataMatch[1].length} chars)`);
-        try {
-          const data = JSON.parse(nextDataMatch[1]);
-          console.log(`  [COMIX] __NEXT_DATA__ keys: ${Object.keys(data).join(', ')}`);
-          if (data.props?.pageProps) {
-            console.log(`  [COMIX] pageProps keys: ${Object.keys(data.props.pageProps).join(', ')}`);
-          }
-        } catch(e) { console.log(`  [COMIX] Failed to parse __NEXT_DATA__: ${e.message}`); }
-      } else {
-        console.log(`  [COMIX] No __NEXT_DATA__ found`);
+      // Guard: check for unresolved Cloudflare challenge
+      if (html.includes('<title>Just a moment...</title>')) {
+        throw new Error('FlareSolverr returned unresolved Cloudflare challenge');
       }
       
-      // Look for any fetch/API URLs in scripts
-      const apiUrls = html.match(/["'](https?:\/\/[^"']*api[^"']*|\/api\/[^"']*)/gi) || [];
-      console.log(`  [COMIX] API URLs found: ${[...new Set(apiUrls)].slice(0, 5).join(', ') || 'none'}`);
+      // Parse results directly from FlareSolverr HTML
+      // Exact DOM structure (verified from page source):
+      //   div.comic.lg > div.item > div.inner >
+      //     div.poster > div > <img loading="lazy" alt="Title" src="https://static.comix.to/...">
+      //     div.detail > <a class="title" href="/title/slug">Title</a>
+      //                  <div class="metachip"> <span>Ch.229</span> ... </div>
       
-      // Step 2: Use Puppeteer with those cookies to properly parse the DOM
-      await this.createPage();
-      try {
-        const puppeteerCookies = toPuppeteerCookies(cookies, '.comix.to');
-        if (puppeteerCookies.length > 0) {
-          await this.page.setCookie(...puppeteerCookies);
-        }
-        if (userAgent) {
-          await this.page.setUserAgent(userAgent);
+      // Split HTML by item boundaries
+      const itemBlocks = html.split(/class="item"/g);
+      console.log(`  [COMIX] Found ${itemBlocks.length - 1} item blocks`);
+      
+      const results = [];
+      const seen = new Set();
+      
+      // Skip first block (everything before the first item)
+      for (let i = 1; i < itemBlocks.length; i++) {
+        const block = itemBlocks[i];
+        // Only process blocks that contain a title link (skip nav/sidebar items)
+        const titleMatch = block.match(/<a\s+class="title"\s+href="(\/title\/[^"]+)"[^>]*>([^<]+)<\/a>/i);
+        if (!titleMatch) continue;
+        
+        const url = 'https://comix.to' + titleMatch[1];
+        if (seen.has(url)) continue;
+        seen.add(url);
+        
+        const title = titleMatch[2].trim();
+        if (!title) continue;
+        
+        // Extract cover image - look for img with src containing static.comix.to
+        let cover = null;
+        const imgMatch = block.match(/<img[^>]*src="(https:\/\/static\.comix\.to\/[^"]+)"/i);
+        if (imgMatch) {
+          cover = imgMatch[1];
+        } else {
+          // Fallback: any img with a real src (not svg/icon)
+          const anyImg = block.match(/<img[^>]*src="(https?:\/\/[^"]+)"/i);
+          if (anyImg && !anyImg[1].endsWith('.svg')) cover = anyImg[1];
         }
         
-        await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        
-        // Wait for React to hydrate and render all results
-        // Poll until item count stabilizes (stops increasing)
-        let prevCount = 0;
-        let stableChecks = 0;
-        for (let i = 0; i < 15; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          const count = await this.page.$$eval('.comic .item, main .item', items => items.length).catch(() => 0);
-          console.log(`  [COMIX] Wait check ${i+1}: ${count} items`);
-          if (count > 0 && count === prevCount) {
-            stableChecks++;
-            if (stableChecks >= 2) break; // Stable for 2 consecutive checks
-          } else {
-            stableChecks = 0;
+        // Extract chapter count from metachip spans
+        // Metachip has individual <span> elements: <span>Ch.229</span>
+        let chapterCount = 0;
+        const metachipMatch = block.match(/class="metachip">([\s\S]*?)<\/div>/i);
+        if (metachipMatch) {
+          const metachipHtml = metachipMatch[1];
+          const spans = metachipHtml.match(/<span[^>]*>([^<]*)<\/span>/gi) || [];
+          for (const span of spans) {
+            const text = span.replace(/<[^>]*>/g, '').trim();
+            const chMatch = text.match(/^Ch\.(\d+)/i);
+            if (chMatch) {
+              chapterCount = parseInt(chMatch[1]);
+              break;
+            }
           }
-          prevCount = count;
         }
         
-        // Scroll to trigger lazy-loaded cover images
-        await this.page.evaluate(() => {
-          return new Promise((resolve) => {
-            let totalHeight = 0;
-            const distance = 400;
-            const timer = setInterval(() => {
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-              if (totalHeight >= document.body.scrollHeight) {
-                clearInterval(timer);
-                window.scrollTo(0, 0);
-                resolve();
-              }
-            }, 150);
-          });
+        results.push({
+          title,
+          url,
+          cover,
+          chapterCount,
+          website: this.websiteName
         });
-        await this.randomDelay(1500, 2000);
-        
-        // Step 3: Extract results using real DOM APIs
-        // DOM: div.comic > div.item > div.inner > [div.poster > a > img] + [div.detail > a.title]
-        const results = await this.page.evaluate(() => {
-          // Use specific selector to avoid matching navbar/sidebar items
-          const items = document.querySelectorAll('.comic .item, main .item');
-          const list = [];
-          const seen = new Set();
-          
-          items.forEach(item => {
-            // Get title from a.title link
-            const titleLink = item.querySelector('a.title');
-            if (!titleLink) return;
-            
-            const href = titleLink.href;
-            if (seen.has(href)) return;
-            seen.add(href);
-            
-            const title = titleLink.textContent.trim();
-            if (!title) return;
-            
-            // Get cover from poster img
-            const posterImg = item.querySelector('.poster img');
-            let cover = null;
-            if (posterImg) {
-              cover = posterImg.getAttribute('src') || posterImg.dataset?.src || posterImg.getAttribute('data-src') || null;
-              // Skip empty/placeholder src
-              if (cover && (cover === '' || cover === 'about:blank' || cover.startsWith('data:'))) {
-                cover = null;
-              }
-            }
-            
-            // Get chapter count - look for specific metachip spans
-            // Metachip format: #1496 MANGA 2021 RELEASING Ch.229 📚10,846 ⭐9
-            let chapterCount = 0;
-            const metachipSpans = item.querySelectorAll('.metachip span, .meta span');
-            for (const span of metachipSpans) {
-              const text = span.textContent.trim();
-              const chMatch = text.match(/^Ch\.?\s*(\d+)/i);
-              if (chMatch) {
-                chapterCount = parseInt(chMatch[1]);
-                break;
-              }
-            }
-            // Fallback: search metachip text more carefully
-            if (!chapterCount) {
-              const metaEl = item.querySelector('.metachip');
-              if (metaEl) {
-                const metaText = metaEl.textContent;
-                const chMatch = metaText.match(/\bCh\.?\s*(\d+)/i);
-                if (chMatch) chapterCount = parseInt(chMatch[1]);
-              }
-            }
-            
-            list.push({ title, url: href, cover, chapterCount });
-          });
-          
-          return list;
-        });
-        
-        console.log(`  [COMIX] Parsed ${results.length} results via Puppeteer`);
-        if (results.length > 0) {
-          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? 'yes' : 'no'}`);
-        }
-        
-        return results.map(r => ({ ...r, website: this.websiteName }));
-      } finally {
-        await this.closePage();
       }
+      
+      console.log(`  [COMIX] Parsed ${results.length} results`);
+      if (results.length > 0) {
+        console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? results[0].cover.substring(0, 50) + '...' : 'none'}`);
+      }
+      return results;
     } catch (e) {
       console.error(`  [COMIX] Search failed: ${e.message}`);
       return [];
