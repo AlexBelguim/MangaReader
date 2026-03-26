@@ -167,7 +167,8 @@ export class ComixScraper extends BaseScraper {
     
     try {
       // Fetch page via FlareSolverr (solves Cloudflare)
-      const { html } = await fetchPage(searchUrl);
+      // Wait 5s after challenge for React to render all results
+      const { html } = await fetchPage(searchUrl, 60000, 5000);
       
       // Guard: check for unresolved Cloudflare challenge
       if (html.includes('<title>Just a moment...</title>')) {

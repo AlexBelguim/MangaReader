@@ -32,21 +32,29 @@ export async function isAvailable() {
  * 
  * @param {string} url - URL to fetch
  * @param {number} maxTimeout - Max time to wait for challenge solving (ms)
+ * @param {number} waitTime - Extra time to wait AFTER challenge is solved (ms) - useful for SPAs that render dynamically
  * @returns {{ html: string, cookies: Array, userAgent: string, status: number, url: string }}
  */
-export async function fetchPage(url, maxTimeout = 60000) {
-  console.log(`  [FlareSolverr] Fetching: ${url} (via ${FLARESOLVERR_URL})`);
+export async function fetchPage(url, maxTimeout = 60000, waitTime = 0) {
+  console.log(`  [FlareSolverr] Fetching: ${url} (via ${FLARESOLVERR_URL}${waitTime ? `, wait: ${waitTime}ms` : ''})`);
+
+  const body = {
+    cmd: 'request.get',
+    url: url,
+    maxTimeout: maxTimeout
+  };
+  // Add wait parameter if specified - FlareSolverr will wait this many ms 
+  // after the challenge is solved before capturing the page HTML
+  if (waitTime > 0) {
+    body.wait = waitTime;
+  }
 
   let response;
   try {
     response = await fetch(FLARESOLVERR_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cmd: 'request.get',
-        url: url,
-        maxTimeout: maxTimeout
-      })
+      body: JSON.stringify(body)
     });
   } catch (fetchErr) {
     throw new Error(`FlareSolverr connection failed: ${fetchErr.message}`);
