@@ -3,12 +3,15 @@ import { CONFIG } from '../config.js';
 import { ComixScraper } from './comix.js';
 import { ChainedSoldierScraper } from './chainedsoldier.js';
 import { NhentaiScraper } from './nhentai.js';
+import { MangaHereScraper } from './mangahere.js';
+
 
 // Add more scrapers here as you add support for more websites
 const SCRAPERS = [
   ComixScraper,
   ChainedSoldierScraper,
   NhentaiScraper,
+  MangaHereScraper,
   // Add more scrapers here:
   // MangadexScraper,
   // MangareaderScraper,
