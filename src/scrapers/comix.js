@@ -166,33 +166,60 @@ export class ComixScraper extends BaseScraper {
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      // Fetch page via FlareSolverr (solves Cloudflare)
-      // Wait 5s after challenge for React to render all results
-      const { html } = await fetchPage(searchUrl, 60000, 5000);
+      // Step 1: Use FlareSolverr to solve Cloudflare and get bypass cookies
+      const { cookies, userAgent } = await fetchPage(searchUrl);
+      
+      // Step 2: Make a direct HTTP request with the CF bypass cookies
+      // This gets the full server-rendered HTML (FlareSolverr's browser may not render all React content)
+      const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      console.log(`  [COMIX] Making direct fetch with ${cookies.length} cookies...`);
+      
+      let html;
+      try {
+        const directResponse = await fetch(searchUrl, {
+          headers: {
+            'Cookie': cookieHeader,
+            'User-Agent': userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://comix.to/',
+          }
+        });
+        
+        if (directResponse.ok) {
+          html = await directResponse.text();
+          console.log(`  [COMIX] Direct fetch returned ${html.length} chars`);
+        } else {
+          console.log(`  [COMIX] Direct fetch returned ${directResponse.status}, falling back to FlareSolverr HTML`);
+          // Fall back to FlareSolverr's HTML
+          const fsResult = await fetchPage(searchUrl);
+          html = fsResult.html;
+        }
+      } catch (fetchErr) {
+        console.log(`  [COMIX] Direct fetch failed: ${fetchErr.message}, using FlareSolverr HTML`);
+        const fsResult = await fetchPage(searchUrl);
+        html = fsResult.html;
+      }
       
       // Guard: check for unresolved Cloudflare challenge
       if (html.includes('<title>Just a moment...</title>')) {
-        throw new Error('FlareSolverr returned unresolved Cloudflare challenge');
+        throw new Error('Received unresolved Cloudflare challenge page');
       }
       
-      // Parse results directly from FlareSolverr HTML
-      // Exact DOM structure (verified from page source):
-      //   div.comic.lg > div.item > div.inner >
-      //     div.poster > div > <img loading="lazy" alt="Title" src="https://static.comix.to/...">
-      //     div.detail > <a class="title" href="/title/slug">Title</a>
-      //                  <div class="metachip"> <span>Ch.229</span> ... </div>
+      // Parse results from HTML
+      // DOM: div.comic.lg > div.item > div.inner >
+      //   div.poster > div > <img loading="lazy" alt="Title" src="https://static.comix.to/...">
+      //   div.detail > <a class="title" href="/title/slug">Title</a>
+      //                <div class="metachip"> <span>Ch.229</span> ... </div>
       
-      // Split HTML by item boundaries
       const itemBlocks = html.split(/class="item"/g);
       console.log(`  [COMIX] Found ${itemBlocks.length - 1} item blocks`);
       
       const results = [];
       const seen = new Set();
       
-      // Skip first block (everything before the first item)
       for (let i = 1; i < itemBlocks.length; i++) {
         const block = itemBlocks[i];
-        // Only process blocks that contain a title link (skip nav/sidebar items)
         const titleMatch = block.match(/<a\s+class="title"\s+href="(\/title\/[^"]+)"[^>]*>([^<]+)<\/a>/i);
         if (!titleMatch) continue;
         
@@ -203,24 +230,21 @@ export class ComixScraper extends BaseScraper {
         const title = titleMatch[2].trim();
         if (!title) continue;
         
-        // Extract cover image - look for img with src containing static.comix.to
+        // Cover image
         let cover = null;
         const imgMatch = block.match(/<img[^>]*src="(https:\/\/static\.comix\.to\/[^"]+)"/i);
         if (imgMatch) {
           cover = imgMatch[1];
         } else {
-          // Fallback: any img with a real src (not svg/icon)
           const anyImg = block.match(/<img[^>]*src="(https?:\/\/[^"]+)"/i);
           if (anyImg && !anyImg[1].endsWith('.svg')) cover = anyImg[1];
         }
         
-        // Extract chapter count from metachip spans
-        // Metachip has individual <span> elements: <span>Ch.229</span>
+        // Chapter count from metachip spans
         let chapterCount = 0;
         const metachipMatch = block.match(/class="metachip">([\s\S]*?)<\/div>/i);
         if (metachipMatch) {
-          const metachipHtml = metachipMatch[1];
-          const spans = metachipHtml.match(/<span[^>]*>([^<]*)<\/span>/gi) || [];
+          const spans = metachipMatch[1].match(/<span[^>]*>([^<]*)<\/span>/gi) || [];
           for (const span of spans) {
             const text = span.replace(/<[^>]*>/g, '').trim();
             const chMatch = text.match(/^Ch\.(\d+)/i);
@@ -231,13 +255,7 @@ export class ComixScraper extends BaseScraper {
           }
         }
         
-        results.push({
-          title,
-          url,
-          cover,
-          chapterCount,
-          website: this.websiteName
-        });
+        results.push({ title, url, cover, chapterCount, website: this.websiteName });
       }
       
       console.log(`  [COMIX] Parsed ${results.length} results`);
