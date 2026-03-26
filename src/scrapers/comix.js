@@ -173,6 +173,13 @@ export class ComixScraper extends BaseScraper {
         throw new Error('FlareSolverr returned unresolved Cloudflare challenge HTML');
       }
       
+      // Debug: log HTML structure to understand parsing issues
+      console.log(`  [COMIX] HTML length: ${html.length}`);
+      console.log(`  [COMIX] Title: ${(html.match(/<title>(.*?)<\/title>/i) || ['','unknown'])[1]}`);
+      console.log(`  [COMIX] Contains /title/ links: ${(html.match(/\/title\//g) || []).length}`);
+      console.log(`  [COMIX] Contains <h3>: ${(html.match(/<h3/g) || []).length}`);
+      console.log(`  [COMIX] First 3000 chars of body:`, html.substring(html.indexOf('<body'), html.indexOf('<body') + 3000));
+      
       // Parse search results - Comix uses a grid layout
       const results = [];
       const itemRegex = /<a[^>]*href="([^"]*\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
