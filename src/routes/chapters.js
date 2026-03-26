@@ -174,16 +174,24 @@ router.post('/:bookmarkId/hide-version', async (req, res) => {
             description: `Hid version of chapter ${chapterNumber}`
         });
 
-        // Delete the folder if it exists
-        try {
-            await downloader.deleteChapter(
-                bookmark.title,
-                chapterNumber,
-                bookmark.alias,
-                url
-            );
-        } catch (e) {
-            // Ignore errors if folder doesn't exist
+        // Only delete the folder if this version was actually downloaded
+        // This prevents hiding a non-downloaded version from accidentally
+        // deleting another version's files on disk
+        const isDownloaded = db.prepare(
+            'SELECT COUNT(*) as count FROM downloaded_versions WHERE bookmark_id = ? AND url = ?'
+        ).get(bookmarkId, url);
+
+        if (isDownloaded.count > 0) {
+            try {
+                await downloader.deleteChapter(
+                    bookmark.title,
+                    chapterNumber,
+                    bookmark.alias,
+                    url
+                );
+            } catch (e) {
+                // Ignore errors if folder doesn't exist
+            }
         }
 
         // Add URL to deleted_chapter_urls

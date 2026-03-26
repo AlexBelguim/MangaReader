@@ -476,17 +476,21 @@ class Downloader {
       if (!await fs.pathExists(chapterDir)) {
         const existingVersions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
 
-        // If there's only one version (unversioned base folder), delete that specific one
-        if (existingVersions.length === 1 && !existingVersions[0].isVersioned) {
-          chapterDir = existingVersions[0].path;
-        } else if (existingVersions.length > 0) {
+        if (existingVersions.length > 0) {
           // Try to find matching version by hash
           const matchingVersion = existingVersions.find(v => v.version === version);
           if (matchingVersion) {
             chapterDir = matchingVersion.path;
+          } else if (existingVersions.length === 1 && !existingVersions[0].isVersioned) {
+            // Only one folder exists and it's the unversioned base folder.
+            // This is safe to delete ONLY if there are no other versioned folders —
+            // meaning this base folder must belong to the URL we're trying to delete
+            // (it was the first/only download so it got no version suffix).
+            chapterDir = existingVersions[0].path;
           } else {
-            // Can't find the specific version folder
-            return { success: false, message: 'Version folder not found' };
+            // Multiple folders exist or the single folder is versioned but doesn't
+            // match our hash — the version was likely never downloaded.
+            return { success: true, message: 'Version not on disk (nothing to delete)' };
           }
         } else {
           return { success: false, message: 'No versions found' };
