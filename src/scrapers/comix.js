@@ -209,15 +209,28 @@ export class ComixScraper extends BaseScraper {
         
         await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         
-        // Wait for items to render
-        await this.page.waitForSelector('.comic .item, .item', { timeout: 10000 }).catch(() => {});
-        await this.randomDelay(500, 1000);
+        // Wait for React to hydrate and render all results
+        // Poll until item count stabilizes (stops increasing)
+        let prevCount = 0;
+        let stableChecks = 0;
+        for (let i = 0; i < 15; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const count = await this.page.$$eval('.comic .item, main .item', items => items.length).catch(() => 0);
+          console.log(`  [COMIX] Wait check ${i+1}: ${count} items`);
+          if (count > 0 && count === prevCount) {
+            stableChecks++;
+            if (stableChecks >= 2) break; // Stable for 2 consecutive checks
+          } else {
+            stableChecks = 0;
+          }
+          prevCount = count;
+        }
         
-        // Scroll to trigger lazy-loaded images
+        // Scroll to trigger lazy-loaded cover images
         await this.page.evaluate(() => {
           return new Promise((resolve) => {
             let totalHeight = 0;
-            const distance = 300;
+            const distance = 400;
             const timer = setInterval(() => {
               window.scrollBy(0, distance);
               totalHeight += distance;
@@ -226,10 +239,10 @@ export class ComixScraper extends BaseScraper {
                 window.scrollTo(0, 0);
                 resolve();
               }
-            }, 100);
+            }, 150);
           });
         });
-        await this.randomDelay(1000, 1500);
+        await this.randomDelay(1500, 2000);
         
         // Step 3: Extract results using real DOM APIs
         // DOM: div.comic > div.item > div.inner > [div.poster > a > img] + [div.detail > a.title]
