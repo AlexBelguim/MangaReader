@@ -177,6 +177,25 @@ export class ComixScraper extends BaseScraper {
       console.log(`  [COMIX] Count of class="title": ${(html.match(/class="title"/g) || []).length}`);
       console.log(`  [COMIX] Count of /title/ hrefs: ${(html.match(/href="\/title\//g) || []).length}`);
       
+      // Check for __NEXT_DATA__ or embedded API data
+      const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+      if (nextDataMatch) {
+        console.log(`  [COMIX] Found __NEXT_DATA__ (${nextDataMatch[1].length} chars)`);
+        try {
+          const data = JSON.parse(nextDataMatch[1]);
+          console.log(`  [COMIX] __NEXT_DATA__ keys: ${Object.keys(data).join(', ')}`);
+          if (data.props?.pageProps) {
+            console.log(`  [COMIX] pageProps keys: ${Object.keys(data.props.pageProps).join(', ')}`);
+          }
+        } catch(e) { console.log(`  [COMIX] Failed to parse __NEXT_DATA__: ${e.message}`); }
+      } else {
+        console.log(`  [COMIX] No __NEXT_DATA__ found`);
+      }
+      
+      // Look for any fetch/API URLs in scripts
+      const apiUrls = html.match(/["'](https?:\/\/[^"']*api[^"']*|\/api\/[^"']*)/gi) || [];
+      console.log(`  [COMIX] API URLs found: ${[...new Set(apiUrls)].slice(0, 5).join(', ') || 'none'}`);
+      
       // Step 2: Use Puppeteer with those cookies to properly parse the DOM
       await this.createPage();
       try {
