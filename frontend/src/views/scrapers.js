@@ -42,12 +42,8 @@ class ScraperView {
 
   async loadScrapers() {
     try {
-      const response = await fetch('/api/scrapers/list', {
-        headers: { 'Authorization': `Bearer ${api.token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        // Only keep scrapers that support search
+      const data = await api.get('/scrapers/list');
+      if (data.success) {
         this.scrapers = data.scrapers.filter(s => s.supportsSearch);
         this.renderScraperOptions();
       }
@@ -136,11 +132,7 @@ class ScraperView {
     `;
 
     try {
-      const response = await fetch(`/api/scrapers/search?q=${encodeURIComponent(this.currentQuery)}&scraper=${encodeURIComponent(this.currentTarget)}`, {
-        headers: { 'Authorization': `Bearer ${api.token}` }
-      });
-      
-      const data = await response.json();
+      const data = await api.get(`/scrapers/search?q=${encodeURIComponent(this.currentQuery)}&scraper=${encodeURIComponent(this.currentTarget)}`);
       
       if (data.success) {
         this.results = data.results || [];
