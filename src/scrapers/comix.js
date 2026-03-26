@@ -166,149 +166,95 @@ export class ComixScraper extends BaseScraper {
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      const { html } = await fetchPage(searchUrl);
+      // Step 1: Use FlareSolverr to solve Cloudflare and get cookies
+      const { cookies, userAgent } = await fetchPage(searchUrl);
       
-      // Guard against FlareSolverr returning the unsolved Cloudflare challenge HTML body
-      if (html.includes('<title>Just a moment...</title>') || html.includes('cf-browser-verification')) {
-        throw new Error('FlareSolverr returned unresolved Cloudflare challenge HTML');
-      }
-      
-      // Parse search results from the /browser page
-      // DOM structure (from inspector):
-      //   div.item > div.inner >
-      //     div.poster > <a href="/title/..."> <img src="https://static.comix.to/..."> </a>
-      //     div.detail > <a class="title" href="/title/...">Title Text</a>
-      // The same href appears TWICE per result (poster link + title link), so we collect ALL
-      // positions and merge the best title + cover from all contexts for each URL.
-      
-      const hrefRegex = /href="(\/title\/[^"]*)"/gi;
-      let hrefMatch;
-      
-      // Collect ALL positions per unique URL
-      const urlPositions = new Map();
-      while ((hrefMatch = hrefRegex.exec(html)) !== null) {
-        const path = hrefMatch[1];
-        const url = 'https://comix.to' + path;
-        if (!urlPositions.has(url)) urlPositions.set(url, []);
-        urlPositions.get(url).push(hrefMatch.index);
-      }
-      
-      console.log(`  [COMIX] Found ${urlPositions.size} unique /title/ URLs`);
-      
-      const results = [];
-      for (const [url, positions] of urlPositions) {
-        let title = '';
-        let cover = null;
-        let chapterCount = 0;
-        
-        // Scan context around ALL positions of this URL
-        for (const pos of positions) {
-          const start = Math.max(0, pos - 800);
-          const end = Math.min(html.length, pos + 800);
-          const context = html.substring(start, end);
-          
-          // --- Extract Title ---
-          if (!title) {
-            // 1. Look for <a class="title"...>Text</a>
-            const titleLinkMatch = context.match(/class="title"[^>]*>([^<]+)</i);
-            if (titleLinkMatch && titleLinkMatch[1].trim().length > 1) {
-              title = titleLinkMatch[1].trim();
-            }
-          }
-          if (!title) {
-            // 2. Look for alt="..." on nearby img tags
-            const altMatch = context.match(/<img[^>]*alt="([^"]{2,})"[^>]*>/i);
-            if (altMatch) {
-              title = altMatch[1].trim();
-            }
-          }
-          
-          // --- Extract Cover ---
-          if (!cover) {
-            // Look for img with src containing static.comix.to or any real image URL
-            const imgMatches = [...context.matchAll(/<img[^>]*src="([^"]+)"[^>]*>/gi)];
-            for (const im of imgMatches) {
-              const src = im[1];
-              if (src.includes('logo') || src.endsWith('.svg') || src.length < 10) continue;
-              cover = src;
-              break;
-            }
-          }
-          if (!cover) {
-            // Try data-src for lazy-loaded images
-            const dataSrc = context.match(/<img[^>]*data-src="([^"]+)"/i);
-            if (dataSrc) cover = dataSrc[1];
-          }
-          
-          // --- Extract Chapter Count ---
-          if (!chapterCount) {
-            const chapMatch = context.match(/Ch\.[\s]*(\d+)/i) || context.match(/(\d+)\s*Ch(?:apter)?s?/i);
-            if (chapMatch) chapterCount = parseInt(chapMatch[1]);
-          }
+      // Step 2: Use Puppeteer with those cookies to properly parse the DOM
+      await this.createPage();
+      try {
+        const puppeteerCookies = toPuppeteerCookies(cookies, '.comix.to');
+        if (puppeteerCookies.length > 0) {
+          await this.page.setCookie(...puppeteerCookies);
+        }
+        if (userAgent) {
+          await this.page.setUserAgent(userAgent);
         }
         
-        if (!title || title.length < 2) continue;
-        if (cover && cover.startsWith('/')) cover = 'https://comix.to' + cover;
+        await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await this.randomDelay(1000, 2000);
         
-        results.push({ title, url, cover, chapterCount, website: this.websiteName });
+        // Scroll to trigger lazy-loaded images
+        await this.page.evaluate(() => {
+          return new Promise((resolve) => {
+            let totalHeight = 0;
+            const distance = 300;
+            const timer = setInterval(() => {
+              window.scrollBy(0, distance);
+              totalHeight += distance;
+              if (totalHeight >= document.body.scrollHeight) {
+                clearInterval(timer);
+                window.scrollTo(0, 0);
+                resolve();
+              }
+            }, 100);
+          });
+        });
+        await this.randomDelay(500, 1000);
+        
+        // Step 3: Extract results using real DOM APIs
+        // DOM: div.item > div.inner > [div.poster > a > img] + [div.detail > a.title]
+        const results = await this.page.evaluate(() => {
+          const items = document.querySelectorAll('.item');
+          const list = [];
+          const seen = new Set();
+          
+          items.forEach(item => {
+            // Get title from a.title link
+            const titleLink = item.querySelector('a.title');
+            if (!titleLink) return;
+            
+            const href = titleLink.href;
+            if (seen.has(href)) return;
+            seen.add(href);
+            
+            const title = titleLink.textContent.trim();
+            if (!title) return;
+            
+            // Get cover from poster img
+            const posterImg = item.querySelector('.poster img');
+            let cover = posterImg ? (posterImg.src || posterImg.dataset?.src || posterImg.getAttribute('data-src')) : null;
+            // Alt fallback: try alt-based cover URL
+            if (!cover && posterImg) {
+              cover = posterImg.currentSrc || null;
+            }
+            
+            // Get chapter count from metachip or detail text
+            let chapterCount = 0;
+            const metaText = item.querySelector('.metachip')?.textContent || item.querySelector('.detail')?.textContent || '';
+            const chapMatch = metaText.match(/Ch\.[\s]*(\d+)/i);
+            if (chapMatch) chapterCount = parseInt(chapMatch[1]);
+            
+            list.push({ title, url: href, cover, chapterCount });
+          });
+          
+          return list;
+        });
+        
+        console.log(`  [COMIX] Parsed ${results.length} results via Puppeteer`);
+        if (results.length > 0) {
+          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover ? 'yes' : 'no'}`);
+        }
+        
+        return results.map(r => ({ ...r, website: this.websiteName }));
+      } finally {
+        await this.closePage();
       }
-      
-      console.log(`  [COMIX] Parsed ${results.length} results`);
-      if (results.length > 0) {
-        console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover || 'none'}`);
-      }
-      return results;
     } catch (e) {
-      console.error(`  [COMIX] Primary search failed: ${e.message}, attempting direct browser...`);
-      return this.searchDirect(`https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`);
+      console.error(`  [COMIX] Search failed: ${e.message}`);
+      return [];
     }
   }
 
-  async searchDirect(searchUrl) {
-    await this.createPage();
-    try {
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.randomDelay(1000, 2000);
-      
-      return await this.page.evaluate(() => {
-        const items = document.querySelectorAll('a[href*="/title/"]');
-        const list = [];
-        items.forEach(a => {
-          const href = a.href.startsWith('http') ? a.href : window.location.origin + a.getAttribute('href');
-          const h3 = a.querySelector('h3');
-          if (!h3) return; // Ignore image wrapper links if they don't contain h3
-          
-          const title = h3.textContent.trim();
-          const img = a.querySelector('img');
-          const cover = img ? img.src : null;
-          
-          let chapterCount = 0;
-          const spans = a.querySelectorAll('span');
-          spans.forEach(span => {
-            if (span.textContent.toLowerCase().includes('ch')) {
-              chapterCount = parseInt(span.textContent) || 0;
-            }
-          });
-          
-          list.push({ title, url: href, cover, chapterCount });
-        });
-        
-        // Deduplicate by URL
-        const unique = [];
-        const seen = new Set();
-        list.forEach(i => {
-          if (!seen.has(i.url)) {
-            seen.add(i.url);
-            unique.push(i);
-          }
-        });
-        
-        return unique;
-      });
-    } finally {
-      await this.closePage();
-    }
-  }
 
   // Direct puppeteer fallback for quickCheck
   async quickCheckUpdatesDirect(url, knownChapterUrls = []) {
