@@ -174,56 +174,105 @@ export class ComixScraper extends BaseScraper {
       }
       
       // Parse search results from the /browser page
-      // Comix uses <a href="/title/..."> links. Extract all unique ones.
+      // Strategy: find all unique /title/ hrefs, then scan context around each for title and cover
       const results = [];
       const seen = new Set();
       
-      // Match all <a> tags that link to /title/ pages with their full inner content
-      const linkRegex = /<a[^>]*href="(\/title\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-      let match;
+      // 1. Find all /title/ href positions in the HTML
+      const hrefRegex = /href="(\/title\/[^"]*)"/gi;
+      let hrefMatch;
+      const titleLinks = [];
       
-      while ((match = linkRegex.exec(html)) !== null) {
-        let href = 'https://comix.to' + match[1];
-        if (seen.has(href)) continue;
+      while ((hrefMatch = hrefRegex.exec(html)) !== null) {
+        const path = hrefMatch[1];
+        const url = 'https://comix.to' + path;
+        if (seen.has(url)) continue;
+        seen.add(url);
+        titleLinks.push({ url, position: hrefMatch.index });
+      }
+      
+      console.log(`  [COMIX] Found ${titleLinks.length} unique /title/ links`);
+      
+      // 2. For each link, scan the surrounding context for title and cover
+      for (const link of titleLinks) {
+        // Get ~1500 chars around this href for context
+        const start = Math.max(0, link.position - 500);
+        const end = Math.min(html.length, link.position + 1000);
+        const context = html.substring(start, end);
         
-        const content = match[2];
-        
-        // Extract title: try any heading tag first, then fall back to stripped text
+        // Extract title - look for text in elements near this link
         let title = '';
-        const headingMatch = content.match(/<(?:h[1-6]|span|div)[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/(?:h[1-6]|span|div)>/i);
-        if (headingMatch) {
-          title = headingMatch[1].replace(/<[^>]*>/g, '').trim();
+        
+        // Try: text content right after the href's <a> tag
+        const afterLinkMatch = context.match(new RegExp(link.url.replace('https://comix.to', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^>]*>([^<]+)<'));
+        if (afterLinkMatch) {
+          title = afterLinkMatch[1].trim();
         }
+        
+        // Try: any heading or .title element
         if (!title) {
-          // Just strip all HTML tags and get the text
-          title = content.replace(/<[^>]*>/g, '').trim();
+          const titleElMatch = context.match(/class="[^"]*item-title[^"]*"[^>]*>([^<]+)</i) ||
+                               context.match(/class="[^"]*name[^"]*"[^>]*>([^<]+)</i);
+          if (titleElMatch) {
+            title = titleElMatch[1].trim();
+          }
         }
-        // Skip if no meaningful title or it's just whitespace/numbers
+        
+        // Try: any text that looks like a manga title (substantial text near the link)
+        if (!title) {
+          // Find all non-tag text segments in the context
+          const textParts = context.match(/>([^<]{3,80})</g) || [];
+          // Filter to find meaningful title-like text (not numbers, not too short)
+          for (const part of textParts) {
+            const text = part.substring(1).trim();
+            if (text.length >= 3 && !/^\d+$/.test(text) && !/^(MANGA|MANHWA|MANHUA|RELEASING|FINISHED|See\.|Ch\.)$/i.test(text)) {
+              title = text;
+              break;
+            }
+          }
+        }
+        
         if (!title || title.length < 2) continue;
         
-        // Extract Cover from img (src or data-src)
+        // Extract Cover - look for any img src in context
         let cover = null;
-        const imgMatch = content.match(/<img[^>]*(?:src|data-src)="([^"]*(?:\.jpg|\.png|\.webp|cover)[^"]*)"/i);
-        if (imgMatch) {
-          cover = imgMatch[1];
+        // Match img tags with src (skip SVG, icon, logo images)
+        const imgMatches = context.matchAll(/<img[^>]*src="([^"]+)"/gi);
+        for (const im of imgMatches) {
+          const src = im[1];
+          // Skip tiny icons, SVGs, logos
+          if (src.includes('logo') || src.includes('icon') || src.endsWith('.svg') || src.length < 10) continue;
+          cover = src;
           if (cover.startsWith('/')) cover = 'https://comix.to' + cover;
+          break;
         }
         
-        // Extract chapter count from text like "123 Chapters" or "45 Ch"
-        const chapMatch = content.match(/(\d+)\s*Ch(?:apter)?s?/i);
+        // Also try data-src for lazy-loaded images
+        if (!cover) {
+          const dataSrcMatch = context.match(/<img[^>]*data-src="([^"]+)"/i);
+          if (dataSrcMatch) {
+            cover = dataSrcMatch[1];
+            if (cover.startsWith('/')) cover = 'https://comix.to' + cover;
+          }
+        }
+        
+        // Extract chapter count
+        const chapMatch = context.match(/Ch\.(\d+)/i) || context.match(/(\d+)\s*Ch(?:apter)?s?/i);
         const chapterCount = chapMatch ? parseInt(chapMatch[1]) : 0;
         
-        seen.add(href);
         results.push({
           title,
-          url: href,
+          url: link.url,
           cover,
           chapterCount,
           website: this.websiteName
         });
       }
       
-      console.log(`  [COMIX] Parsed ${results.length} results from ${seen.size} unique links`);
+      console.log(`  [COMIX] Parsed ${results.length} results`);
+      if (results.length > 0) {
+        console.log(`  [COMIX] First result: "${results[0].title}" cover: ${results[0].cover ? 'yes' : 'no'}`);
+      }
       return results;
     } catch (e) {
       console.error(`  [COMIX] Primary search failed: ${e.message}, attempting direct browser...`);
