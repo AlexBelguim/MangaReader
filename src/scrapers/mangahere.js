@@ -159,9 +159,9 @@ export class MangaHereScraper extends BaseScraper {
           const a = li.querySelector('.manga-list-4-item-title > a, .manga-list-2-title > a, .manga-list-1-item-title > a');
           if (!a) return;
           const url = a.href.startsWith('http') ? a.href : window.location.origin + a.getAttribute('href');
-          const title = a.title || a.textContent.trim();
+          const title = a.textContent.trim() || a.title;
           
-          let img = li.querySelector('img.manga-list-4-cover, .manga-list-2-cover img, .manga-list-1-cover img');
+          let img = li.querySelector('img.manga-list-4-cover, .manga-list-2-cover img, .manga-list-1-cover img, .manga-list-2-cover-bg');
           const cover = img ? (img.src || img.dataset.src || img.getAttribute('data-src')) : null;
           
           let chapterCount = 0;

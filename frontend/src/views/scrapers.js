@@ -171,14 +171,17 @@ class ScraperView {
     this.results.forEach(result => {
       const coverUrl = result.cover || '/icon-192.png';
       html += `
-        <div class="manga-card scraper-result-card">
-          <div class="manga-cover" style="background-image: url('${coverUrl}')">
-            <div class="scraper-badge">${result.website}</div>
-            ${result.chapterCount ? `<div class="chapter-count-badge">${result.chapterCount} ch</div>` : ''}
+        <div class="manga-card scraper-result-card" style="display: flex; flex-direction: column;">
+          <div class="manga-card-cover">
+            <img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/icon-192.png'">
+            <div class="manga-card-badges">
+              <span class="scraper-badge">${result.website}</span>
+              ${result.chapterCount ? `<span class="chapter-count-badge">${result.chapterCount} ch</span>` : ''}
+            </div>
           </div>
-          <div class="manga-info">
-            <h3 class="manga-title" title="${result.title}">${result.title}</h3>
-            <button class="btn btn-primary add-from-search-btn" data-url="${result.url}">+ Add to Library</button>
+          <div class="manga-info" style="padding: 8px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between;">
+            <div class="manga-card-title" title="${result.title}" style="margin-bottom: 8px;">${result.title}</div>
+            <button class="btn btn-primary add-from-search-btn" data-url="${result.url}">+ Add</button>
           </div>
         </div>
       `;
