@@ -169,9 +169,11 @@ class ScraperView {
     let html = '<div class="library-grid">';
 
     this.results.forEach(result => {
-      const coverUrl = result.cover || '';
+      const rawCover = result.cover || '';
+      // Proxy external cover images through our backend to bypass hotlink protection
+      const coverUrl = rawCover ? `/api/scrapers/proxy-cover?url=${encodeURIComponent(rawCover)}` : '';
       const coverHtml = coverUrl 
-        ? `<img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
+        ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
         : `<div class="placeholder">📖</div>`;
       html += `
         <div class="manga-card scraper-result-card" data-url="${result.url}" style="cursor: pointer;">

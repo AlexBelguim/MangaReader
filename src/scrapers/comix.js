@@ -181,7 +181,10 @@ export class ComixScraper extends BaseScraper {
         }
         
         await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        await this.randomDelay(1000, 2000);
+        
+        // Wait for items to render
+        await this.page.waitForSelector('.comic .item, .item', { timeout: 10000 }).catch(() => {});
+        await this.randomDelay(500, 1000);
         
         // Scroll to trigger lazy-loaded images
         await this.page.evaluate(() => {
@@ -199,12 +202,13 @@ export class ComixScraper extends BaseScraper {
             }, 100);
           });
         });
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(1000, 1500);
         
         // Step 3: Extract results using real DOM APIs
-        // DOM: div.item > div.inner > [div.poster > a > img] + [div.detail > a.title]
+        // DOM: div.comic > div.item > div.inner > [div.poster > a > img] + [div.detail > a.title]
         const results = await this.page.evaluate(() => {
-          const items = document.querySelectorAll('.item');
+          // Use specific selector to avoid matching navbar/sidebar items
+          const items = document.querySelectorAll('.comic .item, main .item');
           const list = [];
           const seen = new Set();
           
@@ -222,17 +226,36 @@ export class ComixScraper extends BaseScraper {
             
             // Get cover from poster img
             const posterImg = item.querySelector('.poster img');
-            let cover = posterImg ? (posterImg.src || posterImg.dataset?.src || posterImg.getAttribute('data-src')) : null;
-            // Alt fallback: try alt-based cover URL
-            if (!cover && posterImg) {
-              cover = posterImg.currentSrc || null;
+            let cover = null;
+            if (posterImg) {
+              cover = posterImg.getAttribute('src') || posterImg.dataset?.src || posterImg.getAttribute('data-src') || null;
+              // Skip empty/placeholder src
+              if (cover && (cover === '' || cover === 'about:blank' || cover.startsWith('data:'))) {
+                cover = null;
+              }
             }
             
-            // Get chapter count from metachip or detail text
+            // Get chapter count - look for specific metachip spans
+            // Metachip format: #1496 MANGA 2021 RELEASING Ch.229 📚10,846 ⭐9
             let chapterCount = 0;
-            const metaText = item.querySelector('.metachip')?.textContent || item.querySelector('.detail')?.textContent || '';
-            const chapMatch = metaText.match(/Ch\.[\s]*(\d+)/i);
-            if (chapMatch) chapterCount = parseInt(chapMatch[1]);
+            const metachipSpans = item.querySelectorAll('.metachip span, .meta span');
+            for (const span of metachipSpans) {
+              const text = span.textContent.trim();
+              const chMatch = text.match(/^Ch\.?\s*(\d+)/i);
+              if (chMatch) {
+                chapterCount = parseInt(chMatch[1]);
+                break;
+              }
+            }
+            // Fallback: search metachip text more carefully
+            if (!chapterCount) {
+              const metaEl = item.querySelector('.metachip');
+              if (metaEl) {
+                const metaText = metaEl.textContent;
+                const chMatch = metaText.match(/\bCh\.?\s*(\d+)/i);
+                if (chMatch) chapterCount = parseInt(chMatch[1]);
+              }
+            }
             
             list.push({ title, url: href, cover, chapterCount });
           });
