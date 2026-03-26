@@ -10,6 +10,7 @@ import { socket } from '../socket.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { continueReading } from './reader.js';
+import { offlineManager } from '../offline-manager.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -25,7 +26,9 @@ let state = {
   activeVolume: null,
   activeVolumeId: null,
   cbzFiles: [],
-  manageChapters: false
+  manageChapters: false,
+  offlineChapters: new Set(),
+  isAutoOffline: false
 };
 
 // ==================== HELPERS ====================
@@ -316,6 +319,9 @@ export function render() {
               <button class="btn btn-secondary" id="refresh-btn">🔄 Refresh</button>
               ${manga.website !== 'Local' ? `<button class="btn btn-secondary" id="quick-check-btn">⚡ Quick Check</button>` : ''}
               ${manga.website === 'Local' ? `<button class="btn btn-secondary" id="scan-folder-btn">📁 Scan Folder</button>` : ''}
+              <button class="btn btn-secondary ${state.isAutoOffline ? 'btn-active' : ''}" id="auto-offline-btn" title="Auto-save new chapters offline for reading without internet">
+                ${state.isAutoOffline ? '📴 Auto-Offline ✓' : '📴 Auto-Offline'}
+              </button>
               <button class="btn btn-secondary" id="edit-btn">✏️ Edit</button>
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
               ${renderAutoCheckToggle(manga)}
@@ -743,7 +749,10 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
             ${isRead ? '👁️' : '○'}
           </button>
           ${isDownloaded
-      ? `<button class="btn-icon small danger" data-action="delete-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Delete Files">🗑️</button>`
+      ? `<button class="btn-icon small danger" data-action="delete-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Delete Files">🗑️</button>
+         <button class="btn-icon small ${state.offlineChapters.has(num) ? 'success' : ''}" data-action="offline-save" data-num="${num}" title="${state.offlineChapters.has(num) ? 'Remove offline copy' : 'Save for offline reading'}">
+           ${state.offlineChapters.has(num) ? '📴' : '💾'}
+         </button>`
       : `<button class="btn-icon small ${isDownloaded ? 'success' : ''}"
               data-action="download" data-num="${num}"
               title="${isDownloaded ? 'Downloaded' : 'Download'}">

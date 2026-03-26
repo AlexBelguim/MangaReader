@@ -1,4 +1,25 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'path';
+import fs from 'fs';
+
+// Plugin to copy static files (sw.js, icons) to build output
+function copyStaticFiles() {
+    const filesToCopy = ['sw.js', 'icon-192.png', 'icon-512.png', 'manifest.json'];
+    return {
+        name: 'copy-static-files',
+        writeBundle(options) {
+            const outDir = options.dir || resolve(__dirname, '../src/public');
+            for (const file of filesToCopy) {
+                const src = resolve(__dirname, file);
+                const dest = resolve(outDir, file);
+                if (fs.existsSync(src)) {
+                    fs.copyFileSync(src, dest);
+                    console.log(`Copied ${file} to build output`);
+                }
+            }
+        }
+    };
+}
 
 export default defineConfig({
     root: '.',
@@ -43,5 +64,5 @@ export default defineConfig({
         }
     },
 
-    plugins: []
+    plugins: [copyStaticFiles()]
 });

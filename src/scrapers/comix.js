@@ -189,7 +189,8 @@ export class ComixScraper extends BaseScraper {
             cmd: 'request.get',
             url: searchUrl,
             session: sessionId,
-            maxTimeout: 60000
+            maxTimeout: 60000,
+            wait: 5000
           })
         });
         const data1 = await res1.json();
@@ -206,7 +207,8 @@ export class ComixScraper extends BaseScraper {
             cmd: 'request.get',
             url: searchUrl,
             session: sessionId,
-            maxTimeout: 60000
+            maxTimeout: 60000,
+            wait: 5000
           })
         });
         const data2 = await res2.json();

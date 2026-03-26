@@ -1,7 +1,65 @@
 import express from 'express';
+import fs from 'fs-extra';
+import path from 'path';
 import { scraperFactory } from '../scrapers/index.js';
+import { CONFIG } from '../config.js';
 
 const router = express.Router();
+
+// Search cover cache directory
+const SEARCH_CACHE_DIR = path.join(CONFIG.dataDir, 'covers', 'search-cache');
+
+/**
+ * Download a cover image to the search cache directory
+ * Returns the local URL path or null on failure
+ */
+async function cacheSearchCover(coverUrl, index) {
+  if (!coverUrl) return null;
+
+  try {
+    let fullUrl = coverUrl;
+    if (coverUrl.startsWith('//')) fullUrl = 'https:' + coverUrl;
+
+    // Determine file extension from URL
+    const urlPath = new URL(fullUrl).pathname.toLowerCase();
+    let ext = '.jpg';
+    if (urlPath.includes('.png')) ext = '.png';
+    else if (urlPath.includes('.webp')) ext = '.webp';
+    else if (urlPath.includes('.gif')) ext = '.gif';
+
+    const fileName = `search_${index}${ext}`;
+    const filePath = path.join(SEARCH_CACHE_DIR, fileName);
+
+    const response = await fetch(fullUrl, {
+      headers: {
+        'Referer': new URL(fullUrl).origin + '/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!response.ok) return null;
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(filePath, buffer);
+
+    return `/covers/search-cache/${fileName}`;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Clear all cached search covers
+ */
+async function clearSearchCache() {
+  try {
+    if (await fs.pathExists(SEARCH_CACHE_DIR)) {
+      await fs.emptyDir(SEARCH_CACHE_DIR);
+    }
+  } catch (e) {
+    console.warn('[API] Failed to clear search cache:', e.message);
+  }
+}
 
 /**
  * @route GET /api/scrapers/search
@@ -18,6 +76,10 @@ router.get('/search', async (req, res) => {
     }
     
     console.log(`[API] Scraper search for: "${query}" (Target: ${targetScraper})`);
+    
+    // Clear previous search cover cache
+    await clearSearchCache();
+    await fs.ensureDir(SEARCH_CACHE_DIR);
     
     let results = [];
     
@@ -42,6 +104,15 @@ router.get('/search', async (req, res) => {
     
     // Sort results by chapter count descending
     results.sort((a, b) => (b.chapterCount || 0) - (a.chapterCount || 0));
+    
+    // Download covers in parallel and replace with local paths
+    console.log(`[API] Caching ${results.length} search cover images...`);
+    await Promise.all(results.map(async (result, i) => {
+      const localPath = await cacheSearchCover(result.cover, i);
+      if (localPath) {
+        result.cover = localPath;
+      }
+    }));
     
     res.json({
       success: true,

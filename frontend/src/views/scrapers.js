@@ -170,8 +170,13 @@ class ScraperView {
 
     this.results.forEach(result => {
       const rawCover = result.cover || '';
-      // Proxy external cover images through our backend to bypass hotlink protection
-      const coverUrl = rawCover ? `/api/scrapers/proxy-cover?url=${encodeURIComponent(rawCover)}` : '';
+      // Use local cached path if available, otherwise proxy external URLs
+      let coverUrl = '';
+      if (rawCover.startsWith('/covers/')) {
+        coverUrl = rawCover;
+      } else if (rawCover) {
+        coverUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(rawCover)}`;
+      }
       const coverHtml = coverUrl 
         ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
         : `<div class="placeholder">📖</div>`;
