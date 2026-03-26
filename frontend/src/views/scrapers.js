@@ -173,10 +173,10 @@ class ScraperView {
       html += `
         <div class="manga-card scraper-result-card" style="display: flex; flex-direction: column;">
           <div class="manga-card-cover">
-            <img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/icon-192.png'">
+            <img src="${coverUrl}" alt="Cover" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'placeholder\\'>🖼️</div>'">
             <div class="manga-card-badges">
-              <span class="scraper-badge">${result.website}</span>
-              ${result.chapterCount ? `<span class="chapter-count-badge">${result.chapterCount} ch</span>` : ''}
+              <span class="badge badge-primary">${result.website}</span>
+              ${result.chapterCount ? `<span class="badge badge-chapters">${result.chapterCount} ch</span>` : ''}
             </div>
           </div>
           <div class="manga-info" style="padding: 8px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between;">
