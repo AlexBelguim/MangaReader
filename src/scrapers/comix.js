@@ -162,15 +162,15 @@ export class ComixScraper extends BaseScraper {
   }
 
   async search(query) {
-    const searchUrl = `https://comix.to/search?q=${encodeURIComponent(query)}`;
+    const searchUrl = `https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`;
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
       const { html } = await fetchPage(searchUrl);
       
       // Guard against FlareSolverr returning the unsolved Cloudflare challenge HTML body
-      if (html.includes('Cloudflare') || html.includes('Ray ID:') || html.includes('Just a moment...')) {
-        throw new Error('FlareSolverr returned unresolved Cloudflare challenge page');
+      if (html.includes('<title>Just a moment...</title>') || html.includes('cf-browser-verification')) {
+        throw new Error('FlareSolverr returned unresolved Cloudflare challenge HTML');
       }
       
       // Parse search results - Comix uses a grid layout
@@ -209,9 +209,9 @@ export class ComixScraper extends BaseScraper {
       
       // Filter out weird or empty titles
       return results.filter(r => r.title);
-    } catch (error) {
-      console.log(`  [COMIX] FlareSolverr search FAILED: ${error.message}, fallback to direct...`);
-      return this.searchDirect(searchUrl);
+    } catch (e) {
+      console.error(`  [COMIX] Primary search failed: ${e.message}, attempting direct browser...`);
+      return this.searchDirect(`https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`);
     }
   }
 
