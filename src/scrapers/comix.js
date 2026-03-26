@@ -167,7 +167,15 @@ export class ComixScraper extends BaseScraper {
     
     try {
       // Step 1: Use FlareSolverr to solve Cloudflare and get cookies
-      const { cookies, userAgent } = await fetchPage(searchUrl);
+      const { html, cookies, userAgent } = await fetchPage(searchUrl);
+      
+      // Debug: Check what FlareSolverr returned
+      console.log(`  [COMIX] FlareSolverr HTML length: ${html.length}`);
+      console.log(`  [COMIX] HTML contains "Dandadan": ${html.includes('Dandadan')}`);
+      console.log(`  [COMIX] HTML contains "dandadan": ${html.includes('dandadan')}`);
+      console.log(`  [COMIX] Count of class="item": ${(html.match(/class="item"/g) || []).length}`);
+      console.log(`  [COMIX] Count of class="title": ${(html.match(/class="title"/g) || []).length}`);
+      console.log(`  [COMIX] Count of /title/ hrefs: ${(html.match(/href="\/title\//g) || []).length}`);
       
       // Step 2: Use Puppeteer with those cookies to properly parse the DOM
       await this.createPage();
