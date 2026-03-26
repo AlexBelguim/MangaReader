@@ -161,196 +161,206 @@ export class ComixScraper extends BaseScraper {
     }
   }
 
+
   async search(query) {
     const searchUrl = `https://comix.to/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc`;
     console.log(`  [COMIX] Searching: ${searchUrl}`);
     
     try {
-      // Hybrid approach: FlareSolverr bypasses CF → Puppeteer scrolls for full render
       let fsCookies = [];
       let fsUserAgent = '';
       
       try {
-        // Get cookies from FlareSolverr to bypass Cloudflare
         console.log(`  [COMIX] Getting CF cookies via FlareSolverr...`);
         const fsResult = await fetchPage(searchUrl);
         fsCookies = toPuppeteerCookies(fsResult.cookies, '.comix.to');
         fsUserAgent = fsResult.userAgent;
         console.log(`  [COMIX] Got ${fsCookies.length} cookies from FlareSolverr`);
       } catch (error) {
-        console.log(`  [COMIX] FlareSolverr cookie fetch failed: ${error.message}, trying direct Puppeteer...`);
+        console.log(`  [COMIX] FlareSolverr failed: ${error.message}`);
       }
       
-      // Use Puppeteer with CF cookies to load, scroll, and extract results
       await this.createPageClean();
       
       try {
-        // Normal viewport so scrolling actually works 
-        // (8000px height prevented scrolling since all content fit)
         await this.page.setViewport({ width: 1920, height: 1080 });
-        
-        // Set cookies from FlareSolverr if available
-        if (fsCookies.length > 0) {
-          await this.page.setCookie(...fsCookies);
-        }
-        if (fsUserAgent) {
-          await this.page.setUserAgent(fsUserAgent);
-        }
+        if (fsCookies.length > 0) await this.page.setCookie(...fsCookies);
+        if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
         
         console.log(`  [COMIX] Loading search page in Puppeteer...`);
-        await this.page.goto(searchUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 60000
-        });
+        await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        // Check for CF challenge
         const pageTitle = await this.page.title();
         console.log(`  [COMIX] Page title: "${pageTitle}"`);
         if (pageTitle.includes('moment') || pageTitle.includes('Checking')) {
-          console.log(`  [COMIX] WARNING: CF challenge in Puppeteer, waiting...`);
+          console.log(`  [COMIX] CF challenge, waiting...`);
           await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
           await new Promise(r => setTimeout(r, 3000));
         }
         
-        // Wait for React to render initial items
-        await new Promise(r => setTimeout(r, 3000));
-        await this.page.waitForSelector('.item a.title', { timeout: 15000 }).catch(() => {
-          console.log(`  [COMIX] No items found after 15s`);
-        });
+        // Wait for React render
+        await new Promise(r => setTimeout(r, 5000));
+        await this.page.waitForSelector('.item a.title', { timeout: 15000 }).catch(() => {});
         
-        // Scroll down incrementally, checking for new items after each scroll
-        // This triggers React lazy rendering and infinite scroll loading
-        console.log(`  [COMIX] Scrolling to load all results...`);
+        // Scroll to trigger lazy rendering
         let prevCount = 0;
         let stableScrolls = 0;
-        
-        for (let scrollAttempt = 0; scrollAttempt < 30; scrollAttempt++) {
-          // Count current items
-          const currentCount = await this.page.evaluate(() => 
-            document.querySelectorAll('.item a.title').length
-          );
-          
-          if (currentCount > prevCount) {
-            console.log(`  [COMIX] Items: ${currentCount} (was ${prevCount})`);
-            prevCount = currentCount;
+        for (let i = 0; i < 20; i++) {
+          const count = await this.page.evaluate(() => document.querySelectorAll('.item a.title').length);
+          if (count > prevCount) {
+            console.log(`  [COMIX] Items: ${count} (was ${prevCount})`);
+            prevCount = count;
             stableScrolls = 0;
           } else {
             stableScrolls++;
-            // After 5 stable checks while scrolling, we've likely loaded everything
-            if (stableScrolls >= 5) break;
+            if (stableScrolls >= 4) break;
           }
-          
-          // Scroll down one viewport height
-          await this.page.evaluate(() => {
-            window.scrollBy(0, window.innerHeight);
-          });
+          await this.page.evaluate(() => window.scrollBy(0, window.innerHeight));
           await new Promise(r => setTimeout(r, 500));
         }
         
-        // Scroll back to top for image loading
+        // Scroll for images: top -> bottom -> top
         await this.page.evaluate(() => window.scrollTo(0, 0));
-        await new Promise(r => setTimeout(r, 1000));
-        
-        // Slow scroll through entire page to trigger all lazy-loaded images
+        await new Promise(r => setTimeout(r, 500));
         await this.page.evaluate(async () => {
-          const step = 300;
-          const maxH = document.body.scrollHeight;
-          for (let y = 0; y < maxH; y += step) {
+          for (let y = 0; y < document.body.scrollHeight; y += 300) {
             window.scrollTo(0, y);
             await new Promise(r => setTimeout(r, 150));
           }
           window.scrollTo(0, 0);
         });
-        
-        // Wait for images to finish loading
         await new Promise(r => setTimeout(r, 2000));
         
-        const finalCount = await this.page.evaluate(() => 
-          document.querySelectorAll('.item a.title').length
-        );
-        console.log(`  [COMIX] Final item count: ${finalCount}`);
-        
-        // Extract results from the fully rendered DOM
-        const results = await this.page.evaluate(() => {
+        // Extract results from DOM
+        const domResults = await this.page.evaluate(() => {
           const items = document.querySelectorAll('.item');
           const results = [];
           const seen = new Set();
-          
           items.forEach(item => {
             const titleEl = item.querySelector('a.title');
             if (!titleEl) return;
-            
             const href = titleEl.getAttribute('href');
             const title = titleEl.textContent.trim();
             if (!title || !href) return;
-            
             const url = href.startsWith('http') ? href : 'https://comix.to' + href;
             if (seen.has(url)) return;
             seen.add(url);
-            
-            // Cover image URL
             let cover = null;
             const img = item.querySelector('.poster img');
             if (img) {
               const src = img.src || img.getAttribute('data-src') || '';
-              if (src.startsWith('http') && !src.endsWith('.svg')) {
-                cover = src;
-              }
+              if (src.startsWith('http') && !src.endsWith('.svg')) cover = src;
             }
-            
-            // Chapter count
             let chapterCount = 0;
             const metachip = item.querySelector('.metachip');
             if (metachip) {
-              const spans = metachip.querySelectorAll('span');
-              for (const span of spans) {
-                const text = span.textContent.trim();
-                const chMatch = text.match(/^Ch\.(\d+)/i);
-                if (chMatch) {
-                  chapterCount = parseInt(chMatch[1]);
-                  break;
-                }
+              for (const span of metachip.querySelectorAll('span')) {
+                const m = span.textContent.trim().match(/^Ch\.(\d+)/i);
+                if (m) { chapterCount = parseInt(m[1]); break; }
               }
             }
-            
             results.push({ title, url, cover, chapterCount });
           });
-          
           return results;
         });
         
-        // Capture cover images directly from Puppeteer using element screenshots
-        // This bypasses CDN hotlink protection since images are already loaded in the browser
-        const { default: fs } = await import('fs-extra');
+        console.log(`  [COMIX] DOM results: ${domResults.length}`);
+        
+        // Check full page HTML for items that React didn't render
+        const pageHtml = await this.page.content();
+        const htmlItemCount = (pageHtml.match(/class="item"/g) || []).length;
+        console.log(`  [COMIX] HTML item count: ${htmlItemCount}`);
+        
+        const results = [...domResults];
+        
+        // Parse missing items from raw HTML
+        if (htmlItemCount > domResults.length) {
+          console.log(`  [COMIX] Parsing ${htmlItemCount - domResults.length} extra items from HTML...`);
+          const existingUrls = new Set(results.map(r => r.url));
+          const itemBlocks = pageHtml.split(/class="item"/g);
+          
+          for (let i = 1; i < itemBlocks.length; i++) {
+            const block = itemBlocks[i];
+            const titleMatch = block.match(/<a[^>]*class="title"[^>]*href="(\/title\/[^"]+)"[^>]*>([^<]+)<\/a>/i);
+            if (!titleMatch) continue;
+            
+            const url = 'https://comix.to' + titleMatch[1];
+            if (existingUrls.has(url)) continue;
+            
+            const title = titleMatch[2].trim();
+            if (!title) continue;
+            
+            let cover = null;
+            const imgMatch = block.match(/<img[^>]*src="(https:\/\/static\.comix\.to\/[^"]+)"/i);
+            if (imgMatch) cover = imgMatch[1];
+            
+            let chapterCount = 0;
+            const chMatch = block.match(/Ch\.(\d+)/i);
+            if (chMatch) chapterCount = parseInt(chMatch[1]);
+            
+            results.push({ title, url, cover, chapterCount });
+            existingUrls.add(url);
+            console.log(`    + "${title}" (Ch.${chapterCount})`);
+          }
+        }
+        
+        // Capture cover images
+        const { default: fsx } = await import('fs-extra');
         const { default: pathMod } = await import('path');
         const { CONFIG } = await import('../config.js');
         
         const cacheDir = pathMod.join(CONFIG.dataDir, 'covers', 'search-cache');
-        await fs.emptyDir(cacheDir);
+        await fsx.emptyDir(cacheDir);
+        const ts = Date.now();
         
-        console.log(`  [COMIX] Capturing ${results.length} cover images from browser...`);
+        console.log(`  [COMIX] Capturing cover images...`);
         
-        // Get all poster img elements
+        // Screenshot covers for DOM-rendered items
         const imgElements = await this.page.$$('.item .poster img');
+        const domCaptured = Math.min(domResults.length, imgElements.length);
         
-        for (let i = 0; i < Math.min(results.length, imgElements.length); i++) {
+        for (let i = 0; i < domCaptured; i++) {
           try {
-            const filePath = pathMod.join(cacheDir, `search_${i}.jpg`);
+            const filePath = pathMod.join(cacheDir, `search_${i}_${ts}.jpg`);
             await imgElements[i].screenshot({ path: filePath, type: 'jpeg', quality: 85 });
-            results[i].cover = `/covers/search-cache/search_${i}.jpg`;
+            results[i].cover = `/covers/search-cache/search_${i}_${ts}.jpg`;
           } catch (e) {
-            // Keep the original URL as fallback
-            console.log(`  [COMIX] Failed to capture cover ${i}: ${e.message}`);
+            console.log(`  [COMIX] Cover screenshot ${i} failed: ${e.message}`);
           }
         }
         
-        // Add website name
+        // For HTML-only items, use browser fetch to download covers (has CF cookies)
+        for (let i = domCaptured; i < results.length; i++) {
+          if (!results[i].cover || !results[i].cover.startsWith('http')) continue;
+          try {
+            const base64 = await this.page.evaluate(async (imgUrl) => {
+              try {
+                const resp = await fetch(imgUrl);
+                if (!resp.ok) return null;
+                const blob = await resp.blob();
+                return new Promise(resolve => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                  reader.readAsDataURL(blob);
+                });
+              } catch { return null; }
+            }, results[i].cover);
+            
+            if (base64) {
+              const filePath = pathMod.join(cacheDir, `search_${i}_${ts}.jpg`);
+              await fsx.writeFile(filePath, Buffer.from(base64, 'base64'));
+              results[i].cover = `/covers/search-cache/search_${i}_${ts}.jpg`;
+            }
+          } catch (e) {
+            console.log(`  [COMIX] Cover download ${i} failed: ${e.message}`);
+          }
+        }
+        
         results.forEach(r => r.website = this.websiteName);
         
-        console.log(`  [COMIX] Parsed ${results.length} results`);
-        if (results.length > 0) {
-          console.log(`  [COMIX] First: "${results[0].title}" cover: ${results[0].cover}`);
-        }
+        console.log(`  [COMIX] Total: ${results.length} results`);
+        results.forEach((r, i) => console.log(`    ${i}: "${r.title}" Ch.${r.chapterCount} cover:${r.cover ? 'yes' : 'no'}`));
+        
         return results;
       } finally {
         await this.closePage();
