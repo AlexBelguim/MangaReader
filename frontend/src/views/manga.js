@@ -1323,13 +1323,10 @@ export function setupListeners() {
         try {
           const data = await api.get('/scrapers/list');
           if (data.success) {
-            select.innerHTML = data.scrapers
-              .filter(s => s.supportsSearch)
-              .map(s => `<option value="${s.name}" ${s.name === manga.website ? '' : ''}>${s.name}</option>`)
-              .join('');
-            // Pre-select a scraper that's NOT the current source (since we're migrating away)
-            const otherScraper = data.scrapers.find(s => s.supportsSearch && s.name !== manga.website);
-            if (otherScraper) select.value = otherScraper.name;
+            const searchable = data.scrapers.filter(s => s.supportsSearch);
+            select.innerHTML = '<option value="all">All Sources</option>' +
+              searchable.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+            select.value = 'all';
           }
         } catch (e) {
           console.warn('Failed to load scrapers:', e);
