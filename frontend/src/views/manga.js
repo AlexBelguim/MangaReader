@@ -432,16 +432,41 @@ function renderMigrateSourceModal() {
   return `
     <div class="modal" id="migrate-source-modal">
       <div class="modal-overlay"></div>
-      <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-content" style="max-width: 700px;">
         <div class="modal-header">
           <h2>🔄 Change Source</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
           <p>Current source: <strong>${manga.website || 'Local'}</strong></p>
-          <p class="text-muted" style="font-size: 0.85em; margin-bottom: 12px;">Enter the new URL for this manga. Downloaded chapters will be preserved as local versions.</p>
+          <p class="text-muted" style="font-size: 0.85em; margin-bottom: 12px;">Search for the manga on a different source, or paste a URL directly.</p>
+          
+          <!-- Search Section -->
           <div class="form-group">
-            <label for="migrate-url-input">New Manga URL</label>
+            <label>Search for Manga</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="migrate-search-input" placeholder="Search manga title..." value="${manga.alias || manga.title}" style="flex: 1;">
+              <select id="migrate-search-scraper" style="width: 150px;">
+                <option value="comix.to">comix.to</option>
+              </select>
+              <button class="btn btn-secondary" id="migrate-search-btn">🔍 Search</button>
+            </div>
+          </div>
+          
+          <!-- Search Results -->
+          <div id="migrate-search-results" style="max-height: 300px; overflow-y: auto; margin-bottom: 12px; display: none;">
+            <div id="migrate-results-grid" class="library-grid" style="grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;"></div>
+          </div>
+          <div id="migrate-search-loading" style="display: none; text-align: center; padding: 20px;">
+            <div class="loading-spinner"></div>
+            <p class="text-muted" style="margin-top: 8px;">Searching...</p>
+          </div>
+          
+          <hr style="border-color: var(--border-color); margin: 12px 0;">
+          
+          <!-- URL Input Section -->
+          <div class="form-group">
+            <label for="migrate-url-input">Manga URL</label>
             <input type="url" id="migrate-url-input" placeholder="https://..." style="width: 100%;">
           </div>
           <p class="text-muted" style="font-size: 0.8em;">Current URL: <code style="word-break:break-all;">${manga.url}</code></p>
@@ -1291,6 +1316,67 @@ export function setupListeners() {
   document.getElementById('source-label')?.addEventListener('click', () => {
     const modal = document.getElementById('migrate-source-modal');
     if (modal) modal.classList.add('open');
+  });
+
+  // Migrate modal: search for manga
+  const migrateSearchHandler = async () => {
+    const query = document.getElementById('migrate-search-input')?.value?.trim();
+    const scraper = document.getElementById('migrate-search-scraper')?.value;
+    if (!query) return;
+    
+    const loading = document.getElementById('migrate-search-loading');
+    const resultsContainer = document.getElementById('migrate-search-results');
+    const grid = document.getElementById('migrate-results-grid');
+    
+    loading.style.display = 'block';
+    resultsContainer.style.display = 'none';
+    
+    try {
+      const data = await api.get(`/scrapers/search?q=${encodeURIComponent(query)}&scraper=${encodeURIComponent(scraper)}`);
+      const results = data.results || [];
+      
+      if (results.length === 0) {
+        grid.innerHTML = '<p class="text-muted" style="text-align: center; padding: 20px;">No results found</p>';
+      } else {
+        grid.innerHTML = results.map(r => {
+          const coverUrl = r.cover?.startsWith('/covers/') ? r.cover 
+            : r.cover ? `/api/scrapers/proxy-cover?url=${encodeURIComponent(r.cover)}` : '';
+          return `
+            <div class="manga-card migrate-result-card" data-url="${r.url}" style="cursor: pointer; font-size: 0.85em;">
+              <div class="manga-card-cover" style="height: 150px;">
+                ${coverUrl ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
+                  : '<div class="placeholder">📖</div>'}
+                ${r.chapterCount ? `<div class="manga-card-badges"><span class="badge badge-chapters">${r.chapterCount} ch</span></div>` : ''}
+              </div>
+              <div class="manga-card-title" title="${r.title}" style="font-size: 0.8rem; padding: 4px;">${r.title}</div>
+            </div>
+          `;
+        }).join('');
+        
+        // Click handler for search results - fills URL input
+        grid.querySelectorAll('.migrate-result-card').forEach(card => {
+          card.addEventListener('click', () => {
+            const url = card.dataset.url;
+            document.getElementById('migrate-url-input').value = url;
+            // Highlight selected
+            grid.querySelectorAll('.migrate-result-card').forEach(c => c.style.outline = '');
+            card.style.outline = '2px solid var(--color-primary)';
+            showToast(`Selected: ${card.querySelector('.manga-card-title')?.textContent}`, 'info');
+          });
+        });
+      }
+      
+      loading.style.display = 'none';
+      resultsContainer.style.display = 'block';
+    } catch (err) {
+      loading.style.display = 'none';
+      showToast('Search failed: ' + err.message, 'error');
+    }
+  };
+  
+  document.getElementById('migrate-search-btn')?.addEventListener('click', migrateSearchHandler);
+  document.getElementById('migrate-search-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') migrateSearchHandler();
   });
 
   // Confirm migrate source

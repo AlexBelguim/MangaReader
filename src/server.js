@@ -188,6 +188,16 @@ app.get('/api/public/chapter-images/:id/:chapter/:filename', async (req, res) =>
 
 // Static file serving
 app.use(express.static(path.join(__dirname, 'public')));
+// Search cache: no browser caching so new search results always show fresh covers
+app.use('/covers/search-cache', express.static(path.join(CONFIG.dataDir, 'covers', 'search-cache'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+}));
 app.use('/covers', express.static(path.join(CONFIG.dataDir, 'covers')));
 app.use('/downloads', express.static(CONFIG.downloadsDir));
 
