@@ -187,6 +187,13 @@ export class ComixScraper extends BaseScraper {
         if (fsCookies.length > 0) await this.page.setCookie(...fsCookies);
         if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
         
+        // Clear localStorage BEFORE page loads to prevent comix.to from applying
+        // saved genre exclusion filters (genres=-87264,-87266,-87268,-87265)
+        // that hide results like Dandadan
+        await this.page.evaluateOnNewDocument(() => {
+          localStorage.clear();
+        });
+        
         console.log(`  [COMIX] Loading search page in Puppeteer...`);
         await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
         
