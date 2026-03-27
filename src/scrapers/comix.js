@@ -187,11 +187,22 @@ export class ComixScraper extends BaseScraper {
         if (fsCookies.length > 0) await this.page.setCookie(...fsCookies);
         if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
         
-        // Clear localStorage BEFORE page loads to prevent comix.to from applying
-        // saved genre exclusion filters (genres=-87264,-87266,-87268,-87265)
-        // that hide results like Dandadan
-        await this.page.evaluateOnNewDocument(() => {
-          localStorage.clear();
+        // Intercept requests to strip comix.to's hardcoded default genre exclusions
+        // (genres=-87264,-87266,-87268,-87265) that filter out results like Dandadan.
+        // These are baked into the JS defaults, not localStorage.
+        await this.page.setRequestInterception(true);
+        this.page.on('request', (req) => {
+          const url = req.url();
+          if (url.includes('/api/') && url.includes('genres')) {
+            // Strip genres param from API calls
+            const cleaned = url.replace(/[&?]genres(\[\])?=[^&]*/g, '');
+            if (cleaned !== url) {
+              console.log(`  [COMIX] Stripped genre filters from API call`);
+              req.continue({ url: cleaned });
+              return;
+            }
+          }
+          req.continue();
         });
         
         console.log(`  [COMIX] Loading search page in Puppeteer...`);
