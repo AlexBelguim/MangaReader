@@ -40,11 +40,16 @@ class ScraperFactory {
   }
 
   getScraperForUrl(url) {
+    console.log(`[ScraperFactory] Finding scraper for URL: ${url} (${this.scrapers.length} scrapers registered)`);
     for (const scraper of this.scrapers) {
-      if (scraper.canHandle(url)) {
+      const canHandle = scraper.canHandle(url);
+      console.log(`  - ${scraper.websiteName}: ${canHandle ? 'YES' : 'NO'} (patterns: ${scraper.urlPatterns.join(', ')})`);
+      if (canHandle) {
+        console.log(`  ✓ Selected: ${scraper.websiteName}`);
         return scraper;
       }
     }
+    console.log(`  ✗ No scraper found for URL`);
     return null;
   }
 
