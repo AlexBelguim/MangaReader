@@ -182,78 +182,167 @@ export class ComixScraper extends BaseScraper {
   }
 
   async getMangaInfo(url) {
+    // Strategy: Get FlareSolverr cookies to bypass Cloudflare, then use
+    // Puppeteer with click-based pagination (the approach that actually works
+    // because comix.to uses client-side React pagination with hash fragments).
+    let fsCookies = [];
+    let fsUserAgent = '';
+
     try {
+      console.log(`  [COMIX] Getting FlareSolverr cookies for getMangaInfo...`);
+      const { cookies, userAgent } = await fetchPage(url);
+      fsCookies = toPuppeteerCookies(cookies, '.comix.to');
+      fsUserAgent = userAgent;
+      console.log(`  [COMIX] Got ${fsCookies.length} cookies from FlareSolverr`);
+    } catch (error) {
+      console.log(`  [COMIX] FlareSolverr cookie fetch failed: ${error.message}, trying direct...`);
+    }
+
+    await this.createPage();
+
+    try {
+      // Set FlareSolverr cookies/UA before navigating
+      if (fsCookies.length > 0) {
+        await this.page.setCookie(...fsCookies);
+        console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
+      }
+      if (fsUserAgent) {
+        await this.page.setUserAgent(fsUserAgent);
+      }
+
       console.log(`  Navigating to: ${url}`);
-      console.log(`  [COMIX] Using FlareSolverr for getMangaInfo...`);
+      await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.randomDelay(1000, 2000);
 
-      const { html, cookies, userAgent } = await fetchPage(url);
-      console.log(`  [COMIX] FlareSolverr returned ${html.length} chars`);
+      // Wait for chapter list to load
+      await this.page.waitForSelector('a[href*="chapter"]', { timeout: 10000 }).catch(() => { });
+      await this.randomDelay(500, 1000);
 
-      // Parse title
-      const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-      const title = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : 'Unknown Title';
+      // Get title and total chapter count from page
+      const { title, totalFromPage } = await this.page.evaluate(() => {
+        const titleEl = document.querySelector('h1');
+        const title = titleEl ? titleEl.textContent.trim() : 'Unknown Title';
+        const showingText = document.body.innerText.match(/of\s+(\d+)\s+items/i);
+        const totalFromPage = showingText ? parseInt(showingText[1]) : 0;
+        return { title, totalFromPage };
+      });
+
       console.log(`  Title: ${title}`);
-
-      // Parse total chapter count
-      const showingMatch = html.match(/of\s+(\d+)\s+items/i);
-      const totalFromPage = showingMatch ? parseInt(showingMatch[1]) : 0;
-      if (totalFromPage > 0) console.log(`  Total chapters from page: ${totalFromPage}`);
-
-      // Parse cover image
-      let cover = null;
-      const coverMatch = html.match(/<img[^>]*src="(https?:\/\/static\.comix\.to\/[^"]*)"[^>]*>/i);
-      if (coverMatch && !coverMatch[1].includes('avatar') && !coverMatch[1].includes('icon')) {
-        cover = coverMatch[1];
-      }
-      if (!cover) {
-        const figMatch = html.match(/<figure[^>]*>[\s\S]*?<img[^>]*src="([^"]*)"[^>]*>/i);
-        if (figMatch) cover = figMatch[1];
+      if (totalFromPage > 0) {
+        console.log(`  Total chapters from page: ${totalFromPage}`);
       }
 
-      // Parse description
-      let description = '';
-      const descMatch = html.match(/<(?:div|p)[^>]*class="[^"]*(?:description|summary|synopsis|prose)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|p)>/i);
-      if (descMatch) description = descMatch[1].replace(/<[^>]*>/g, '').trim();
-
-      // Collect chapters from first page
-      let allChapters = this.parseChaptersWithMetadata(html);
-      console.log(`    Found ${allChapters.length} chapters on page 1`);
-
-      // Handle pagination
-      let pageNum = 1;
-      const pageUrlRegex = /href="([^"]*#(\d+))"/g;
-      const pageNumbers = new Set();
-      let pageMatch;
-      while ((pageMatch = pageUrlRegex.exec(html)) !== null) {
-        pageNumbers.add(parseInt(pageMatch[2]));
-      }
-      const maxPage = pageNumbers.size > 0 ? Math.max(...pageNumbers) : 1;
-
-      if (maxPage > 1) {
-        console.log(`  Found ${maxPage} pages of chapters`);
-        for (let p = 2; p <= maxPage; p++) {
-          try {
-            console.log(`  Scraping page ${p}...`);
-            const pageUrl = `${url}?page=${p}`;
-            const { html: pageHtml } = await fetchPage(pageUrl);
-            const pageChapters = this.parseChaptersWithMetadata(pageHtml);
-            console.log(`    Found ${pageChapters.length} chapters on page ${p}`);
-            if (pageChapters.length === 0) break;
-            if (allChapters.length > 0 && pageChapters.length > 0 &&
-              pageChapters[0].number === allChapters[0].number) {
-              console.log(`  Detected duplicate page, stopping pagination`);
-              break;
-            }
-            allChapters = allChapters.concat(pageChapters);
-            await this.randomDelay(1000, 1500);
-          } catch (err) {
-            console.log(`  Error fetching page ${p}: ${err.message}`);
+      // Get cover and description
+      const { cover, description } = await this.page.evaluate(() => {
+        const allImages = document.querySelectorAll('img[src*="static.comix.to"]');
+        let coverEl = null;
+        for (const img of allImages) {
+          if (img.src && !img.src.includes('avatar') && !img.src.includes('icon') && !img.src.includes('svg')) {
+            coverEl = img;
             break;
           }
         }
+        if (!coverEl) {
+          coverEl = document.querySelector('figure img, img.rounded-lg, article img');
+        }
+        const descEl = document.querySelector('.description, .summary, .synopsis, p.text-sm, .prose p');
+        return {
+          cover: coverEl ? coverEl.src : null,
+          description: descEl ? descEl.textContent.trim() : ''
+        };
+      });
+
+      // Collect chapters from all pages using click-based pagination
+      let allChapters = [];
+      let pageNum = 1;
+      let previousFirstChapter = null;
+
+      while (true) {
+        console.log(`  Scraping page ${pageNum}...`);
+
+        const pageChapters = await this.page.evaluate(() => {
+          const chapters = [];
+          const links = document.querySelectorAll('a[href*="chapter-"]');
+
+          links.forEach((link) => {
+            const href = link.getAttribute('href');
+            if (!href) return;
+            const text = link.textContent.trim();
+            const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+              text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+              text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+
+            if (numMatch) {
+              let releaseGroup = '';
+              let uploadedAt = '';
+              let sibling = link.nextElementSibling;
+              const siblingSpans = [];
+              while (sibling) {
+                if (sibling.tagName === 'SPAN') {
+                  siblingSpans.push(sibling.textContent?.trim() || '');
+                }
+                sibling = sibling.nextElementSibling;
+              }
+              if (siblingSpans.length >= 2) uploadedAt = siblingSpans[1] || '';
+              if (siblingSpans.length >= 3) releaseGroup = siblingSpans[2] || '';
+
+              chapters.push({
+                number: parseFloat(numMatch[1]),
+                title: text || `Chapter ${numMatch[1]}`,
+                url: href.startsWith('http') ? href : window.location.origin + href,
+                releaseGroup,
+                uploadedAt
+              });
+            }
+          });
+
+          return chapters;
+        });
+
+        // Check if we're seeing the same page again (pagination didn't work)
+        const currentFirstChapter = pageChapters.length > 0 ? pageChapters[0].number : null;
+        if (previousFirstChapter !== null && currentFirstChapter === previousFirstChapter) {
+          console.log(`  Detected duplicate page, stopping pagination`);
+          break;
+        }
+        previousFirstChapter = currentFirstChapter;
+
+        allChapters = allChapters.concat(pageChapters);
+        console.log(`    Found ${pageChapters.length} chapters on page ${pageNum}`);
+
+        // Check if there's a next page by clicking the Next button
+        const hasNextPage = await this.page.evaluate(() => {
+          const pageLinks = document.querySelectorAll('a.page-link, .pagination a, nav a');
+          for (const link of pageLinks) {
+            const text = link.textContent.trim();
+            if (text === 'Next' || text === '›' || text === '>') {
+              const href = link.getAttribute('href');
+              const currentPageMatch = href ? href.match(/#(\d+)/) : null;
+              const currentPageNum = currentPageMatch ? parseInt(currentPageMatch[1]) : 0;
+              const activePageEl = document.querySelector('a.page-link.active, .pagination .active');
+              const activePage = activePageEl ? parseInt(activePageEl.textContent.trim()) : 1;
+              if (currentPageNum > activePage || (!currentPageMatch && href !== '#')) {
+                link.click();
+                return true;
+              }
+              return false;
+            }
+          }
+          return false;
+        });
+
+        if (!hasNextPage) {
+          console.log(`  No more pages after page ${pageNum}`);
+          break;
+        }
+
+        pageNum++;
+        await this.randomDelay(1000, 1500);
+        // Wait for content to update after click
+        await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => { });
       }
 
-      // Process chapters - deduplicate and track versions
+      // Process chapters - keep ALL versions but track duplicates
       const chaptersByNumber = new Map();
       for (const ch of allChapters) {
         const existing = chaptersByNumber.get(ch.number) || [];
@@ -266,37 +355,52 @@ export class ComixScraper extends BaseScraper {
 
       const chapters = [];
       const duplicateChapters = [];
+
       for (const [num, versions] of chaptersByNumber) {
         if (versions.length === 1) {
           chapters.push(versions[0]);
         } else {
           versions.forEach((v, i) => {
-            chapters.push({ ...v, version: i + 1, totalVersions: versions.length, originalNumber: num });
+            chapters.push({
+              ...v,
+              version: i + 1,
+              totalVersions: versions.length,
+              originalNumber: num
+            });
           });
-          duplicateChapters.push({ number: num, versions: versions.map((v, i) => ({ ...v, version: i + 1 })) });
+          duplicateChapters.push({
+            number: num,
+            versions: versions.map((v, i) => ({ ...v, version: i + 1 }))
+          });
         }
       }
 
       chapters.sort((a, b) => a.number - b.number);
+
       const uniqueCount = chaptersByNumber.size;
       console.log(`  Found ${chapters.length} total chapters (${uniqueCount} unique, ${duplicateChapters.length} have duplicates)`);
 
       return {
-        url, website: this.websiteName, title,
+        url,
+        website: this.websiteName,
+        title,
         totalChapters: totalFromPage || chapters.length,
-        uniqueChapters: uniqueCount, chapters, duplicateChapters, cover, description
+        uniqueChapters: uniqueCount,
+        chapters,
+        duplicateChapters,
+        cover,
+        description
       };
 
-    } catch (error) {
-      console.log(`  [COMIX] FlareSolverr getMangaInfo failed: ${error.message}`);
-      console.log(`  [COMIX] Falling back to direct puppeteer...`);
-      return this.getMangaInfoDirect(url);
+    } finally {
+      await this.closePage();
     }
   }
 
-  // Direct puppeteer fallback for getMangaInfo
+  // Direct puppeteer fallback for getMangaInfo (no FlareSolverr cookies)
   async getMangaInfoDirect(url) {
     await this.createPage();
+
     try {
       console.log(`  getMangaInfo (direct fallback): ${url}`);
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -317,42 +421,157 @@ export class ComixScraper extends BaseScraper {
         let coverEl = null;
         for (const img of allImages) {
           if (img.src && !img.src.includes('avatar') && !img.src.includes('icon') && !img.src.includes('svg')) {
-            coverEl = img; break;
+            coverEl = img;
+            break;
           }
         }
-        if (!coverEl) coverEl = document.querySelector('figure img, img.rounded-lg, article img');
+        if (!coverEl) {
+          coverEl = document.querySelector('figure img, img.rounded-lg, article img');
+        }
         const descEl = document.querySelector('.description, .summary, .synopsis, p.text-sm, .prose p');
-        return { cover: coverEl ? coverEl.src : null, description: descEl ? descEl.textContent.trim() : '' };
+        return {
+          cover: coverEl ? coverEl.src : null,
+          description: descEl ? descEl.textContent.trim() : ''
+        };
       });
 
-      const chapters = await this.page.evaluate(() => {
-        const chapters = [];
-        const links = document.querySelectorAll('a[href*="chapter-"]');
-        links.forEach((link) => {
-          const href = link.getAttribute('href');
-          if (!href) return;
-          const text = link.textContent.trim();
-          const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
-            text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
-            text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
-          if (numMatch) {
-            chapters.push({
-              number: parseFloat(numMatch[1]),
-              title: text || `Chapter ${numMatch[1]}`,
-              url: href.startsWith('http') ? href : window.location.origin + href
-            });
-          }
+      // Collect chapters from all pages using click-based pagination
+      let allChapters = [];
+      let pageNum = 1;
+      let previousFirstChapter = null;
+
+      while (true) {
+        console.log(`  Scraping page ${pageNum}...`);
+
+        const pageChapters = await this.page.evaluate(() => {
+          const chapters = [];
+          const links = document.querySelectorAll('a[href*="chapter-"]');
+
+          links.forEach((link) => {
+            const href = link.getAttribute('href');
+            if (!href) return;
+            const text = link.textContent.trim();
+            const numMatch = href.match(/chapter-(\d+(?:\.\d+)?)/i) ||
+              text.match(/ch\.?\s*(\d+(?:\.\d+)?)(?!\d)/i) ||
+              text.match(/^(\d+(?:\.\d+)?)(?!\d)/);
+
+            if (numMatch) {
+              let releaseGroup = '';
+              let uploadedAt = '';
+              let sibling = link.nextElementSibling;
+              const siblingSpans = [];
+              while (sibling) {
+                if (sibling.tagName === 'SPAN') {
+                  siblingSpans.push(sibling.textContent?.trim() || '');
+                }
+                sibling = sibling.nextElementSibling;
+              }
+              if (siblingSpans.length >= 2) uploadedAt = siblingSpans[1] || '';
+              if (siblingSpans.length >= 3) releaseGroup = siblingSpans[2] || '';
+
+              chapters.push({
+                number: parseFloat(numMatch[1]),
+                title: text || `Chapter ${numMatch[1]}`,
+                url: href.startsWith('http') ? href : window.location.origin + href,
+                releaseGroup,
+                uploadedAt
+              });
+            }
+          });
+
+          return chapters;
         });
-        return chapters;
-      });
+
+        const currentFirstChapter = pageChapters.length > 0 ? pageChapters[0].number : null;
+        if (previousFirstChapter !== null && currentFirstChapter === previousFirstChapter) {
+          console.log(`  Detected duplicate page, stopping pagination`);
+          break;
+        }
+        previousFirstChapter = currentFirstChapter;
+
+        allChapters = allChapters.concat(pageChapters);
+        console.log(`    Found ${pageChapters.length} chapters on page ${pageNum}`);
+
+        const hasNextPage = await this.page.evaluate(() => {
+          const pageLinks = document.querySelectorAll('a.page-link, .pagination a, nav a');
+          for (const link of pageLinks) {
+            const text = link.textContent.trim();
+            if (text === 'Next' || text === '›' || text === '>') {
+              const href = link.getAttribute('href');
+              const currentPageMatch = href ? href.match(/#(\d+)/) : null;
+              const currentPageNum = currentPageMatch ? parseInt(currentPageMatch[1]) : 0;
+              const activePageEl = document.querySelector('a.page-link.active, .pagination .active');
+              const activePage = activePageEl ? parseInt(activePageEl.textContent.trim()) : 1;
+              if (currentPageNum > activePage || (!currentPageMatch && href !== '#')) {
+                link.click();
+                return true;
+              }
+              return false;
+            }
+          }
+          return false;
+        });
+
+        if (!hasNextPage) {
+          console.log(`  No more pages after page ${pageNum}`);
+          break;
+        }
+
+        pageNum++;
+        await this.randomDelay(1000, 1500);
+        await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => { });
+      }
+
+      // Process chapters - keep ALL versions but track duplicates
+      const chaptersByNumber = new Map();
+      for (const ch of allChapters) {
+        const existing = chaptersByNumber.get(ch.number) || [];
+        const isDuplicateUrl = existing.some(e => e.url === ch.url);
+        if (!isDuplicateUrl) {
+          existing.push(ch);
+          chaptersByNumber.set(ch.number, existing);
+        }
+      }
+
+      const chapters = [];
+      const duplicateChapters = [];
+
+      for (const [num, versions] of chaptersByNumber) {
+        if (versions.length === 1) {
+          chapters.push(versions[0]);
+        } else {
+          versions.forEach((v, i) => {
+            chapters.push({
+              ...v,
+              version: i + 1,
+              totalVersions: versions.length,
+              originalNumber: num
+            });
+          });
+          duplicateChapters.push({
+            number: num,
+            versions: versions.map((v, i) => ({ ...v, version: i + 1 }))
+          });
+        }
+      }
 
       chapters.sort((a, b) => a.number - b.number);
+
+      const uniqueCount = chaptersByNumber.size;
+      console.log(`  Found ${chapters.length} total chapters (${uniqueCount} unique, ${duplicateChapters.length} have duplicates)`);
+
       return {
-        url, website: this.websiteName, title,
+        url,
+        website: this.websiteName,
+        title,
         totalChapters: totalFromPage || chapters.length,
-        uniqueChapters: chapters.length, chapters,
-        duplicateChapters: [], cover, description
+        uniqueChapters: uniqueCount,
+        chapters,
+        duplicateChapters,
+        cover,
+        description
       };
+
     } finally {
       await this.closePage();
     }
