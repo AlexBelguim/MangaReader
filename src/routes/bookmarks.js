@@ -17,7 +17,7 @@ import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { queue } from '../queue.js';
-import { scraperFactory } from '../scrapers/templates/index.js';
+import { scraperFactory } from '../scrapers/index.js';
 
 const router = express.Router();
 

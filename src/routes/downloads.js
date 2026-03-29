@@ -10,7 +10,7 @@ import { downloader } from '../downloader.js';
 import { favoritesDb } from '../db/favorites.js';
 import { trophyDb } from '../db/trophies.js';
 import { CONFIG } from '../config.js';
-import { scraperFactory } from '../scrapers/templates/index.js';
+import { scraperFactory } from '../scrapers/index.js';
 import { queue } from '../queue.js';
 
 const router = express.Router();
