@@ -3,7 +3,7 @@
  */
 
 import express from 'express';
-import { getDb } from '../database.js';
+import { getDb, chapterSettingsDb } from '../database.js';
 import { actionHistoryService, ActionTypes, EntityTypes } from '../services/ActionHistoryService.js';
 
 const router = express.Router();
@@ -270,6 +270,9 @@ router.post('/actions/:id/undo', async (req, res) => {
                 if (action.beforeState?.chapterNumber !== undefined) {
                     db.prepare('UPDATE chapters SET locked = 0 WHERE bookmark_id = ? AND number = ?')
                         .run(action.bookmark_id, action.beforeState.chapterNumber);
+                    // Sync chapter_settings table
+                    const existingLock = chapterSettingsDb.get(action.bookmark_id, action.beforeState.chapterNumber);
+                    chapterSettingsDb.save(action.bookmark_id, action.beforeState.chapterNumber, { ...existingLock, locked: false });
                 }
                 break;
 
@@ -278,6 +281,9 @@ router.post('/actions/:id/undo', async (req, res) => {
                 if (action.beforeState?.chapterNumber !== undefined) {
                     db.prepare('UPDATE chapters SET locked = 1 WHERE bookmark_id = ? AND number = ?')
                         .run(action.bookmark_id, action.beforeState.chapterNumber);
+                    // Sync chapter_settings table
+                    const existingUnlock = chapterSettingsDb.get(action.bookmark_id, action.beforeState.chapterNumber);
+                    chapterSettingsDb.save(action.bookmark_id, action.beforeState.chapterNumber, { ...existingUnlock, locked: true });
                 }
                 break;
 

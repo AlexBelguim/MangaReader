@@ -53,6 +53,10 @@ router.post('/:bookmarkId/:chapterNumber/lock', async (req, res) => {
         db.prepare('UPDATE chapters SET locked = 1 WHERE bookmark_id = ? AND number = ?')
             .run(bookmarkId, chapterNum);
 
+        // Sync chapter_settings table
+        const existing = chapterSettingsDb.get(bookmarkId, chapterNum);
+        chapterSettingsDb.save(bookmarkId, chapterNum, { ...existing, locked: true });
+
         res.json({ success: true, locked: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -99,6 +103,10 @@ router.post('/:bookmarkId/:chapterNumber/unlock', async (req, res) => {
         // Unlock the chapter
         db.prepare('UPDATE chapters SET locked = 0 WHERE bookmark_id = ? AND number = ?')
             .run(bookmarkId, chapterNum);
+
+        // Sync chapter_settings table
+        const existing = chapterSettingsDb.get(bookmarkId, chapterNum);
+        chapterSettingsDb.save(bookmarkId, chapterNum, { ...existing, locked: false });
 
         res.json({ success: true, locked: false });
     } catch (error) {
@@ -330,6 +338,12 @@ router.post('/:bookmarkId/bulk-lock', async (req, res) => {
             stmt.run(lockValue, bookmarkId, num);
         }
 
+        // Sync chapter_settings table
+        for (const num of chapterNumbers) {
+            const existing = chapterSettingsDb.get(bookmarkId, num);
+            chapterSettingsDb.save(bookmarkId, num, { ...existing, locked: !!lock });
+        }
+
         res.json({
             success: true,
             updated: chapterNumbers.length,
@@ -385,6 +399,13 @@ router.post('/:bookmarkId/:chapterNumber/settings', async (req, res) => {
         };
 
         chapterSettingsDb.save(bookmarkId, chapterNum, newSettings);
+
+        // Sync locked state to chapters table
+        if (settings.locked !== undefined) {
+            const db = getDb();
+            db.prepare('UPDATE chapters SET locked = ? WHERE bookmark_id = ? AND number = ?')
+                .run(newSettings.locked ? 1 : 0, bookmarkId, chapterNum);
+        }
 
         res.json({ success: true, settings: newSettings });
     } catch (error) {

@@ -146,9 +146,18 @@ export const bookmarkDb = {
         // Get chapters
         const chapters = db.prepare(`
       SELECT number, title, url, version, total_versions, original_number,
-             removed_from_remote, is_old_version, url_changed, release_group, uploaded_at
+             removed_from_remote, is_old_version, url_changed, release_group, uploaded_at, locked
       FROM chapters WHERE bookmark_id = ? ORDER BY number, version
     `).all(id);
+
+        // Build chapterSettings from chapters locked state
+        const chapterSettings = {};
+        for (const c of chapters) {
+            if (c.locked) {
+                if (!chapterSettings[c.number]) chapterSettings[c.number] = {};
+                chapterSettings[c.number].locked = true;
+            }
+        }
 
         // Get downloaded chapters
         const downloadedChapters = db.prepare(
@@ -264,6 +273,7 @@ export const bookmarkDb = {
             updatedChapters,
             categories,
             excludedChapters,
+            chapterSettings,
             autoCheck: !!bookmark.auto_check,
             autoDownload: !!bookmark.auto_download,
             checkSchedule: bookmark.check_schedule || null,
