@@ -8,6 +8,7 @@ class ScraperView {
     this.currentTarget = 'all';
     this.isSearching = false;
     this.results = [];
+    this.activeSection = 'list'; // 'list' or 'search'
   }
 
   async mount(params) {
@@ -23,7 +24,6 @@ class ScraperView {
     this.bindEvents();
     
     // Automatically search if there's a 'q' query param in the hash
-    // We can parse it from window.location.hash
     const hashMatches = window.location.hash.match(/\?q=([^&]*)/);
     if (hashMatches && hashMatches[1]) {
       this.currentQuery = decodeURIComponent(hashMatches[1]);
@@ -31,6 +31,10 @@ class ScraperView {
       if (scraperMatch && scraperMatch[1]) {
          this.currentTarget = decodeURIComponent(scraperMatch[1]);
       }
+      this.activeSection = 'search';
+      this.render();
+      await this.loadScrapers();
+      this.bindEvents();
       this.performSearch();
     }
   }
@@ -44,7 +48,8 @@ class ScraperView {
     try {
       const data = await api.get('/scrapers/list');
       if (data.success) {
-        this.scrapers = data.scrapers.filter(s => s.supportsSearch);
+        this.scrapers = data.scrapers;
+        this.renderScraperList();
         this.renderScraperOptions();
       }
     } catch (e) {
@@ -56,10 +61,51 @@ class ScraperView {
     this.container.innerHTML = `
       <div class="view-container scrapers-container">
         <div class="view-header">
-          <h1>🔍 Search Scrapers</h1>
-          <p class="subtitle">Search for manga across all available sites.</p>
+          <h1>🔌 Scrapers</h1>
+          <p class="subtitle">All available manga scrapers and their capabilities.</p>
         </div>
 
+        <div class="scrapers-tabs">
+          <button class="scraper-tab-btn ${this.activeSection === 'list' ? 'active' : ''}" data-tab="list">
+            <span class="tab-icon">📋</span> All Scrapers
+          </button>
+          <button class="scraper-tab-btn ${this.activeSection === 'search' ? 'active' : ''}" data-tab="search">
+            <span class="tab-icon">🔍</span> Search
+          </button>
+        </div>
+
+        ${this.activeSection === 'list' ? this.renderListSection() : this.renderSearchSection()}
+      </div>
+    `;
+  }
+
+  renderListSection() {
+    return `
+      <div id="scrapers-list-section" class="scrapers-section">
+        <div class="scrapers-legend">
+          <div class="legend-item">
+            <span class="capability-pill capability-yes">✓</span>
+            <span>Supported</span>
+          </div>
+          <div class="legend-item">
+            <span class="capability-pill capability-no">✗</span>
+            <span>Not available</span>
+          </div>
+          <div class="legend-item">
+            <span class="capability-pill capability-soon">Soon</span>
+            <span>Coming soon</span>
+          </div>
+        </div>
+        <div id="scraper-cards-list" class="scraper-cards-grid">
+          <div class="loading-state"><div class="spinner"></div><p>Loading scrapers...</p></div>
+        </div>
+      </div>
+    `;
+  }
+
+  renderSearchSection() {
+    return `
+      <div id="scrapers-search-section" class="scrapers-section">
         <div class="scraper-search-box">
           <form id="scraper-search-form" class="search-form">
             <select id="scraper-target" class="scraper-select">
@@ -80,6 +126,98 @@ class ScraperView {
     `;
   }
 
+  renderScraperList() {
+    const container = document.getElementById('scraper-cards-list');
+    if (!container) return;
+
+    if (this.scrapers.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🔌</div>
+          <p>No scrapers found.</p>
+        </div>
+      `;
+      return;
+    }
+
+    // Determine capabilities for each scraper
+    const scraperData = this.scrapers.map(s => {
+      const name = s.name.toLowerCase();
+      return {
+        ...s,
+        // Search: only comix.to and mangahere.cc
+        canSearch: s.supportsSearch === true,
+        // Adding: all scrapers support adding manga by URL
+        canAdd: true,
+        // Browsing: not yet implemented for any
+        canBrowse: false
+      };
+    });
+
+    let html = '';
+    scraperData.forEach(s => {
+      const domainIcon = this.getDomainIcon(s.name);
+      html += `
+        <div class="scraper-info-card">
+          <div class="scraper-card-header">
+            <div class="scraper-card-icon">${domainIcon}</div>
+            <div class="scraper-card-name">
+              <h3>${s.name}</h3>
+              <span class="scraper-card-patterns">${s.urlPatterns.join(', ')}</span>
+            </div>
+          </div>
+          <div class="scraper-card-capabilities">
+            <div class="capability-row">
+              <span class="capability-label">🔍 Search</span>
+              ${s.canSearch 
+                ? '<span class="capability-pill capability-yes">✓ Supported</span>' 
+                : '<span class="capability-pill capability-no">✗ Not available</span>'}
+            </div>
+            <div class="capability-row">
+              <span class="capability-label">➕ Adding</span>
+              <span class="capability-pill capability-yes">✓ Supported</span>
+            </div>
+            <div class="capability-row">
+              <span class="capability-label">📖 Browsing</span>
+              <span class="capability-pill capability-soon">🚧 Coming soon</span>
+            </div>
+          </div>
+          ${s.canSearch ? `<button class="btn btn-primary scraper-search-btn" data-scraper="${s.name}" style="width:100%; margin-top: 12px; font-size: 0.85rem;">🔍 Search ${s.name}</button>` : ''}
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+
+    // Bind search buttons on cards
+    container.querySelectorAll('.scraper-search-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const scraperName = e.target.dataset.scraper;
+        this.currentTarget = scraperName;
+        this.activeSection = 'search';
+        this.render();
+        this.loadScrapers();
+        this.bindEvents();
+        // Pre-select the scraper in the dropdown
+        setTimeout(() => {
+          const select = document.getElementById('scraper-target');
+          if (select) select.value = scraperName;
+          const input = document.getElementById('scraper-query');
+          if (input) input.focus();
+        }, 100);
+      });
+    });
+  }
+
+  getDomainIcon(name) {
+    const lower = name.toLowerCase();
+    if (lower.includes('comix')) return '📚';
+    if (lower.includes('mangahere')) return '📖';
+    if (lower.includes('nhentai')) return '🔞';
+    if (lower.includes('chained')) return '⛓️';
+    return '🌐';
+  }
+
   renderScraperOptions() {
     const select = document.getElementById('scraper-target');
     if (!select) return;
@@ -87,7 +225,8 @@ class ScraperView {
     // Keep the "All Sites" option
     select.innerHTML = '<option value="all">🌐 All Sites</option>';
     
-    this.scrapers.forEach(s => {
+    const searchable = this.scrapers.filter(s => s.supportsSearch);
+    searchable.forEach(s => {
       const option = document.createElement('option');
       option.value = s.name;
       option.textContent = s.name;
@@ -97,6 +236,16 @@ class ScraperView {
   }
 
   bindEvents() {
+    // Tab switching
+    document.querySelectorAll('.scraper-tab-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.activeSection = e.currentTarget.dataset.tab;
+        this.render();
+        this.loadScrapers();
+        this.bindEvents();
+      });
+    });
+
     const form = document.getElementById('scraper-search-form');
     if (form) {
       form.addEventListener('submit', (e) => {

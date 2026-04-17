@@ -117,24 +117,10 @@ export class BaseScraper {
     throw lastError;
   }
 
-  // Helper to scroll page to load lazy content
+  // Helper to scroll page to load lazy content (delegates to util/scrolling.js)
   async autoScroll() {
-    await this.page.evaluate(async () => {
-      await new Promise((resolve) => {
-        let totalHeight = 0;
-        const distance = 100;
-        const timer = setInterval(() => {
-          const scrollHeight = document.body.scrollHeight;
-          window.scrollBy(0, distance);
-          totalHeight += distance;
-
-          if (totalHeight >= scrollHeight) {
-            clearInterval(timer);
-            resolve();
-          }
-        }, 100);
-      });
-    });
+    const { autoScroll } = await import('./util/scrolling.js');
+    await autoScroll(this.page);
   }
 }
 

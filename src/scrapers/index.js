@@ -1,9 +1,9 @@
 import puppeteer from 'puppeteer';
 import { CONFIG } from '../config.js';
-import { ComixScraper } from './comix.js';
-import { ChainedSoldierScraper } from './chainedsoldier.js';
-import { NhentaiScraper } from './nhentai.js';
-import { MangaHereScraper } from './mangahere.js';
+import { ComixScraper } from './sites/comix.js';
+import { ChainedSoldierScraper } from './sites/chainedsoldier.js';
+import { NhentaiScraper } from './sites/nhentai.js';
+import { MangaHereScraper } from './sites/mangahere.js';
 
 
 // Add more scrapers here as you add support for more websites

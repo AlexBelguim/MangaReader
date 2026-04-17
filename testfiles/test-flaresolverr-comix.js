@@ -6,8 +6,8 @@
  * 
  * Usage: node testfiles/test-flaresolverr-comix.js
  */
-import { isAvailable, fetchPage } from '../src/scrapers/flaresolverr.js';
-import { ComixScraper } from '../src/scrapers/comix.js';
+import { isAvailable, fetchPage } from '../src/scrapers/util/flaresolverr.js';
+import { ComixScraper } from '../src/scrapers/sites/comix.js';
 
 const COMIX_TEST_URL = 'https://comix.to/title/pvry-one-piece';
 

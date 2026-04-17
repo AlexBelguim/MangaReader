@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { ChainedSoldierScraper } from '../src/scrapers/chainedsoldier.js';
+import { ChainedSoldierScraper } from '../src/scrapers/sites/chainedsoldier.js';
 
 async function debugChapter() {
   console.log('Launching browser...');
