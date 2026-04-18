@@ -6,6 +6,9 @@ export const auth = (req, res, next) => {
     // Allow public access to certain routes if needed (e.g., covers)
     // But generally API should be protected
     if (req.method === 'OPTIONS') return next();
+    
+    // Allow image proxying without auth since it's used in img tags
+    if (req.path === '/scrapers/proxy-cover') return next();
 
     try {
         const authHeader = req.headers.authorization;

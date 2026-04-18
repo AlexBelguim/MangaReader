@@ -42,8 +42,14 @@ export class NhentaiScraper extends BaseScraper {
         if (coverEl) cover = coverEl.getAttribute('data-src') || coverEl.src;
 
         let pageCount = 1;
-        const pageMatch = document.body.innerText.match(/(\d+)\s*pages?/i);
-        if (pageMatch) pageCount = parseInt(pageMatch[1]);
+        const pageTags = document.querySelectorAll('.tag-container');
+        for (const pt of pageTags) {
+          if (pt.textContent.includes('Pages:')) {
+             const nameEl = pt.querySelector('.name');
+             if (nameEl) pageCount = parseInt(nameEl.textContent) || 1;
+             break;
+          }
+        }
 
         const artists = [];
         const artistTags = document.querySelectorAll('a[href*="/artist/"] .name, .tag-container:has(a[href*="/artist/"]) .name');
@@ -152,6 +158,69 @@ export class NhentaiScraper extends BaseScraper {
     }
   }
 
+  // Stream chapter images one by one using an async generator
+  async *streamChapterImages(chapterUrl) {
+    const { waitForCloudflare } = await import('../util/cloudflare.js');
+    const { launchBrowser } = await import('../util/stealth-browser.js');
+    
+    let browser, page;
+    try {
+      const launched = await launchBrowser({ stealth: true });
+      browser = launched.browser;
+      page = launched.page;
+      
+      const galleryId = this.getGalleryId(chapterUrl) || chapterUrl; // Allow passing galleryId directly
+      if (!galleryId) throw new Error('Invalid nhentai URL');
+
+      console.log(`  [Stream] Fetching images for gallery ${galleryId}...`);
+
+      await page.goto(`https://nhentai.net/g/${galleryId}/1/`, {
+        waitUntil: 'domcontentloaded', timeout: 60000
+      });
+      await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
+
+      const info = await page.evaluate(() => {
+        const el = document.querySelector('.num-pages');
+        const totalPages = el ? (parseInt(el.textContent.trim()) || 0) : 0;
+        const infoLink = document.querySelector('a#info');
+        const titleEl = infoLink || document.querySelector('h1');
+        const title = titleEl ? titleEl.textContent.trim() : 'Unknown';
+        return { totalPages, title };
+      });
+      
+      if (info.totalPages === 0) throw new Error('Could not determine total page count');
+      
+      yield { type: 'metadata', pageCount: info.totalPages, title: info.title };
+
+      // Fetch all pages
+      for (let pageNum = 1; pageNum <= info.totalPages; pageNum++) {
+        let imageUrl = null;
+        try {
+           const response = await page.goto(`https://nhentai.net/g/${galleryId}/${pageNum}/`, {
+             waitUntil: 'domcontentloaded', timeout: 30000
+           });
+           if (response.status() !== 404) {
+              imageUrl = await page.evaluate(() => {
+                for (const img of document.querySelectorAll('img')) {
+                  if (img.src && img.src.includes('.nhentai.net/galleries/')) return img.src;
+                }
+                return null;
+              });
+           }
+        } catch (err) {
+           console.log(`[SSE] Error fetching page ${pageNum}: ${err.message}`);
+        }
+        
+        if (imageUrl) {
+           yield { type: 'image', index: pageNum, url: imageUrl };
+        }
+        await this.randomDelay(50, 100);
+      }
+    } finally {
+      if (browser) await browser.close();
+    }
+  }
+
   async _fetchPageImage(page, galleryId, pageNum) {
     try {
       const response = await page.goto(`https://nhentai.net/g/${galleryId}/${pageNum}/`, {
@@ -171,10 +240,24 @@ export class NhentaiScraper extends BaseScraper {
     }
   }
 
-  // ==================== BROWSE FEATURE ====================
+  // ==================== SEARCH & BROWSE ====================
 
+  get supportsSearch() { return true; }
   get supportsBrowse() { return true; }
 
+  /**
+   * Search for galleries by query
+   */
+  async search(query) {
+    // Search is effectively a browse by popular with a text query
+    const data = await this.browse('popular', 1, query);
+    return data.results.map(r => ({
+      title: r.title,
+      url: r.url,
+      cover: r.cover,
+      chapterCount: 1 // nhentai is single gallery
+    }));
+  }
   /**
    * Browse nhentai search results with sort & pagination.
    * @param {string} sort - One of: 'date', 'popular-today', 'popular-week', 'popular'
@@ -183,74 +266,60 @@ export class NhentaiScraper extends BaseScraper {
    * @returns {{ results: Array, totalPages: number, currentPage: number }}
    */
   async browse(sort = 'popular-today', page = 1, query = 'english') {
-    const { browser, page: browserPage } = await launchBrowser({ stealth: true });
+    const { browse } = await import('../features/browse.js');
+    const { waitForCloudflare } = await import('../util/cloudflare.js');
 
-    try {
-      const url = `https://nhentai.net/search/?q=${encodeURIComponent(query)}&sort=${sort}&page=${page}`;
-      console.log(`  [nhentai] Browse: ${url}`);
+    return browse(this, sort, page, query, {
+      buildBrowseUrl: (s, p, q) => `https://nhentai.net/search/?q=${encodeURIComponent(q)}&sort=${s}&page=${p}`,
+      waitForResults: async (p) => await waitForCloudflare(p, { delayFn: () => this.randomDelay(2000, 3000) }),
+      extractResults: async (p) => {
+        return await p.evaluate(() => {
+          const results = [];
+          const galleries = document.querySelectorAll('.gallery');
 
-      await browserPage.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-      await waitForCloudflare(browserPage, { delayFn: () => this.randomDelay(2000, 3000) });
-      await this.randomDelay(1000, 2000);
+          galleries.forEach(gallery => {
+            const linkEl = gallery.querySelector('a');
+            const imgEl = gallery.querySelector('img');
+            const captionEl = gallery.querySelector('.caption');
 
-      const data = await browserPage.evaluate(() => {
-        const results = [];
-        const galleries = document.querySelectorAll('.gallery');
+            if (!linkEl) return;
 
-        galleries.forEach(gallery => {
-          const linkEl = gallery.querySelector('a');
-          const imgEl = gallery.querySelector('img');
-          const captionEl = gallery.querySelector('.caption');
+            const href = linkEl.getAttribute('href') || '';
+            const galleryIdMatch = href.match(/\/g\/(\d+)\//);
+            if (!galleryIdMatch) return;
 
-          if (!linkEl) return;
+            // Get cover - prefer data-src (lazy loaded) over src
+            let cover = null;
+            if (imgEl) {
+              cover = imgEl.getAttribute('data-src') || imgEl.src;
+            }
 
-          const href = linkEl.getAttribute('href') || '';
-          const galleryIdMatch = href.match(/\/g\/(\d+)\//);
-          if (!galleryIdMatch) return;
+            results.push({
+              galleryId: galleryIdMatch[1],
+              title: captionEl ? captionEl.textContent.trim() : 'Unknown',
+              cover,
+              url: `https://nhentai.net${href}`
+            });
+          });
 
-          // Get cover - prefer data-src (lazy loaded) over src
-          let cover = null;
-          if (imgEl) {
-            cover = imgEl.getAttribute('data-src') || imgEl.src;
+          // Get total pages
+          const lastPageLink = document.querySelector('.pagination a.last');
+          let totalPages = 1;
+          if (lastPageLink) {
+             const href = lastPageLink.getAttribute('href');
+             const pageMatch = href.match(/page=(\d+)/);
+             if (pageMatch) totalPages = parseInt(pageMatch[1]);
+          } else {
+             // Maybe we're on the last page or only one page
+             const currentPageEl = document.querySelector('.pagination .current');
+             if (currentPageEl) totalPages = parseInt(currentPageEl.textContent);
           }
 
-          results.push({
-            galleryId: galleryIdMatch[1],
-            title: captionEl ? captionEl.textContent.trim() : 'Unknown',
-            cover,
-            url: `https://nhentai.net${href}`
-          });
-        });
-
-        // Get total pages from pagination
-        let totalPages = 1;
-        const lastPageLink = document.querySelector('.pagination .last');
-        if (lastPageLink) {
-          const hrefMatch = lastPageLink.getAttribute('href')?.match(/page=(\d+)/);
-          if (hrefMatch) totalPages = parseInt(hrefMatch[1]);
-        } else {
-          // Fallback: find highest page number in pagination
-          const pageLinks = document.querySelectorAll('.pagination a');
-          pageLinks.forEach(a => {
-            const match = a.getAttribute('href')?.match(/page=(\d+)/);
-            if (match) totalPages = Math.max(totalPages, parseInt(match[1]));
-          });
-        }
 
         return { results, totalPages };
-      });
-
-      console.log(`  [nhentai] Found ${data.results.length} results on page ${page}/${data.totalPages}`);
-
-      return {
-        results: data.results,
-        totalPages: data.totalPages,
-        currentPage: page,
-        website: this.websiteName
-      };
-    } finally {
-      await browser.close();
-    }
+        });
+      }
+    });
   }
 
   /**
@@ -262,67 +331,81 @@ export class NhentaiScraper extends BaseScraper {
     const { browser, page } = await launchBrowser({ stealth: true });
 
     try {
-      console.log(`  [nhentai] Fetching images for gallery ${galleryId}...`);
+      console.log(`  [nhentai] Fast fetching images for gallery ${galleryId} via thumbnails...`);
 
-      // Go to page 1 to get total page count and title
-      await page.goto(`https://nhentai.net/g/${galleryId}/1/`, {
-        waitUntil: 'domcontentloaded', timeout: 60000
+      let totalPages = 1;
+      let title = 'Unknown';
+      let allThumbs = [];
+      let currentPage = 1;
+      let hasMoreThumbPages = true;
+
+      while (hasMoreThumbPages) {
+         await page.goto(`https://nhentai.net/g/${galleryId}/?page=${currentPage}`, {
+           waitUntil: 'domcontentloaded', timeout: 60000
+         });
+         await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
+         
+         const data = await page.evaluate(() => {
+           // On first page load, get total pages and title
+           let pCount = 1;
+           const pageTags = document.querySelectorAll('.tag-container');
+           for (const pt of pageTags) {
+             if (pt.textContent.includes('Pages:')) {
+                const nameEl = pt.querySelector('.name');
+                if (nameEl) pCount = parseInt(nameEl.textContent) || 1;
+                break;
+             }
+           }
+           
+           const infoLink = document.querySelector('a#info');
+           const titleEl = infoLink || document.querySelector('h1');
+           const t = titleEl ? titleEl.textContent.trim() : 'Unknown';
+           
+           // Get thumbnails
+           const thumbs = Array.from(document.querySelectorAll('.gallerythumb img'))
+               .map(img => img.getAttribute('data-src') || img.src)
+               .filter(src => src && src.includes('nhentai.net'));
+               
+           // Check if there's a next pagination link for thumbs
+           const nextBtn = document.querySelector('.pagination a.next');
+           const hasNext = !!nextBtn;
+
+           return { pageCount: pCount, title: t, thumbs, hasNext };
+         });
+
+         if (currentPage === 1) {
+            totalPages = data.pageCount;
+            title = data.title;
+         }
+         
+         allThumbs = allThumbs.concat(data.thumbs);
+         hasMoreThumbPages = data.hasNext;
+         currentPage++;
+         
+         if (hasMoreThumbPages) {
+            await this.randomDelay(500, 1000);
+         }
+      }
+
+      if (allThumbs.length === 0) {
+        throw new Error('Could not extract thumbnails');
+      }
+
+      // Convert thumbnail URLs to full image URLs
+      // Thumbnail: https://t3.nhentai.net/galleries/3891442/1t.webp or 1t.jpg
+      // Full: https://i3.nhentai.net/galleries/3891442/1.webp or 1.jpg
+      const images = allThumbs.map(thumbUrl => {
+         return thumbUrl
+            .replace(/\/\/t\d+\.nhentai\.net/, '//i3.nhentai.net')
+            .replace(/(\d+)t\./, '$1.');
       });
-      await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
 
-      const info = await page.evaluate(() => {
-        const numPagesEl = document.querySelector('.num-pages');
-        const totalPages = numPagesEl ? parseInt(numPagesEl.textContent.trim()) : 0;
-        // Get title from the gallery info link
-        const infoLink = document.querySelector('a#info');
-        const titleEl = infoLink || document.querySelector('h1');
-        const title = titleEl ? titleEl.textContent.trim() : 'Unknown';
-        return { totalPages, title };
-      });
-
-      if (info.totalPages === 0) {
-        throw new Error('Could not determine total page count');
-      }
-
-      console.log(`  [nhentai] Gallery ${galleryId}: ${info.totalPages} pages`);
-
-      const images = [];
-      const failedPages = [];
-
-      // Fetch all pages
-      for (let pageNum = 1; pageNum <= info.totalPages; pageNum++) {
-        if (pageNum % 10 === 1) {
-          console.log(`  [nhentai] Fetching pages ${pageNum}-${Math.min(pageNum + 9, info.totalPages)}...`);
-        }
-        const imageUrl = await this._fetchPageImage(page, galleryId, pageNum);
-        if (imageUrl) {
-          images.push(imageUrl);
-        } else {
-          failedPages.push(pageNum);
-        }
-        await this.randomDelay(50, 100);
-      }
-
-      // Retry failed pages once
-      if (failedPages.length > 0) {
-        console.log(`  [nhentai] Retrying ${failedPages.length} failed pages...`);
-        await this.randomDelay(1000, 2000);
-        for (const pageNum of failedPages) {
-          const imageUrl = await this._fetchPageImage(page, galleryId, pageNum);
-          if (imageUrl) {
-            // Insert at correct position
-            images.splice(pageNum - 1, 0, imageUrl);
-          }
-          await this.randomDelay(200, 400);
-        }
-      }
-
-      console.log(`  [nhentai] Got ${images.length}/${info.totalPages} images`);
+      console.log(`  [nhentai] Gallery ${galleryId}: Extracted ${images.length} fast image URLs`);
 
       return {
         galleryId,
-        title: info.title,
-        pageCount: info.totalPages,
+        title: title,
+        pageCount: totalPages,
         images
       };
     } finally {
