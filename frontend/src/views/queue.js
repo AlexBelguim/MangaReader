@@ -14,6 +14,7 @@ let state = {
   historyTasks: [],
   autoCheck: null,
   loading: true,
+  showEmptyChecks: false,
   collapsed: {
     active: false,
     scheduled: false,
@@ -289,21 +290,44 @@ function render() {
         </div>
       ` : ''}
 
-      ${state.historyTasks && state.historyTasks.length > 0 ? `
+      ${state.historyTasks && state.historyTasks.length > 0 ? (() => {
+        const emptyCheckFilter = (t) => {
+          if (t.type !== 'scrape') return false;
+          const result = t.result || {};
+          return (t.status === 'complete' || t.status === 'completed') && (result.newChaptersCount === 0 || result.updated === false);
+        };
+        const emptyCheckCount = state.historyTasks.filter(emptyCheckFilter).length;
+        const visibleTasks = state.showEmptyChecks
+          ? state.historyTasks
+          : state.historyTasks.filter(t => !emptyCheckFilter(t));
+        const hasHidden = !state.showEmptyChecks && emptyCheckCount > 0;
+        return `
         <div class="queue-section ${state.collapsed.history ? 'collapsed' : ''}">
             <div class="queue-section-header">
               <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="history">
                 <span class="collapse-icon">▼</span> Task History
               </h3>
-              <button class="btn btn-sm btn-danger queue-clear-btn" id="clear-history-btn">
-                🗑️ Clear History
-              </button>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                ${emptyCheckCount > 0 ? `
+                  <button class="btn btn-sm btn-secondary" id="toggle-empty-checks-btn" title="${state.showEmptyChecks ? 'Hide' : 'Show'} checks with no new chapters">
+                    ${state.showEmptyChecks ? '🔽 Hide' : '🔼 Show'} empty checks (${emptyCheckCount})
+                  </button>
+                ` : ''}
+                <button class="btn btn-sm btn-danger queue-clear-btn" id="clear-history-btn">
+                  🗑️ Clear History
+                </button>
+              </div>
             </div>
             <div class="queue-section-content history-list">
-                ${state.historyTasks.map(t => renderHistoryTask(t)).join('')}
+                ${visibleTasks.length > 0 ? visibleTasks.map(t => renderHistoryTask(t)).join('') : `
+                  <div class="queue-empty" style="padding: 1rem;">
+                    <p style="color: var(--text-secondary); margin: 0;">No notable tasks in history. ${emptyCheckCount > 0 ? `${emptyCheckCount} empty check(s) hidden.` : ''}</p>
+                  </div>
+                `}
             </div>
         </div>
-      ` : ''}
+      `;
+      })() : ''}
 
       ${activeDownloads.length === 0 && filteredQueueTasks.length === 0 && completedDownloads.length === 0 && schedules.length === 0 && (!state.historyTasks || state.historyTasks.length === 0) ? `
         <div class="queue-empty">
@@ -393,6 +417,15 @@ function setupListeners() {
           showToast(`Failed to clear history: ${err.message}`, 'error');
         }
       }
+    });
+  }
+
+  const toggleEmptyBtn = document.getElementById('toggle-empty-checks-btn');
+  if (toggleEmptyBtn) {
+    toggleEmptyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.showEmptyChecks = !state.showEmptyChecks;
+      refresh();
     });
   }
 
