@@ -66,7 +66,7 @@ node testfiles/test-download.js
 
 ## 🤖 About the Code (AI Acknowledgment)
 
-> **Note to Developers:** This project was built with heavy reliance on AI coding assistants. While the architecture and features are fully functional, experienced developers exploring the codebase might find areas that aren't perfectly idiomatic or highly optimized.
+> **Note to Developers:** The core architectural choices, feature designs, and product vision for this project are my own, but the actual code implementation was built with heavy reliance on AI coding assistants. Because of this, experienced developers exploring the codebase might find areas that aren't perfectly idiomatic or highly optimized.
 > 
 > I am leaving it open-source and actively encourage anyone with experience to look around, submit PRs, and help optimize the performance or structure!
 
