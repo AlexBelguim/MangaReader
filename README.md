@@ -1,174 +1,69 @@
-# Manga Scraper
+# 📚 Manga Scraper & Reader (Web UI)
 
-A Puppeteer-based manga scraper with bookmark management. Scrape manga from multiple websites, track your reading progress, and download chapters.
+A powerful, self-hosted Manga Scraper and Reader. Built with a Node.js/Express backend and a fast Vite frontend, it uses Puppeteer to bypass protections, scrape manga, and manage your library in a clean web interface.
 
-## Features
+## ✨ Features
 
-- 🔍 **Scrape manga info** - Get chapter lists from supported websites
-- 📚 **Bookmark management** - Save and organize your favorite manga
-- 📥 **Download chapters** - Download manga chapters as images
-- 🔄 **Check for updates** - Check all bookmarks for new chapters
-- ✏️ **Alias support** - Rename manga (e.g., "English" vs "Raw") without losing tracking
-- 🌐 **Multi-website support** - Easily add support for new websites
+- 🖥️ **Web Interface** - Clean, responsive UI to browse, search, and read your manga.
+- 📖 **Built-in Reader** - Read downloaded chapters instantly with customizable reading directions and modes.
+- 🛡️ **Cloudflare Bypass** - Uses Puppeteer & FlareSolverr concepts to reliably scrape protected sites.
+- 🗄️ **SQLite Database** - Fast, reliable storage for bookmarks, reading progress, and favorites.
+- 📥 **Background Downloader** - Queue chapters and download them reliably in the background without keeping the page open.
+- 🐳 **Docker Support** - Easily deployable to a home server, NAS, or Seedbox.
+- 🔌 **Modular Scrapers** - Easily write and plug in new scrapers for different manga sites.
 
-## Supported Websites
+## 🚀 Getting Started
 
-- comix.to
+### Option 1: Docker (Recommended for Home Servers)
 
-## Installation
+The easiest way to run the app 24/7 is using Docker Compose.
 
 ```bash
-npm install
+docker-compose up -d
 ```
+The app will be available at `http://localhost:3000`. Your data and downloads will be saved in the `./data` and `./downloads` folders.
 
-### Raspberry Pi Deployment
+### Option 2: Local Install (Bare Metal)
 
-1. Install dependencies (skipping Chromium download to save space/RAM):
+If you want to run it directly on your machine:
+
+1. **Install Dependencies:**
    ```bash
-   export PUPPETEER_SKIP_DOWNLOAD=true
    npm install
-   ```
-   *Note: If installation stalls, try:* `npm install --maxsockets=1`
-
-2. Create a `.env` file with your paths and system Chromium:
-   ```env
-   CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser
+   cd frontend && npm install
+   cd ..
    ```
 
-## Usage
+2. **Start the App:**
+   ```bash
+   # Starts both the backend and frontend in dev mode concurrently
+   npm run dev
+   ```
 
-### Interactive Mode (Recommended)
+   The backend API runs on port 3000, and the Vite frontend will usually run on port 5173 (check your console output).
 
-Just run without arguments for an interactive menu:
+## 🏗️ Architecture & Stack
 
-```bash
-npm start
-```
+- **Database:** SQLite (`better-sqlite3`)
+- **Backend:** Node.js, Express, Socket.io (for real-time queue updates), Puppeteer (for scraping)
+- **Frontend:** Vite, Vanilla JavaScript, CSS
 
-Or:
+### Adding New Scrapers
 
-```bash
-node src/index.js
-```
+Scrapers are highly modular. To add a new site:
+1. Create a new file in `src/scrapers/sites/`.
+2. Implement the `getMangaInfo` and chapter extraction features.
+3. The app will automatically load and use the scraper for matching URLs!
 
-### Command Line Interface
+## 🧪 Testing
 
-#### Add a manga
-
-```bash
-node src/index.js add https://comix.to/title/69l6g-chained-soldier
-```
-
-#### List all bookmarks
-
-```bash
-node src/index.js list
-```
-
-#### Check for new chapters
+We have moved all the loose debug and test scripts into the `testfiles/` directory. If you are developing a new scraper or debugging an issue, check there for helpful standalone scripts:
 
 ```bash
-node src/index.js check
+node testfiles/test-scrapers.js
+node testfiles/test-download.js
 ```
 
-#### Download chapters
+## 📝 License
 
-```bash
-# Download all chapters
-node src/index.js download <bookmark-id> --all
-
-# Download only new chapters
-node src/index.js download <bookmark-id> --new
-
-# Download specific chapters
-node src/index.js download <bookmark-id> --chapters "1-10,15,20-25"
-```
-
-#### Rename/Alias a manga
-
-```bash
-node src/index.js rename <bookmark-id> "Chained Soldier (English)"
-```
-
-#### Remove a bookmark
-
-```bash
-node src/index.js remove <bookmark-id>
-```
-
-## Project Structure
-
-```
-manga-scraper/
-├── src/
-│   ├── index.js          # Main entry point & CLI
-│   ├── config.js         # Configuration settings
-│   ├── bookmarks.js      # Bookmark management
-│   ├── downloader.js     # Image downloading
-│   └── scrapers/
-│       ├── index.js      # Scraper factory
-│       ├── base.js       # Base scraper class
-│       └── comix.js      # comix.to scraper
-├── data/
-│   └── bookmarks.json    # Stored bookmarks
-├── downloads/            # Downloaded manga chapters
-└── package.json
-```
-
-## Adding Support for New Websites
-
-1. Create a new scraper in `src/scrapers/` extending `BaseScraper`
-2. Implement `getMangaInfo(url)` and `getChapterImages(chapterUrl)`
-3. Add the scraper to the `SCRAPERS` array in `src/scrapers/index.js`
-
-Example:
-
-```javascript
-import { BaseScraper } from './base.js';
-
-export class NewSiteScraper extends BaseScraper {
-  get websiteName() {
-    return 'newsite.com';
-  }
-
-  get urlPatterns() {
-    return ['newsite.com'];
-  }
-
-  async getMangaInfo(url) {
-    // Implementation
-  }
-
-  async getChapterImages(chapterUrl) {
-    // Implementation
-  }
-}
-```
-
-## Configuration
-
-Edit `src/config.js` to customize:
-
-- Download directories
-- Request delays (to avoid rate limiting)
-- Puppeteer settings
-- Retry settings
-
-## Data Storage
-
-- **Bookmarks**: Stored in `data/bookmarks.json`
-- **Downloads**: Saved in `downloads/<manga-name>/Chapter XXXX/`
-
-## Tips
-
-1. **Avoid rate limiting**: The scraper has built-in delays between requests. Adjust in `config.js` if needed.
-
-2. **Multiple versions**: Use aliases to track the same manga from different sources (e.g., English and Raw):
-   - Add the English version and rename it to "Manga Name (English)"
-   - Add the Raw version and rename it to "Manga Name (Raw)"
-
-3. **Resume downloads**: The downloader skips already downloaded images, so you can safely resume interrupted downloads.
-
-## License
-
-MIT
+MIT License
