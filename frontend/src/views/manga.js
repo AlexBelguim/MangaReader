@@ -469,7 +469,7 @@ function renderMigrateSourceModal() {
             <label for="migrate-url-input">Manga URL</label>
             <input type="url" id="migrate-url-input" placeholder="https://..." style="width: 100%;">
           </div>
-          <p class="text-muted" style="font-size: 0.8em;">Current URL: <code style="word-break:break-all;">${manga.url}</code></p>
+          <p class="text-muted" style="font-size: 0.8em;">Current URL: <a href="${manga.url}" target="_blank" rel="noopener noreferrer" style="word-break:break-all; color: var(--primary-color, #a78bfa); text-decoration: underline;">${manga.url}</a></p>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary modal-close-btn">Cancel</button>
