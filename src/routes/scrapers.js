@@ -294,7 +294,11 @@ router.get('/preview-images-stream', async (req, res) => {
     if (scraper.streamChapterImages) {
        // Use the scraper's native streaming generator
        const urlToStream = (scraper.websiteName === 'nhentai.net') ? (galleryId || url) : url;
-       for await (const chunk of scraper.streamChapterImages(urlToStream)) {
+       const abortController = new AbortController();
+       req.on('close', () => {
+         abortController.abort();
+       });
+       for await (const chunk of scraper.streamChapterImages(urlToStream, { signal: abortController.signal })) {
           res.write(`data: ${JSON.stringify(chunk)}\n\n`);
        }
     } else if (url && scraper.getChapterImages) {

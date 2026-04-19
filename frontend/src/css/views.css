@@ -1763,3 +1763,381 @@ body.reader-active .category-fab {
         justify-content: flex-end;
     }
 }
+
+/* ==================== Scrapers View ==================== */
+
+.scrapers-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--space-md) var(--space-lg);
+}
+
+/* ── Search box ─────────────────────────────────────────── */
+.scraper-search-box {
+    background: var(--bg-secondary, #1e1e2e);
+    border: 1px solid var(--border-color, rgba(255,255,255,0.06));
+    border-radius: var(--radius-lg, 12px);
+    padding: var(--space-md) var(--space-lg);
+    margin-bottom: var(--space-lg);
+}
+
+.scraper-search-box .search-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.scraper-search-box .search-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+
+/* ── Results ────────────────────────────────────────────── */
+.scraper-results {
+    margin-top: var(--space-lg);
+}
+
+.scraper-results--hidden {
+    display: none;
+}
+
+/* ── Search section top spacing ─────────────────────────── */
+.scrapers-search-section {
+    margin-bottom: var(--space-xl, 2rem);
+}
+
+/* ── Target badge (searching: site X) ───────────────────── */
+.search-target-badge {
+    align-self: flex-start;
+    margin-bottom: 4px;
+}
+
+.search-target-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--accent-primary, #6c5ce7);
+    color: white;
+    padding: 4px 10px;
+    border-radius: var(--radius-full, 20px);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.search-target-clear {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 1rem;
+    padding: 0;
+    line-height: 1;
+    opacity: 0.75;
+    transition: opacity var(--transition-fast, 0.15s);
+}
+
+.search-target-clear:hover {
+    opacity: 1;
+}
+
+/* ── Search row (input + button) ────────────────────────── */
+.search-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+
+.search-row input {
+    flex: 1;
+}
+
+
+/* ── Section wrapper ────────────────────────────────────── */
+.scrapers-section {
+    margin-bottom: var(--space-xl, 2rem);
+}
+
+/* Header: title + legend on the same row */
+.scrapers-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.scrapers-section-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+/* ── Legend ─────────────────────────────────────────────── */
+.scrapers-legend {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    color: var(--text-secondary, #888);
+}
+
+/* ── Capability pills ───────────────────────────────────── */
+.capability-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-full, 20px);
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.capability-yes {
+    background: rgba(76, 175, 80, 0.15);
+    color: #66bb6a;
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.capability-no {
+    background: rgba(244, 67, 54, 0.12);
+    color: #ef5350;
+    border: 1px solid rgba(244, 67, 54, 0.25);
+}
+
+.capability-soon {
+    background: rgba(255, 152, 0, 0.12);
+    color: #ffa726;
+    border: 1px solid rgba(255, 152, 0, 0.25);
+}
+
+/* ── Cards grid ─────────────────────────────────────────── */
+.scraper-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-md);
+}
+
+/* ── Individual scraper card ────────────────────────────── */
+.scraper-info-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary, #1e1e2e);
+    border: 1px solid var(--border-color, rgba(255,255,255,0.06));
+    border-radius: var(--radius-lg, 12px);
+    overflow: hidden;
+    transition: border-color var(--transition-fast, 0.15s), box-shadow var(--transition-fast, 0.15s);
+}
+
+.scraper-info-card:hover {
+    border-color: var(--accent-primary, #6c5ce7);
+    box-shadow: 0 4px 20px rgba(108, 92, 231, 0.15);
+}
+
+/* Card header — icon + site name */
+.scraper-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md) var(--space-md) var(--space-sm);
+    border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
+}
+
+.scraper-card-icon {
+    font-size: 2rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.scraper-card-name h3 {
+    margin: 0 0 2px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary, #eee);
+}
+
+.scraper-card-patterns {
+    font-size: 0.75rem;
+    color: var(--text-muted, #666);
+}
+
+/* Card body — capability rows */
+.scraper-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: var(--space-md);
+    flex: 1;
+}
+
+.capability-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+}
+
+.capability-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary, #888);
+}
+
+/* Card footer — action buttons */
+.scraper-card-footer {
+    display: flex;
+    gap: 8px;
+    padding: var(--space-sm) var(--space-md) var(--space-md);
+    border-top: 1px solid var(--border-color, rgba(255,255,255,0.06));
+}
+
+.scraper-card-footer .btn {
+    flex: 1;
+    font-size: 0.82rem;
+    padding: 6px 10px;
+    justify-content: center;
+}
+
+.scraper-card-footer .btn:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* ── Browse View ────────────────────────────────────────── */
+.browse-view-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md, 1rem);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-lg, 1.5rem);
+}
+
+.browse-back-btn {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.9rem;
+}
+
+.browse-title {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.5rem;
+}
+
+.browse-controls-box {
+    display: flex;
+    gap: var(--space-md, 1rem);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-lg, 1.5rem);
+    background: var(--bg-secondary, #1e1e2e);
+    border: 1px solid var(--border-color, rgba(255,255,255,0.06));
+    padding: var(--space-md, 1rem);
+    border-radius: var(--radius-lg, 12px);
+}
+
+.browse-form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.browse-form-group label {
+    display: block;
+    font-size: 0.85rem;
+    margin-bottom: 0.3rem;
+    color: var(--text-secondary, #888);
+}
+
+.browse-input,
+.browse-select {
+    width: 100%;
+    padding: 0.5rem;
+    border-radius: var(--radius-sm, 6px);
+    border: 1px solid var(--border-color, rgba(255,255,255,0.06));
+    background: var(--bg-primary, #141420);
+    color: var(--text-primary, #eee);
+    font-size: 0.9rem;
+}
+
+.browse-input:focus,
+.browse-select:focus {
+    outline: none;
+    border-color: var(--accent-primary, #6c5ce7);
+}
+
+.browse-actions {
+    display: flex;
+    align-items: flex-end;
+}
+
+.browse-actions .btn {
+    height: 38px;
+    padding: 0 1rem;
+}
+
+.browse-results-grid {
+    margin-bottom: var(--space-xl, 2rem);
+}
+
+.browse-pagination {
+    text-align: center;
+    margin-top: var(--space-md, 1rem);
+    margin-bottom: var(--space-xl, 2rem);
+}
+
+.browse-load-more-btn {
+    min-width: 200px;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+}
+
+.browse-loading-indicator {
+    margin-top: var(--space-md, 1rem);
+}
+
+.browse-loading-indicator .spinner {
+    margin: 0 auto;
+}
+
+.browse-loading-indicator p {
+    margin-top: 0.5rem;
+    color: var(--text-secondary, #888);
+    font-size: 0.9rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 600px) {
+    .scrapers-container {
+        padding: var(--space-sm) var(--space-md);
+    }
+
+    .scrapers-section-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .scraper-cards-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .browse-controls-box {
+        flex-direction: column;
+    }
+    
+    .browse-actions {
+        width: 100%;
+    }
+    
+    .browse-actions .btn {
+        width: 100%;
+    }
+}

@@ -1,21 +1,41 @@
 import puppeteer from 'puppeteer';
 import { CONFIG } from '../config.js';
-import { ComixScraper } from './sites/comix.js';
-import { ChainedSoldierScraper } from './sites/chainedsoldier.js';
-import { NhentaiScraper } from './sites/nhentai.js';
-import { MangaHereScraper } from './sites/mangahere.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SITES_DIR = path.join(__dirname, 'sites');
 
-// Add more scrapers here as you add support for more websites
-const SCRAPERS = [
-  ComixScraper,
-  ChainedSoldierScraper,
-  NhentaiScraper,
-  MangaHereScraper,
-  // Add more scrapers here:
-  // MangadexScraper,
-  // MangareaderScraper,
-];
+/**
+ * Auto-discover all scraper files in the sites/ directory.
+ * Skips files starting with _ (like _template.js).
+ * Each file must export a class that extends BaseScraper as its default export.
+ */
+async function loadScrapers() {
+  const files = fs.readdirSync(SITES_DIR)
+    .filter(f => f.endsWith('.js') && !f.startsWith('_'));
+
+  const scraperClasses = [];
+
+  for (const file of files) {
+    try {
+      const mod = await import(`./sites/${file}`);
+      // Use the default export, or the first exported class
+      const ScraperClass = mod.default || Object.values(mod).find(v => typeof v === 'function');
+      if (ScraperClass) {
+        scraperClasses.push(ScraperClass);
+      } else {
+        console.warn(`[ScraperFactory] No scraper class found in sites/${file}, skipping`);
+      }
+    } catch (e) {
+      console.error(`[ScraperFactory] Failed to load sites/${file}: ${e.message}`);
+    }
+  }
+
+  console.log(`[ScraperFactory] Auto-loaded ${scraperClasses.length} scrapers from ${files.length} files`);
+  return scraperClasses;
+}
 
 class ScraperFactory {
   constructor() {
@@ -28,8 +48,11 @@ class ScraperFactory {
       this.browser = await puppeteer.launch(CONFIG.puppeteer);
     }
 
-    // Initialize all scrapers
-    this.scrapers = SCRAPERS.map(ScraperClass => new ScraperClass(this.browser));
+    // Auto-discover and initialize all scrapers from the sites/ directory
+    const scraperClasses = await loadScrapers();
+    this.scrapers = scraperClasses.map(ScraperClass => new ScraperClass(this.browser));
+    
+    console.log(`[ScraperFactory] Registered: ${this.scrapers.map(s => s.websiteName).join(', ')}`);
   }
 
   async close() {
@@ -59,6 +82,10 @@ class ScraperFactory {
 
   getSearchableScrapers() {
     return this.scrapers.filter(s => s.supportsSearch);
+  }
+
+  getBrowsableScrapers() {
+    return this.scrapers.filter(s => s.supportsBrowse);
   }
 
   async searchAll(query) {

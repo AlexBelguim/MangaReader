@@ -159,7 +159,7 @@ export class NhentaiScraper extends BaseScraper {
   }
 
   // Stream chapter images one by one using an async generator
-  async *streamChapterImages(chapterUrl) {
+  async *streamChapterImages(chapterUrl, options = {}) {
     const { waitForCloudflare } = await import('../util/cloudflare.js');
     const { launchBrowser } = await import('../util/stealth-browser.js');
     
@@ -194,6 +194,11 @@ export class NhentaiScraper extends BaseScraper {
 
       // Fetch all pages
       for (let pageNum = 1; pageNum <= info.totalPages; pageNum++) {
+        if (options.signal?.aborted) {
+            console.log(`  [Stream] Client aborted stream for gallery ${galleryId}.`);
+            break;
+        }
+        
         let imageUrl = null;
         try {
            const response = await page.goto(`https://nhentai.net/g/${galleryId}/${pageNum}/`, {
@@ -270,6 +275,7 @@ export class NhentaiScraper extends BaseScraper {
     const { waitForCloudflare } = await import('../util/cloudflare.js');
 
     return browse(this, sort, page, query, {
+      cacheTtl: 15 * 60 * 1000, // 15 minute cache per sort/query/page combo
       buildBrowseUrl: (s, p, q) => `https://nhentai.net/search/?q=${encodeURIComponent(q)}&sort=${s}&page=${p}`,
       waitForResults: async (p) => await waitForCloudflare(p, { delayFn: () => this.randomDelay(2000, 3000) }),
       extractResults: async (p) => {

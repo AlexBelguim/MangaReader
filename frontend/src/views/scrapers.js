@@ -36,6 +36,11 @@ class ScraperView {
     // Fetch available scrapers
     await this.loadScrapers();
     
+    // If we were in browse mode (e.g. returning from reader), re-fetch browse results
+    if (this.viewMode === 'browse' && this.browseScraper) {
+      this.performBrowse();
+    }
+    
     // Automatically search if there's a 'q' query param in the hash
     const hashMatches = window.location.hash.match(/\?q=([^&]*)/);
     if (hashMatches && hashMatches[1]) {
@@ -79,25 +84,25 @@ class ScraperView {
           <p class="subtitle">All available manga scrapers and their capabilities.</p>
         </div>
 
-        <div class="scrapers-section" style="margin-bottom: 2rem;">
+        <div class="scrapers-section scrapers-search-section">
           <div class="scraper-search-box">
-            <form id="scraper-search-form" class="search-form" style="display: flex; gap: 8px; flex-direction: column;">
+            <form id="scraper-search-form" class="search-form">
               ${this.currentTarget !== 'all' ? `
-                <div class="search-target-badge" style="align-self: flex-start; margin-bottom: 4px;">
-                  <span class="badge" style="background-color: var(--primary-color); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px;">
-                    Searching: ${this.currentTarget} 
-                    <button type="button" id="clear-target-btn" style="background: none; border: none; color: white; cursor: pointer; font-weight: bold; font-size: 1rem; padding: 0; line-height: 1;">×</button>
+                <div class="search-target-badge">
+                  <span class="search-target-pill">
+                    Searching: ${this.currentTarget}
+                    <button type="button" id="clear-target-btn" class="search-target-clear">×</button>
                   </span>
                 </div>
               ` : ''}
-              <div style="display: flex; gap: 8px; width: 100%;">
-                <input type="text" id="scraper-query" placeholder="Enter manga title to search${this.currentTarget !== 'all' ? ` in ${this.currentTarget}` : ' all sites'}..." value="${this.currentQuery}" required style="flex: 1;">
+              <div class="search-row">
+                <input type="text" id="scraper-query" placeholder="Enter manga title to search${this.currentTarget !== 'all' ? ` in ${this.currentTarget}` : ' all sites'}..." value="${this.currentQuery}" required>
                 <button type="submit" class="btn btn-primary" id="scraper-search-btn">Search</button>
               </div>
             </form>
           </div>
-          
-          <div id="scraper-results-container" class="scraper-results" style="${this.results.length > 0 || this.isSearching ? '' : 'display: none; margin-top: 1.5rem;'}">
+
+          <div id="scraper-results-container" class="scraper-results${this.results.length > 0 || this.isSearching ? '' : ' scraper-results--hidden'}">
              <div class="empty-state">
                <div class="empty-icon">🔎</div>
                <p>Type a title above to search across available scrapers.</p>
@@ -106,19 +111,21 @@ class ScraperView {
         </div>
 
         <div id="scrapers-list-section" class="scrapers-section">
-          <h2 style="margin-bottom: 1rem;">Available Scrapers</h2>
-          <div class="scrapers-legend">
-            <div class="legend-item">
-              <span class="capability-pill capability-yes">✓</span>
-              <span>Supported</span>
-            </div>
-            <div class="legend-item">
-              <span class="capability-pill capability-no">✗</span>
-              <span>Not available</span>
-            </div>
-            <div class="legend-item">
-              <span class="capability-pill capability-soon">Soon</span>
-              <span>Coming soon</span>
+          <div class="scrapers-section-header">
+            <h2>Available Scrapers</h2>
+            <div class="scrapers-legend">
+              <div class="legend-item">
+                <span class="capability-pill capability-yes">✓</span>
+                <span>Supported</span>
+              </div>
+              <div class="legend-item">
+                <span class="capability-pill capability-no">✗</span>
+                <span>Not available</span>
+              </div>
+              <div class="legend-item">
+                <span class="capability-pill capability-soon">Soon</span>
+                <span>Coming soon</span>
+              </div>
             </div>
           </div>
           <div id="scraper-cards-list" class="scraper-cards-grid">
@@ -128,42 +135,42 @@ class ScraperView {
       </div>
 
       <!-- BROWSE VIEW -->
-      <div id="browse-container" class="view-container" style="${this.viewMode === 'browse' ? '' : 'display: none;'}">
-        <div class="view-header" style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
-          <button id="exit-browse-btn" class="btn btn-secondary" style="padding: 0.4rem 0.8rem;">← Back</button>
-          <h1 style="margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+      <div id="browse-container" class="view-container scrapers-container${this.viewMode === 'browse' ? '' : ' scraper-results--hidden'}">
+        <div class="view-header browse-view-header">
+          <button id="exit-browse-btn" class="btn btn-secondary browse-back-btn">← Back</button>
+          <h1 class="browse-title">
              ${this.browseScraper ? this.getDomainIcon(this.browseScraper) : '🌐'} Browse: ${this.browseScraper}
           </h1>
         </div>
 
-        <div class="browse-controls" style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; background: var(--card-bg); padding: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div style="flex: 1; min-width: 200px;">
-            <label style="display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: var(--text-muted);">Query / Filters</label>
-            <input type="text" id="browse-query" value="${this.browseQuery}" placeholder="e.g. english, parody, etc." style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+        <div class="browse-controls-box">
+          <div class="browse-form-group" style="flex: 1; min-width: 200px;">
+            <label>Query / Filters</label>
+            <input type="text" id="browse-query" class="browse-input" value="${this.browseQuery}" placeholder="e.g. english, parody, etc.">
           </div>
-          <div style="min-width: 150px;">
-            <label style="display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: var(--text-muted);">Sort By</label>
-            <select id="browse-sort" style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+          <div class="browse-form-group" style="min-width: 150px;">
+            <label>Sort By</label>
+            <select id="browse-sort" class="browse-select">
               <option value="popular-today" ${this.browseSort === 'popular-today' ? 'selected' : ''}>Popular Today</option>
               <option value="popular-week" ${this.browseSort === 'popular-week' ? 'selected' : ''}>Popular This Week</option>
               <option value="popular" ${this.browseSort === 'popular' ? 'selected' : ''}>Popular All Time</option>
               <option value="date" ${this.browseSort === 'date' ? 'selected' : ''}>Latest</option>
             </select>
           </div>
-          <div style="display: flex; align-items: flex-end;">
-            <button id="browse-apply-btn" class="btn btn-primary" style="height: 38px;">Apply Filters</button>
+          <div class="browse-actions">
+            <button id="browse-apply-btn" class="btn btn-primary">Apply Filters</button>
           </div>
         </div>
 
-        <div id="browse-results-container" class="library-grid" style="margin-bottom: 2rem;">
+        <div id="browse-results-container" class="library-grid browse-results-grid">
           <!-- Results will go here -->
         </div>
 
-        <div id="browse-pagination" style="text-align: center; margin-top: 1rem; margin-bottom: 2rem; display: none;">
-          <button id="browse-load-more-btn" class="btn btn-secondary" style="min-width: 200px; padding: 0.75rem;">Load Next Page</button>
-          <div id="browse-loading-indicator" style="display: none; margin-top: 1rem;">
-             <div class="spinner" style="margin: 0 auto;"></div>
-             <p style="margin-top: 0.5rem;">Loading page <span id="browse-loading-page"></span>...</p>
+        <div id="browse-pagination" class="browse-pagination" style="display: none;">
+          <button id="browse-load-more-btn" class="btn btn-secondary browse-load-more-btn">Load Next Page</button>
+          <div id="browse-loading-indicator" class="browse-loading-indicator" style="display: none;">
+             <div class="spinner"></div>
+             <p>Loading page <span id="browse-loading-page"></span>...</p>
           </div>
         </div>
       </div>
@@ -224,11 +231,11 @@ class ScraperView {
       };
     });
 
-    let html = '';
-    scraperData.forEach(s => {
+    const cards = scraperData.map(s => {
       const domainIcon = this.getDomainIcon(s.name);
-      html += `
+      return `
         <div class="scraper-info-card">
+
           <div class="scraper-card-header">
             <div class="scraper-card-icon">${domainIcon}</div>
             <div class="scraper-card-name">
@@ -236,11 +243,12 @@ class ScraperView {
               <span class="scraper-card-patterns">${s.urlPatterns.join(', ')}</span>
             </div>
           </div>
-          <div class="scraper-card-capabilities">
+
+          <div class="scraper-card-body">
             <div class="capability-row">
               <span class="capability-label">🔍 Search</span>
-              ${s.canSearch 
-                ? '<span class="capability-pill capability-yes">✓ Supported</span>' 
+              ${s.canSearch
+                ? '<span class="capability-pill capability-yes">✓ Supported</span>'
                 : '<span class="capability-pill capability-no">✗ Not available</span>'}
             </div>
             <div class="capability-row">
@@ -249,24 +257,32 @@ class ScraperView {
             </div>
             <div class="capability-row">
               <span class="capability-label">📖 Browsing</span>
-              ${s.canBrowse 
-                ? '<span class="capability-pill capability-yes">✓ Supported</span>' 
+              ${s.canBrowse
+                ? '<span class="capability-pill capability-yes">✓ Supported</span>'
                 : '<span class="capability-pill capability-soon">🚧 Coming soon</span>'}
             </div>
           </div>
-          <div class="scraper-card-actions" style="margin-top: 16px; display: flex; gap: 8px;">
-            <button class="btn btn-secondary scraper-search-card-btn" data-scraper="${s.name}" ${!s.canSearch ? 'disabled' : ''} style="flex: 1; font-size: 0.85rem;" title="${s.canSearch ? `Search in ${s.name}` : 'Search not supported'}">
-              🔍 Search
-            </button>
-            <button class="btn btn-secondary scraper-browse-card-btn" data-scraper="${s.name}" ${!s.canBrowse ? 'disabled' : ''} style="flex: 1; font-size: 0.85rem;" title="${s.canBrowse ? `Browse ${s.name}` : 'Browsing coming soon'}">
-              📖 Browse
-            </button>
+
+          <div class="scraper-card-footer">
+            <button
+              class="btn btn-secondary scraper-search-card-btn"
+              data-scraper="${s.name}"
+              ${!s.canSearch ? 'disabled' : ''}
+              title="${s.canSearch ? `Search in ${s.name}` : 'Search not supported'}"
+            >🔍 Search</button>
+            <button
+              class="btn btn-secondary scraper-browse-card-btn"
+              data-scraper="${s.name}"
+              ${!s.canBrowse ? 'disabled' : ''}
+              title="${s.canBrowse ? `Browse ${s.name}` : 'Browsing coming soon'}"
+            >📖 Browse</button>
           </div>
+
         </div>
       `;
     });
 
-    container.innerHTML = html;
+    container.innerHTML = cards.join('');
   }
 
   getDomainIcon(name) {
@@ -395,8 +411,7 @@ class ScraperView {
     if (previewAddBtn) {
        previewAddBtn.addEventListener('click', () => {
           if (this.previewInfo && this.previewInfo.url) {
-             this.openAddModal(this.previewInfo.url);
-             document.getElementById('preview-info-modal').style.display = 'none';
+             this.openAddModal(this.previewInfo.url, previewAddBtn);
           }
        });
     }
@@ -414,9 +429,6 @@ class ScraperView {
           document.getElementById('temp-reader-overlay').style.display = 'none';
        });
     }
-    
-    // Intersection Observer for images in temp reader
-    this.setupReaderObserver();
   }
 
   async performSearch() {
@@ -519,29 +531,60 @@ class ScraperView {
         });
       });
 
-      document.querySelectorAll('.add-from-search-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const url = e.target.dataset.url;
-          this.openAddModal(url);
-        });
-      });
+          document.querySelectorAll('.add-from-search-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const url = e.target.dataset.url;
+              this.openAddModal(url, e.target);
+            });
+          });
     }, 100);
   }
 
-  openAddModal(url) {
-    // In our app, there might be a modal for adding manga, or we just navigate to /add
-    // Normally there's an 'add-manga-btn' listener globally.
-    // If not, we can manually trigger the UI action.
-    const addBtn = document.getElementById('add-manga-btn') || document.getElementById('mobile-add-btn');
-    if (addBtn) {
-      // Temporarily stash the URL so the modal can pick it up
-      window.sessionStorage.setItem('prefillMangaUrl', url);
-      addBtn.click();
-    } else {
-      alert("Please copy the URL and add it manually: " + url);
+  async _addToLibraryAndWait(url) {
+    const data = await api.addBookmark(url);
+    if (!data.jobId) throw new Error('No job ID returned');
+    
+    return new Promise((resolve, reject) => {
+      const checkQueue = setInterval(async () => {
+        try {
+          const history = await api.getQueueHistory(20);
+          const job = history.find(j => j.id === data.jobId);
+          if (job) {
+             if (job.status === 'completed') {
+                clearInterval(checkQueue);
+                if (job.result && job.result.bookmark) {
+                   resolve(job.result.bookmark);
+                } else {
+                   reject(new Error("Job completed but returned no bookmark"));
+                }
+             } else if (job.status === 'failed') {
+                clearInterval(checkQueue);
+                reject(new Error(job.error));
+             }
+          }
+        } catch (e) {
+          // ignore network errors while polling
+        }
+      }, 1000);
+    });
+  }
+
+  async openAddModal(url, btnElement) {
+    const originalText = btnElement ? btnElement.textContent : '+ Add to Library';
+    if (btnElement) btnElement.textContent = 'Adding...';
+
+    try {
+      const bookmark = await this._addToLibraryAndWait(url);
+      document.getElementById('preview-info-modal').style.display = 'none';
+      window.location.hash = `#/manga/${bookmark.id}`;
+    } catch (e) {
+      alert("Error adding manga: " + e.message);
+    } finally {
+      if (btnElement) btnElement.textContent = originalText;
     }
   }
+
   async performBrowse(append = false) {
     const container = document.getElementById('browse-results-container');
     const loadBtn = document.getElementById('browse-load-more-btn');
@@ -690,7 +733,7 @@ class ScraperView {
       </div>
     `;
     
-    readBtn.disabled = true;
+    readBtn.disabled = !(result.url || result.galleryId);
 
     try {
        const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`);
@@ -754,155 +797,25 @@ class ScraperView {
   }
 
   async openTempReader() {
-    const readerOverlay = document.getElementById('temp-reader-overlay');
-    const imagesContainer = document.getElementById('temp-reader-images');
-    const counter = document.getElementById('temp-reader-counter');
-    const title = document.getElementById('temp-reader-title');
+    if (!this.previewInfo || (!this.previewInfo.url && !this.previewInfo.galleryId)) return;
+    const url = this.previewInfo.url || `https://nhentai.net/g/${this.previewInfo.galleryId}/`;
     
-    if (!this.previewInfo) return;
+    // Check if we have a specific scraper configured for browse
+    const scraperName = this.browseScraper || this.previewInfo.website;
     
-    // Hide info modal, show reader
-    document.getElementById('preview-info-modal').style.display = 'none';
-    readerOverlay.style.display = 'flex';
-    title.textContent = this.previewInfo.title || 'Loading...';
-    counter.textContent = 'Starting stream...';
-    imagesContainer.innerHTML = `<div id="stream-spinner" class="spinner" style="margin: 50px auto;"></div><div id="stream-status" style="color:white;text-align:center;">Connecting to scraper...</div>`;
-    
-    try {
-       // Close existing SSE connection if active
-       if (this.previewEventSource) {
-           this.previewEventSource.close();
-       }
-       
-       this.previewImages = [];
-       
-       let apiUrl = `/api/scrapers/preview-images-stream?scraper=${encodeURIComponent(this.browseScraper || this.previewInfo.website)}`;
-       if (this.previewInfo.galleryId) {
-          apiUrl += `&galleryId=${this.previewInfo.galleryId}`;
-       } else if (this.previewInfo.displayId) {
-          apiUrl += `&galleryId=${this.previewInfo.displayId}`;
-       } else {
-          apiUrl += `&url=${encodeURIComponent(this.previewInfo.url)}`;
-       }
-       
-       // Append token manually since EventSource doesn't use standard fetch headers
-       const token = localStorage.getItem('manga_auth_token');
-       if (token) {
-          // This allows backend auth to pass if it checks query string, though we bypassed it for proxy.
-          // Wait, preview-images-stream IS protected by auth! We must send the token.
-          // In express, we usually don't accept tokens in query string by default.
-       }
-       
-       // Actually, EventSource might hit 401. Let's use fetch API to stream!
-       const fetchStreamUrl = apiUrl.replace('/api', ''); // remove /api to use the api wrapper
-       
-       // Because api.get doesn't stream, we'll do a custom fetch with auth headers
-       const headers = { 'Authorization': `Bearer ${token || ''}` };
-       
-       // We'll use a standard SSE EventSource since Vite proxy sends cookies/etc,
-       // but wait, JWT is usually in headers. Let's use fetch and read the stream manually!
-       
-       const response = await fetch('/api' + fetchStreamUrl, { headers });
-       
-       if (!response.ok) {
-           throw new Error(`Failed to start stream: ${response.statusText}`);
-       }
-       
-       const reader = response.body.getReader();
-       const decoder = new TextDecoder();
-       let buffer = '';
-       let totalImagesCount = '?';
-       
-       // Setup observer once
-       setTimeout(() => {
-          this.setupReaderObserver();
-       }, 100);
-
-       while (true) {
-           const { value, done } = await reader.read();
-           if (done) break;
-           
-           buffer += decoder.decode(value, { stream: true });
-           const lines = buffer.split('\n\n');
-           buffer = lines.pop(); // Keep incomplete chunk in buffer
-           
-           for (const line of lines) {
-               if (line.startsWith('data: ')) {
-                   const jsonStr = line.substring(6);
-                   try {
-                       const data = JSON.parse(jsonStr);
-                       
-                       if (data.type === 'metadata') {
-                           totalImagesCount = data.pageCount;
-                           title.textContent = data.title;
-                           document.getElementById('stream-status').textContent = `Found ${totalImagesCount} pages. Fetching...`;
-                           counter.textContent = `0 / ${totalImagesCount}`;
-                       } else if (data.type === 'image') {
-                           // Remove spinner on first image
-                           const spinner = document.getElementById('stream-spinner');
-                           if (spinner) spinner.remove();
-                           const status = document.getElementById('stream-status');
-                           if (status) status.remove();
-                           
-                           this.previewImages.push(data.url);
-                           
-                           const proxiedUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(data.url)}`;
-                           const imgContainer = document.createElement('div');
-                           imgContainer.className = "reader-page-container";
-                           imgContainer.style.cssText = "min-height: 50vh; display: flex; align-items: center; justify-content: center;";
-                           
-                           imgContainer.innerHTML = `<img class="reader-preview-img" data-index="${data.index}" data-src="${proxiedUrl}" style="max-width: 100vw; max-height: 100vh; object-fit: contain;">`;
-                           
-                           imagesContainer.appendChild(imgContainer);
-                           
-                           // Observe new image
-                           const newImg = imgContainer.querySelector('img');
-                           if (this.imageObserver) {
-                               this.imageObserver.observe(newImg);
-                           }
-                           
-                           counter.textContent = `${data.index} / ${totalImagesCount}`;
-                       } else if (data.type === 'error') {
-                           throw new Error(data.message);
-                       } else if (data.type === 'done') {
-                           // Done!
-                           break;
-                       }
-                   } catch (e) {
-                       console.error("Parse error for SSE data:", e);
-                   }
-               }
-           }
-       }
-       
-    } catch (e) {
-       console.error("Preview reader error:", e);
-       imagesContainer.innerHTML = `<div style="color:red; padding: 50px;">Failed to load images: ${e.message}</div>`;
+    // Store in sessionStorage to pass to standard reader
+    sessionStorage.setItem('streamPreviewUrl', url);
+    sessionStorage.setItem('streamPreviewTitle', this.previewInfo.title || 'Preview');
+    if (scraperName) {
+        sessionStorage.setItem('streamPreviewScraper', scraperName);
+    } else {
+        sessionStorage.removeItem('streamPreviewScraper');
     }
+    
+    document.getElementById('preview-info-modal').style.display = 'none';
+    window.location.hash = `#/read/stream/preview`;
   }
 
-  setupReaderObserver() {
-    this.imageObserver = new IntersectionObserver((entries, observer) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const img = entry.target;
-          // Lazy load
-          if (img.dataset.src && !img.src) {
-             img.src = img.dataset.src;
-             // Don't remove dataset.src so we can track it
-          }
-          // Update counter (take highest visible index)
-          const index = parseInt(img.dataset.index);
-          const total = this.previewImages ? this.previewImages.length : '?';
-          document.getElementById('temp-reader-counter').textContent = `${index} / ${total}`;
-        }
-      });
-    }, {
-      root: document.getElementById('temp-reader-scroll'),
-      rootMargin: '100% 0px 100% 0px', // Pre-load 1 screen above and below
-      threshold: 0.1
-    });
-  }
 }
 
 export default new ScraperView();

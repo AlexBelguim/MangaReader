@@ -27,6 +27,11 @@ export class BaseScraper {
     return false;
   }
 
+  // Whether this scraper supports browsing (catalog with sort/filter/pagination)
+  get supportsBrowse() {
+    return false;
+  }
+
   // Check if this scraper can handle the given URL
   canHandle(url) {
     return this.urlPatterns.some(pattern => url.includes(pattern));

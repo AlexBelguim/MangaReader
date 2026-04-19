@@ -10,14 +10,14 @@
 
   <title>Manga Reader</title>
 
-  <link rel="manifest" href="/assets/manifest-BIWej8r1.json">
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="manifest" href="/assets/manifest-D_gnROSa.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192-nKtL3mOr.png">
+  <link rel="apple-touch-icon" href="/assets/icon-192-nKtL3mOr.png">
 
-  <script type="module" crossorigin src="/assets/main-DQAu5u5x.js"></script>
+  <script type="module" crossorigin src="/assets/main-COZktOSx.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/api-BPljbFn_.js">
   <link rel="stylesheet" crossorigin href="/assets/api-DMx9eHV5.css">
-  <link rel="stylesheet" crossorigin href="/assets/main-CAWAupky.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-Bp6zZm3c.css">
 </head>
 
 <body>
@@ -29,6 +29,15 @@
     </div>
   </div>
 
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(reg => console.log('[App] SW registered:', reg.scope))
+          .catch(err => console.warn('[App] SW registration failed:', err));
+      });
+    }
+  </script>
 </body>
 
 </html>

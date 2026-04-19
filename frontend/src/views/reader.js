@@ -30,7 +30,9 @@ let state = {
     navigationDirection: null, // 'prev', 'next-linked', or null
     nextChapterImage: null, // URL of next chapter's first image (for link mode)
     nextChapterNum: null, // chapter number of the next chapter
-    _preloadCache: null // { chapterNum, mangaId, images[], imageObjects[] }
+    _preloadCache: null, // { chapterNum, mangaId, images[], imageObjects[] }
+    isStreamingMode: false,
+    _streamAbortController: null
 };
 
 // ==================== HELPERS ====================
@@ -112,7 +114,7 @@ export function render() {
     `;
     }
 
-    if (!state.manga || !state.images.length) {
+    if (!state.manga || (!state.images.length && !state.isStreamingMode)) {
         return `
       <div class="reader-error">
         <h2>Failed to load chapter</h2>
@@ -153,10 +155,14 @@ export function render() {
         <button class="reader-bar-btn close-btn" id="reader-close-btn" title="Back">×</button>
         <div class="reader-title">
           <span class="manga-name">${displayName}</span>
-          <span class="chapter-name">Ch. ${chapterNum}</span>
+          ${state.isStreamingMode ? '' : `<span class="chapter-name">Ch. ${chapterNum}</span>`}
         </div>
         ${state.isCollectionMode ? '' : `
         <div class="reader-bar-tools" id="reader-toolbar">
+          ${state.isStreamingMode ? `
+          <button class="reader-bar-btn" id="stream-add-lib-btn" title="Add to Library">📥</button>
+          <span class="reader-bar-divider"></span>
+          ` : `
           <button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">⭐</button>
           
           <button class="reader-bar-btn" id="rotate-btn" title="Rotate 90° CW">🔄</button>
@@ -167,11 +173,14 @@ export function render() {
             <button class="reader-bar-btn" id="split-btn" title="Split wide image into halves">✂️</button>
           ` : ''}
           <span class="reader-bar-divider"></span>
+          `}
           ${state.mode === 'manga' ? `
             <button class="reader-bar-btn ${state.singlePageMode ? 'active' : ''}" id="single-page-btn" title="${state.singlePageMode ? 'Switch to double page' : 'Switch to single page'}">
               ${state.singlePageMode ? '1️⃣' : '2️⃣'}
             </button>
+            ${state.isStreamingMode ? '' : `
             <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">🏆</button>
+            `}
           ` : ''}
           <button class="reader-bar-btn" id="fullscreen-btn" title="Toggle fullscreen">⛶</button>
           <button class="reader-bar-btn" id="reader-settings-btn" title="Settings">⚙️</button>
@@ -186,7 +195,9 @@ export function render() {
       
       <!-- Footer -->
       <div class="reader-footer">
+        ${state.isStreamingMode ? '' : `
         <button class="btn btn-secondary" id="prev-chapter-btn">← Prev</button>
+        `}
         <div class="page-slider-container">
           ${state.mode !== 'webtoon' ? `
           <input type="range" class="page-slider" id="page-slider"
@@ -195,7 +206,9 @@ export function render() {
           ` : ''}
           <span class="page-indicator" id="page-indicator">${currentDisplay}</span>
         </div>
+        ${state.isStreamingMode ? '' : `
         <button class="btn btn-secondary" id="next-chapter-btn">Next →</button>
+        `}
       </div>
       
       <!-- Settings panel -->
@@ -673,11 +686,15 @@ async function saveCurrentProgress() {
 export function setupListeners() {
     const app = document.getElementById('app');
 
-    // Close button - save progress first
     document.getElementById('reader-close-btn')?.addEventListener('click', async () => {
-        await saveCurrentProgress();
-        await saveSettings();
-        if (state.manga && state.manga.id !== 'gallery') {
+        if (!state.isStreamingMode) {
+            await saveCurrentProgress();
+            await saveSettings();
+        }
+        
+        if (state.isStreamingMode) {
+            router.go('/scrapers');
+        } else if (state.manga && state.manga.id !== 'gallery') {
             router.go(`/manga/${state.manga.id}`);
         } else {
             router.go('/');
@@ -685,7 +702,7 @@ export function setupListeners() {
     });
 
     document.getElementById('reader-back-btn')?.addEventListener('click', () => {
-        router.go('/');
+        router.go(state.isStreamingMode ? '/scrapers' : '/');
     });
 
     // Settings toggle
@@ -1043,6 +1060,58 @@ export function setupListeners() {
             document.documentElement.requestFullscreen().catch(() => {
                 showToast('Fullscreen not supported', 'info');
             });
+        }
+    });
+
+    // Streaming mode: Add to Library
+    document.getElementById('stream-add-lib-btn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('stream-add-lib-btn');
+        if (!state.manga?._streamUrl) {
+            showToast('No URL to add', 'error');
+            return;
+        }
+        
+        const originalText = btn.textContent;
+        btn.textContent = '⏳';
+        btn.disabled = true;
+        
+        try {
+            const data = await api.addBookmark(state.manga._streamUrl);
+            if (!data.jobId) throw new Error('No job ID returned');
+            
+            showToast('Adding to library...', 'info');
+            
+            // Poll for completion
+            const checkInterval = setInterval(async () => {
+                try {
+                    const history = await api.getQueueHistory(20);
+                    const job = history.find(j => j.id === data.jobId);
+                    if (job) {
+                        if (job.status === 'completed') {
+                            clearInterval(checkInterval);
+                            if (job.result?.bookmark) {
+                                showToast('Added to library!', 'success');
+                                btn.textContent = '✅';
+                                btn.title = 'Added! Click to view';
+                                btn.disabled = false;
+                                // Replace click handler to navigate to manga page
+                                btn.onclick = () => {
+                                    router.go(`/manga/${job.result.bookmark.id}`);
+                                };
+                            }
+                        } else if (job.status === 'failed') {
+                            clearInterval(checkInterval);
+                            showToast('Failed to add: ' + (job.error || 'Unknown error'), 'error');
+                            btn.textContent = originalText;
+                            btn.disabled = false;
+                        }
+                    }
+                } catch (e) { /* ignore polling errors */ }
+            }, 1500);
+        } catch (e) {
+            showToast('Failed to add: ' + e.message, 'error');
+            btn.textContent = originalText;
+            btn.disabled = false;
         }
     });
 
@@ -1646,6 +1715,7 @@ function fullReRender() {
  */
 async function navigateChapter(delta) {
     console.log('[Nav] navigateChapter called with delta:', delta);
+    if (state.isStreamingMode) return;
     if (!state.manga || !state.chapter) {
         console.log('[Nav] early return - no manga or chapter');
         return;
@@ -1807,6 +1877,24 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             state.isCollectionMode = true;
             state.isGalleryMode = false;
 
+        } else if (mangaId === 'stream') {
+            state.isStreamingMode = true;
+            state.isCollectionMode = false;
+            state.isGalleryMode = false;
+            
+            const url = sessionStorage.getItem('streamPreviewUrl');
+            const scraperName = sessionStorage.getItem('streamPreviewScraper');
+            const title = sessionStorage.getItem('streamPreviewTitle') || 'Preview';
+            
+            state.manga = { id: 'stream', title: title, alias: title, _streamUrl: url };
+            state.chapter = { number: 1 };
+            state.images = [];
+            
+            if (url) {
+                startStream(url, scraperName);
+            } else {
+                showToast('No stream URL found', 'error');
+            }
         } else {
             // Standard Manga Reader Mode
             state.isGalleryMode = false;
@@ -1890,33 +1978,37 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             }
         } // End of else (standard manga mode)
 
-        // Resume reading progress
-        const targetNum = parseFloat(chapterNum);
-        const progress = state.manga?.readingProgress?.[targetNum];
-        if (progress && progress.page < progress.totalPages) {
-            if (state.mode === 'manga') {
-                if (state.singlePageMode) {
-                    state.currentPage = Math.max(0, progress.page - 1);
-                } else {
-                    // Map page index to spread index
-                    const pageIdx = Math.max(0, progress.page - 1);
-                    const spreads = buildSpreads();
-                    let spreadIdx = 0;
-                    for (let i = 0; i < spreads.length; i++) {
-                        const sp = spreads[i];
-                        const pages = Array.isArray(sp) ? sp : (sp.pages || []);
-                        if (pages.includes(pageIdx) || (pages[0] >= pageIdx)) {
+        // Resume reading progress (skip for streaming — no DB record)
+        if (!state.isStreamingMode) {
+            const targetNum = parseFloat(chapterNum);
+            const progress = state.manga?.readingProgress?.[targetNum];
+            if (progress && progress.page < progress.totalPages) {
+                if (state.mode === 'manga') {
+                    if (state.singlePageMode) {
+                        state.currentPage = Math.max(0, progress.page - 1);
+                    } else {
+                        // Map page index to spread index
+                        const pageIdx = Math.max(0, progress.page - 1);
+                        const spreads = buildSpreads();
+                        let spreadIdx = 0;
+                        for (let i = 0; i < spreads.length; i++) {
+                            const sp = spreads[i];
+                            const pages = Array.isArray(sp) ? sp : (sp.pages || []);
+                            if (pages.includes(pageIdx) || (pages[0] >= pageIdx)) {
+                                spreadIdx = i;
+                                break;
+                            }
                             spreadIdx = i;
-                            break;
                         }
-                        spreadIdx = i;
+                        state.currentPage = spreadIdx;
                     }
-                    state.currentPage = spreadIdx;
+                } else {
+                    // Webtoon: we'll scroll after render
+                    state.currentPage = 0;
+                    state._resumeScrollToPage = progress.page - 1;
                 }
             } else {
-                // Webtoon: we'll scroll after render
                 state.currentPage = 0;
-                state._resumeScrollToPage = progress.page - 1;
             }
         } else {
             state.currentPage = 0;
@@ -1927,32 +2019,33 @@ async function loadData(mangaId, chapterNum, versionUrl) {
         showToast('Failed to load chapter', 'error');
     }
 
-    // Apply navigation direction (overrides progress)
-    if (state.navigationDirection === 'prev' && state.mode === 'manga') {
-        if (state.singlePageMode) {
-            state.currentPage = Math.max(0, state.images.length - 1);
-        } else {
-            const spreads = buildSpreads();
-            state.currentPage = Math.max(0, spreads.length - 1);
-        }
-    } else if (state.navigationDirection === 'next-linked' && state.mode === 'manga') {
-        // Skip first page of new chapter if we navigated via link spread
-        if (state.images.length > 1) {
+    // Apply navigation direction (overrides progress) — only for standard reader
+    if (!state.isStreamingMode) {
+        if (state.navigationDirection === 'prev' && state.mode === 'manga') {
             if (state.singlePageMode) {
-                state.currentPage = 1; // page index 1
+                state.currentPage = Math.max(0, state.images.length - 1);
             } else {
                 const spreads = buildSpreads();
-                // Find spread containing page 1
-                let spreadIdx = 0;
-                for (let i = 0; i < spreads.length; i++) {
-                    const sp = spreads[i];
-                    const pages = Array.isArray(sp) ? sp : (sp.pages || []);
-                    if (pages.includes(1)) {
-                        spreadIdx = i;
-                        break;
+                state.currentPage = Math.max(0, spreads.length - 1);
+            }
+        } else if (state.navigationDirection === 'next-linked' && state.mode === 'manga') {
+            // Skip first page of new chapter if we navigated via link spread
+            if (state.images.length > 1) {
+                if (state.singlePageMode) {
+                    state.currentPage = 1;
+                } else {
+                    const spreads = buildSpreads();
+                    let spreadIdx = 0;
+                    for (let i = 0; i < spreads.length; i++) {
+                        const sp = spreads[i];
+                        const pages = Array.isArray(sp) ? sp : (sp.pages || []);
+                        if (pages.includes(1)) {
+                            spreadIdx = i;
+                            break;
+                        }
                     }
+                    state.currentPage = spreadIdx;
                 }
-                state.currentPage = spreadIdx;
             }
         }
     }
@@ -1960,16 +2053,18 @@ async function loadData(mangaId, chapterNum, versionUrl) {
     // Clear navigation direction
     state.navigationDirection = null;
 
-    // Fetch next chapter preview
-    if (state.lastPageSingle) {
+    // Fetch next chapter preview (skip for streaming)
+    if (state.lastPageSingle && !state.isStreamingMode) {
         await fetchNextPreview();
     }
 
     state.loading = false;
     fullReRender();
 
-    // Preload next chapter in the background (non-blocking)
-    preloadNextChapter();
+    // Preload next chapter in the background (skip for streaming)
+    if (!state.isStreamingMode) {
+        preloadNextChapter();
+    }
 
     // Scroll to resumed page in webtoon mode
     if (state.mode === 'webtoon' && state._resumeScrollToPage) {
@@ -2013,6 +2108,87 @@ export async function init(mangaId, chapterNum, versionUrl) {
     };
 }
 
+
+
+// ==================== STREAMING ====================
+
+async function startStream(url, scraperName) {
+    if (state._streamAbortController) {
+        state._streamAbortController.abort();
+    }
+    state._streamAbortController = new AbortController();
+    const { signal } = state._streamAbortController;
+
+    try {
+        let apiUrl = `/api/scrapers/preview-images-stream?`;
+        if (scraperName) {
+            apiUrl += `scraper=${encodeURIComponent(scraperName)}&`;
+        }
+        apiUrl += `url=${encodeURIComponent(url)}`;
+        
+        const token = localStorage.getItem('manga_auth_token');
+        const headers = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        
+        console.log('[Reader] Starting stream from:', apiUrl);
+        const response = await fetch(apiUrl, { headers, signal });
+        
+        if (!response.ok) {
+            throw new Error(`Failed to start stream: ${response.statusText}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (signal.aborted) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop(); // Keep incomplete chunk
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.substring(6);
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        
+                        if (data.type === 'metadata') {
+                            state.manga.title = data.title;
+                            state.manga.alias = data.title;
+                            fullReRender(); // Render title
+                        } else if (data.type === 'image') {
+                            const proxiedUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(data.url)}`;
+                            state.images.push(proxiedUrl);
+                            
+                            // Don't fully re-render every page, just update spread
+                            // To prevent too much layout shifting, we can debounce or just update directly
+                            updateSpread();
+                        } else if (data.type === 'error') {
+                            showToast('Stream error: ' + data.message, 'error');
+                        } else if (data.type === 'done') {
+                            break;
+                        }
+                    } catch (e) {
+                        console.error("Parse error for SSE data:", e);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        if (e.name !== 'AbortError') {
+            console.error("Preview stream error:", e);
+            showToast('Stream failed: ' + e.message, 'error');
+        }
+    } finally {
+        if (state._streamAbortController && state._streamAbortController.signal === signal) {
+            state._streamAbortController = null;
+        }
+    }
+}
 
 
 // ==================== LIFECYCLE ====================
@@ -2113,8 +2289,17 @@ export async function mount(params = []) {
  */
 export async function unmount() {
     console.log('[Reader] unmount called');
-    await saveCurrentProgress();
-    await saveSettings();
+    
+    if (state._streamAbortController) {
+        state._streamAbortController.abort();
+        state._streamAbortController = null;
+    }
+    
+    if (!state.isStreamingMode) {
+        await saveCurrentProgress();
+        await saveSettings();
+    }
+    
     document.body.classList.remove('reader-active');
     document.removeEventListener('keydown', handleKeyboard);
     state.manga = null;
@@ -2122,6 +2307,7 @@ export async function unmount() {
     state.images = [];
     state.loading = true;
     state.singlePageMode = false;
+    state.isStreamingMode = false;
     state._resumeScrollToPage = null;
     state._preloadCache = null;
 }
@@ -2130,7 +2316,7 @@ export async function unmount() {
  * Save settings to DB
  */
 async function saveSettings() {
-    if (!state.manga || !state.chapter || state.manga.id === 'gallery') return;
+    if (!state.manga || !state.chapter || state.manga.id === 'gallery' || state.isStreamingMode) return;
 
     try {
         await api.updateChapterSettings(state.manga.id, state.chapter.number, {

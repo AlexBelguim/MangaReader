@@ -1,10 +1,13 @@
 import puppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteer from 'puppeteer';
+import path from 'path';
 import { CONFIG } from '../../config.js';
 
 // Register stealth plugin once at module load
 puppeteerExtra.use(StealthPlugin());
+
+let browserInstance = null;
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -34,10 +37,23 @@ export async function launchBrowser({
     baseLaunchOpts.defaultViewport = viewport;
   }
 
-  const finalOpts = { ...baseLaunchOpts, ...launchOverrides };
+  const finalOpts = {
+    ...baseLaunchOpts,
+    ...launchOverrides,
+    userDataDir: path.join(CONFIG.dataDir, 'puppeteer_profile')
+  };
   const launcher = stealth ? puppeteerExtra : puppeteer;
-  const browser = await launcher.launch(finalOpts);
-  const page = await browser.newPage();
+
+  if (!browserInstance) {
+    browserInstance = await launcher.launch(finalOpts);
+    
+    // If the browser process exits unexpectedly, clear the instance so we can relaunch next time
+    browserInstance.on('disconnected', () => {
+      browserInstance = null;
+    });
+  }
+
+  const page = await browserInstance.newPage();
 
   if (userAgent) {
     await page.setUserAgent(userAgent);
@@ -47,7 +63,19 @@ export async function launchBrowser({
     await page.setViewport(viewport);
   }
 
-  return { browser, page };
+  return {
+    // Return a mock browser that only closes the page
+    browser: {
+      close: async () => {
+        try {
+          if (!page.isClosed()) await page.close();
+        } catch (e) {
+          // Ignore
+        }
+      }
+    },
+    page
+  };
 }
 
 export { DEFAULT_USER_AGENT };
