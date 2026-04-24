@@ -493,7 +493,7 @@ class Downloader {
             return { success: true, message: 'Version not on disk (nothing to delete)' };
           }
         } else {
-          return { success: false, message: 'No versions found' };
+          return { success: true, message: 'No versions found' };
         }
       }
     } else {
@@ -504,7 +504,7 @@ class Downloader {
       if (!await fs.pathExists(chapterDir)) {
         const versions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
         if (versions.length === 0) {
-          return { success: false, message: 'Chapter not found' };
+          return { success: true, message: 'Chapter not found' };
         }
 
         // Delete all versions
@@ -516,7 +516,7 @@ class Downloader {
     }
 
     if (!await fs.pathExists(chapterDir)) {
-      return { success: false, message: 'Chapter not found' };
+      return { success: true, message: 'Chapter not found' };
     }
 
     try {
