@@ -715,13 +715,13 @@ router.delete('/:id/chapters', async (req, res) => {
             !(ch.number === chapterNumber && ch.url === url)
         );
 
+        const remainingVersionsCount = updatedChapters.filter(ch => ch.number === chapterNumber).length;
         const updatedDuplicates = (bookmark.duplicateChapters || []).map(dup => {
             if (dup.number === chapterNumber) {
-                const newVersions = dup.versions.filter(v => v.url !== url);
-                if (newVersions.length <= 1) {
+                if (remainingVersionsCount <= 1) {
                     return null;
                 }
-                return { ...dup, versions: newVersions };
+                return { ...dup, count: remainingVersionsCount };
             }
             return dup;
         }).filter(Boolean);
