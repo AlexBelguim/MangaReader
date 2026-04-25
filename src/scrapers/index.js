@@ -41,18 +41,31 @@ class ScraperFactory {
   constructor() {
     this.browser = null;
     this.scrapers = [];
+    this.initPromise = null;
   }
 
   async init() {
-    if (!this.browser) {
-      this.browser = await puppeteer.launch(CONFIG.puppeteer);
-    }
+    if (this.browser) return;
+    if (this.initPromise) return this.initPromise;
 
-    // Auto-discover and initialize all scrapers from the sites/ directory
-    const scraperClasses = await loadScrapers();
-    this.scrapers = scraperClasses.map(ScraperClass => new ScraperClass(this.browser));
-    
-    console.log(`[ScraperFactory] Registered: ${this.scrapers.map(s => s.websiteName).join(', ')}`);
+    this.initPromise = (async () => {
+      try {
+        if (!this.browser) {
+          this.browser = await puppeteer.launch(CONFIG.puppeteer);
+        }
+
+        // Auto-discover and initialize all scrapers from the sites/ directory
+        const scraperClasses = await loadScrapers();
+        this.scrapers = scraperClasses.map(ScraperClass => new ScraperClass(this.browser));
+        
+        console.log(`[ScraperFactory] Registered: ${this.scrapers.map(s => s.websiteName).join(', ')}`);
+      } catch (error) {
+        this.initPromise = null;
+        throw error;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   async close() {

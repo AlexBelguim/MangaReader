@@ -2,12 +2,14 @@ import puppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteer from 'puppeteer';
 import path from 'path';
+import fs from 'fs';
 import { CONFIG } from '../../config.js';
 
 // Register stealth plugin once at module load
 puppeteerExtra.use(StealthPlugin());
 
 let browserInstance = null;
+let browserPromise = null;
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -29,31 +31,70 @@ export async function launchBrowser({
   viewport = null,
   launchOverrides = {}
 } = {}) {
-  const baseLaunchOpts = stealth
-    ? { headless: 'new', defaultViewport: null, args: ['--no-sandbox', '--disable-setuid-sandbox'] }
-    : { ...CONFIG.puppeteer };
-
-  if (viewport) {
-    baseLaunchOpts.defaultViewport = viewport;
+  // Prevent race condition if multiple calls happen at once
+  if (browserInstance) {
+    return createPageResponse(browserInstance, userAgent, viewport);
   }
 
-  const finalOpts = {
-    ...baseLaunchOpts,
-    ...launchOverrides,
-    userDataDir: path.join(CONFIG.dataDir, 'puppeteer_profile')
-  };
-  const launcher = stealth ? puppeteerExtra : puppeteer;
-
-  if (!browserInstance) {
-    browserInstance = await launcher.launch(finalOpts);
-    
-    // If the browser process exits unexpectedly, clear the instance so we can relaunch next time
-    browserInstance.on('disconnected', () => {
-      browserInstance = null;
-    });
+  if (browserPromise) {
+    const browser = await browserPromise;
+    return createPageResponse(browser, userAgent, viewport);
   }
 
-  const page = await browserInstance.newPage();
+  browserPromise = (async () => {
+    try {
+      const baseLaunchOpts = stealth
+        ? { headless: 'new', defaultViewport: null, args: ['--no-sandbox', '--disable-setuid-sandbox'] }
+        : { ...CONFIG.puppeteer };
+
+      if (viewport) {
+        baseLaunchOpts.defaultViewport = viewport;
+      }
+
+      const userDataDir = path.join(CONFIG.dataDir, 'puppeteer_profile');
+      
+      // Clean up stale lock files which often happen on network shares or after crashes
+      const lockFile = path.join(userDataDir, 'SingletonLock');
+      if (fs.existsSync(lockFile)) {
+        try {
+          console.log(`[StealthBrowser] Removing stale lock file: ${lockFile}`);
+          fs.unlinkSync(lockFile);
+        } catch (e) {
+          console.warn(`[StealthBrowser] Could not remove puppeteer lock file: ${e.message}`);
+        }
+      }
+
+      const finalOpts = {
+        ...baseLaunchOpts,
+        ...launchOverrides,
+        userDataDir
+      };
+      
+      const launcher = stealth ? puppeteerExtra : puppeteer;
+      
+      console.log(`[StealthBrowser] Launching browser...`);
+      const browser = await launcher.launch(finalOpts);
+      
+      browser.on('disconnected', () => {
+        console.log(`[StealthBrowser] Browser disconnected`);
+        browserInstance = null;
+        browserPromise = null;
+      });
+
+      browserInstance = browser;
+      return browser;
+    } catch (error) {
+      browserPromise = null;
+      throw error;
+    }
+  })();
+
+  const browser = await browserPromise;
+  return createPageResponse(browser, userAgent, viewport);
+}
+
+async function createPageResponse(browser, userAgent, viewport) {
+  const page = await browser.newPage();
 
   if (userAgent) {
     await page.setUserAgent(userAgent);
