@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer';
 import { CONFIG } from '../config.js';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,7 +52,31 @@ class ScraperFactory {
     this.initPromise = (async () => {
       try {
         if (!this.browser) {
-          this.browser = await puppeteer.launch(CONFIG.puppeteer);
+          const userDataDir = path.join(os.tmpdir(), 'puppeteer_main_profile');
+          
+          // Ensure directory exists
+          if (!fs.existsSync(userDataDir)) {
+            fs.mkdirSync(userDataDir, { recursive: true });
+          }
+
+          // Clean up stale lock files
+          const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+          for (const f of lockFiles) {
+            const lockPath = path.join(userDataDir, f);
+            if (fs.existsSync(lockPath)) {
+              try {
+                console.log(`[ScraperFactory] Removing stale lock file: ${lockPath}`);
+                fs.unlinkSync(lockPath);
+              } catch (e) {
+                console.warn(`[ScraperFactory] Could not remove puppeteer lock file ${f}: ${e.message}`);
+              }
+            }
+          }
+
+          this.browser = await puppeteer.launch({
+            ...CONFIG.puppeteer,
+            userDataDir
+          });
         }
 
         // Auto-discover and initialize all scrapers from the sites/ directory

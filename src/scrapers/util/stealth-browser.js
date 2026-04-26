@@ -3,6 +3,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { CONFIG } from '../../config.js';
 
 // Register stealth plugin once at module load
@@ -51,16 +52,24 @@ export async function launchBrowser({
         baseLaunchOpts.defaultViewport = viewport;
       }
 
-      const userDataDir = path.join(CONFIG.dataDir, 'puppeteer_profile');
+      const userDataDir = path.join(os.tmpdir(), 'puppeteer_stealth_profile');
       
+      // Ensure directory exists
+      if (!fs.existsSync(userDataDir)) {
+        fs.mkdirSync(userDataDir, { recursive: true });
+      }
+
       // Clean up stale lock files which often happen on network shares or after crashes
-      const lockFile = path.join(userDataDir, 'SingletonLock');
-      if (fs.existsSync(lockFile)) {
-        try {
-          console.log(`[StealthBrowser] Removing stale lock file: ${lockFile}`);
-          fs.unlinkSync(lockFile);
-        } catch (e) {
-          console.warn(`[StealthBrowser] Could not remove puppeteer lock file: ${e.message}`);
+      const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+      for (const f of lockFiles) {
+        const lockPath = path.join(userDataDir, f);
+        if (fs.existsSync(lockPath)) {
+          try {
+            console.log(`[StealthBrowser] Removing stale lock file: ${lockPath}`);
+            fs.unlinkSync(lockPath);
+          } catch (e) {
+            console.warn(`[StealthBrowser] Could not remove puppeteer lock file ${f}: ${e.message}`);
+          }
         }
       }
 
