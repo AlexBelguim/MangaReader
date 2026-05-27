@@ -322,111 +322,166 @@ export class ComixScraper extends BaseScraper {
     // Use clean page without blocking - needed for lazy loading to work
     await this.createPageClean();
 
+    // Capture chapter image URLs at the network layer. The new reader
+    // renders every 3rd page as a <canvas> (anti-scrape) so DOM-only
+    // extraction misses them, but the browser still fetches every webp.
+    const captured = [];
+    const onResponse = (res) => {
+      const url = res.url();
+      // Chapter images live on the wowpic CDN under /si/<token>/NN.<ext>
+      if (!/wowpic\d*\.\w+\/si\/[^/]+\/\d+\.(webp|jpe?g|png|avif)(\?|$)/i.test(url)) return;
+      if (res.status() !== 200) return;
+      captured.push(url);
+    };
+    this.page.on('response', onResponse);
+
     try {
       console.log(`  Loading chapter: ${chapterUrl}`);
-      await this.page.goto(chapterUrl, { 
+      await this.page.goto(chapterUrl, {
         waitUntil: 'networkidle2',
-        timeout: 60000 
+        timeout: 60000
       });
 
-      // Wait for initial load
+      // Wait for initial render
       await new Promise(r => setTimeout(r, 3000));
 
-      // Scroll until we truly reach the bottom (scroll position stops changing)
-      console.log('  Scrolling to load all images...');
-      await this.page.evaluate(async () => {
-        await new Promise((resolve) => {
-          let lastScrollY = -1;
-          let sameCount = 0;
-          
-          const timer = setInterval(() => {
-            window.scrollBy(0, 1500);
-            
-            // Check if scroll position changed
-            if (window.scrollY === lastScrollY) {
-              sameCount++;
-              // If position hasn't changed for 3 checks, we're at the bottom
-              if (sameCount >= 3) {
-                clearInterval(timer);
-                resolve();
-              }
-            } else {
-              sameCount = 0;
-            }
-            lastScrollY = window.scrollY;
-          }, 200);
-          
-          // Safety timeout
-          setTimeout(() => {
-            clearInterval(timer);
-            resolve();
-          }, 60000);
-        });
+      // Dismiss the "Reader controls" hint overlay and any open settings panel
+      await this.dismissReaderOverlays();
+
+      // Wait for the reader skeleton (either the long-strip main or progress bar)
+      await this.page.waitForSelector('main.rpage-main, .rpage-progress__seg', { timeout: 15000 })
+        .catch(() => {});
+
+      // Detect reader mode. Comix.to wraps webtoons in main.rpage-main--long-strip
+      // and paginated manga in a Swiper carousel.
+      const isLongStrip = await this.page.evaluate(() => {
+        const main = document.querySelector('main.rpage-main');
+        if (main && main.classList.contains('rpage-main--long-strip')) return true;
+        const panel = document.querySelector('.rpage-settings__panel');
+        if (panel && /STRIP MARGIN/i.test(panel.innerText)) return true;
+        return false;
       });
 
-      // Wait for images to finish loading
-      await new Promise(r => setTimeout(r, 2000));
+      console.log(`  Reader mode: ${isLongStrip ? 'long-strip (webtoon)' : 'paged (manga)'}`);
 
-      // Wait for all images to be loaded
-      await this.page.waitForFunction(() => {
-        const imgs = document.querySelectorAll('img.fit-w');
-        if (imgs.length === 0) return false;
-        return Array.from(imgs).every(img => img.src && img.naturalWidth > 0);
-      }, { timeout: 15000 }).catch(() => {});
+      // Walk through the chapter to trigger every image fetch
+      if (isLongStrip) {
+        await this.walkLongStrip();
+      } else {
+        await this.walkPagedReader();
+      }
 
-      // Extract images - comix.to uses img.fit-w for chapter pages
-      const images = await this.page.evaluate(() => {
-        // First try the specific comix.to selector
-        let imgElements = document.querySelectorAll('img.fit-w');
-        
-        // Fallback to other common selectors if none found
-        if (imgElements.length === 0) {
-          imgElements = document.querySelectorAll(
-            '.reader-content img, .chapter-content img, .page-container img, ' +
-            '.reading-content img, #readerarea img, .chapter-images img, ' +
-            '[class*="page"] img, img[src*="cdn"], img[data-src*="cdn"]'
-          );
-        }
+      // Give any in-flight requests a moment to settle
+      await new Promise(r => setTimeout(r, 1500));
 
-        const imageUrls = [];
-        const seenUrls = new Set();
-        
-        imgElements.forEach((img, index) => {
-          // Get src or data-src
-          let src = img.src || img.dataset.src || img.getAttribute('data-lazy-src');
-          
-          // Skip small images (likely icons/avatars), placeholders, and duplicates
-          if (src && 
-              !src.includes('loading') && 
-              !src.includes('placeholder') &&
-              !src.includes('static.comix.to') && // Skip cover/avatar images
-              img.naturalWidth > 100 &&
-              !seenUrls.has(src)) {
-            
-            seenUrls.add(src);
-            
-            // Ensure absolute URL
-            if (src.startsWith('//')) {
-              src = 'https:' + src;
-            } else if (src.startsWith('/')) {
-              src = window.location.origin + src;
-            }
-            
-            imageUrls.push({
-              index: imageUrls.length + 1,
-              url: src
-            });
-          }
-        });
-
-        return imageUrls;
-      });
-
-      console.log(`  Found ${images.length} images`);
+      const images = this.orderCapturedImages(captured);
+      console.log(`  Found ${images.length} images (network-captured)`);
       return images;
 
     } finally {
+      this.page.off('response', onResponse);
       await this.closePage();
+    }
+  }
+
+  // Deduplicate captured URLs and order them by the numeric portion of the
+  // filename (01.webp -> 1, 19.webp -> 19). Ties or unparseable filenames
+  // fall back to capture order.
+  orderCapturedImages(captured) {
+    const seen = new Map(); // url -> first-seen position
+    captured.forEach((url, i) => {
+      if (!seen.has(url)) seen.set(url, i);
+    });
+    const list = [...seen.entries()].map(([url, captureOrder]) => {
+      const m = url.match(/\/(\d+)\.(?:webp|jpe?g|png|avif)(?:\?|$)/i);
+      return { url, captureOrder, num: m ? parseInt(m[1], 10) : null };
+    });
+    list.sort((a, b) => {
+      if (a.num !== null && b.num !== null) return a.num - b.num;
+      if (a.num !== null) return -1;
+      if (b.num !== null) return 1;
+      return a.captureOrder - b.captureOrder;
+    });
+    return list.map((item, i) => ({ index: i + 1, url: item.url }));
+  }
+
+  async dismissReaderOverlays() {
+    const result = await this.page.evaluate(() => {
+      let actions = [];
+      const hint = document.querySelector('.rpage-hint');
+      if (hint) {
+        const gotIt = Array.from(hint.querySelectorAll('button'))
+          .find(b => /got it/i.test(b.innerText || ''));
+        if (gotIt) {
+          gotIt.click();
+          actions.push('hint-dismissed');
+        }
+      }
+      const closeSettings = document.querySelector('button[aria-label="Close settings"]');
+      if (closeSettings) {
+        const r = closeSettings.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          closeSettings.click();
+          actions.push('settings-closed');
+        }
+      }
+      return actions;
+    });
+    if (result.length) console.log(`  Dismissed: ${result.join(', ')}`);
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // Webtoon: scroll the long-strip <main> from top to bottom so the lazy
+  // loader fetches every page image. We don't read URLs here — the network
+  // listener handles capture.
+  async walkLongStrip() {
+    console.log('  Scrolling long-strip reader...');
+    await this.page.evaluate(async () => {
+      const scroller = document.querySelector('main.rpage-main--long-strip')
+                    || document.querySelector('main.rpage-main');
+      if (!scroller) return;
+      scroller.scrollTop = 0;
+      await new Promise(r => setTimeout(r, 300));
+      let lastTop = -1;
+      let same = 0;
+      for (let i = 0; i < 500; i++) {
+        scroller.scrollTop += 800;
+        await new Promise(r => setTimeout(r, 250));
+        if (scroller.scrollTop === lastTop) {
+          same++;
+          if (same >= 4) break;
+        } else {
+          same = 0;
+        }
+        lastTop = scroller.scrollTop;
+      }
+    });
+  }
+
+  // Paged manga: Swiper carousel only renders the active slide + neighbors,
+  // so we click through every progress segment to force each page's image
+  // to be fetched. We don't extract src here — the network listener does.
+  async walkPagedReader() {
+    const totalPages = await this.page.evaluate(
+      () => document.querySelectorAll('.rpage-progress__seg').length
+    );
+    console.log(`  Paged reader: ${totalPages} pages`);
+    if (totalPages === 0) return;
+
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+      const clicked = await this.page.evaluate((n) => {
+        const btn = document.querySelector(`button[aria-label="Go to page ${n}"]`);
+        if (!btn) return false;
+        btn.click();
+        return true;
+      }, pageNum);
+      if (!clicked) {
+        console.warn(`  Page ${pageNum}: no progress button`);
+        continue;
+      }
+      // Short pause is enough — we don't need the DOM to settle, just
+      // enough time for Swiper to schedule the network fetch.
+      await new Promise(r => setTimeout(r, 350));
     }
   }
 }
