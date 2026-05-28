@@ -426,362 +426,68 @@ export class ComixScraper extends BaseScraper {
       console.log(`  FlareSolverr cookie fetch failed: ${error.message}, trying direct...`);
     }
 
-    // Detect reader mode from the page's initial-data JSON to decide strategy
-    const isPagedMode = await this._detectPagedMode(chapterUrl, fsCookies, fsUserAgent);
-
-    if (isPagedMode) {
-      console.log(`  [COMIX] Paged manga mode detected — clicking through pages`);
-      return this._getChapterImagesPaged(chapterUrl, fsCookies, fsUserAgent);
-    }
-
-    // Webtoon / scroll mode — use custom DOM-based scroll extraction with modal dismissal
-    console.log(`  [COMIX] Webtoon/scroll mode — using custom scroll extraction`);
-    return this._getChapterImagesScroll(chapterUrl, fsCookies, fsUserAgent);
-  }
-
-  /**
-   * Detect whether the chapter reader uses paged (manga) or scroll (webtoon) mode.
-   * Reads the #initial-data JSON from the page to check the manga type.
-   */
-  async _detectPagedMode(chapterUrl, fsCookies, fsUserAgent) {
-    await this.createPageClean();
-    try {
-      if (fsCookies.length > 0) await this.page.setCookie(...fsCookies);
-      if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
-
-      await this.page.goto(chapterUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-      // Extract manga type from the embedded #initial-data JSON
-      const mangaType = await this.page.evaluate(() => {
-        const el = document.querySelector('#initial-data');
-        if (!el) return null;
-        try {
-          const data = JSON.parse(el.textContent);
-          // The queries object contains manga detail with a "type" field
-          const queries = data.queries || {};
-          for (const key of Object.keys(queries)) {
-            const val = queries[key];
-            if (val && val.type) return val.type;
-          }
-        } catch (e) { }
-        return null;
-      });
-
-      console.log(`  [COMIX] Detected manga type: ${mangaType || 'unknown'}`);
-
-      // "manga" = paged, "manhwa"/"manhua" = webtoon scroll
-      return mangaType === 'manga';
-    } catch (error) {
-      console.log(`  [COMIX] Mode detection failed: ${error.message}, defaulting to scroll`);
-      return false;
-    } finally {
-      await this.closePage();
-    }
-  }
-
-  /**
-   * Paged manga mode: click the right side of the reader to advance through
-   * all pages, collecting each image URL along the way.
-   */
-  async _getChapterImagesPaged(chapterUrl, fsCookies, fsUserAgent) {
     await this.createPageClean();
 
-    try {
-      if (fsCookies.length > 0) {
-        await this.page.setCookie(...fsCookies);
-        console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
-      }
-      if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
+    if (fsCookies.length > 0) {
+      await this.page.setCookie(...fsCookies);
+      console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
+    }
+    if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
 
+    // Capture chapter image URLs at the network layer. The new reader
+    // renders every 3rd page as a <canvas> (anti-scrape) so DOM-only
+    // extraction misses them, but the browser still fetches every webp.
+    const captured = [];
+    const onResponse = (res) => {
+      const url = res.url();
+      // Chapter images live on the wowpic CDN under /si/<token>/NN.<ext>
+      if (!/wowpic\d*\.\w+\/si\/[^/]+\/\d+\.(webp|jpe?g|png|avif)(\?|$)/i.test(url)) return;
+      if (res.status() !== 200) return;
+      captured.push(url);
+    };
+    this.page.on('response', onResponse);
+
+    try {
       console.log(`  Loading chapter: ${chapterUrl}`);
-      await this.page.goto(chapterUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-      // Wait for the reader to render
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Dismiss any popup/dialog by clicking common dismiss buttons or pressing Escape
-      await this._dismissPopup();
-
-      // Wait for the first chapter image to appear
-      await this.page.waitForFunction(() => {
-        const imgs = document.querySelectorAll('img');
-        for (const img of imgs) {
-          const src = img.src || '';
-          if (src.startsWith('http') &&
-              !src.includes('avatar') && !src.includes('icon') && !src.includes('poster') &&
-              !src.includes('logo') && !src.includes('.svg') && !src.includes('favicon') &&
-              img.naturalWidth > 200 && img.naturalHeight > 200) {
-            return true;
-          }
-        }
-        return false;
-      }, { timeout: 15000 }).catch(() => console.log('  [COMIX] Timeout waiting for first image'));
-
-      // Debug: log all images currently on the page
-      const debugImgs = await this.page.evaluate(() => {
-        return Array.from(document.querySelectorAll('img')).map(img => ({
-          src: (img.src || '').substring(0, 100),
-          w: img.naturalWidth,
-          h: img.naturalHeight,
-          cls: img.className
-        }));
+      await this.page.goto(chapterUrl, {
+        waitUntil: 'networkidle2',
+        timeout: 60000
       });
-      console.log(`  [COMIX] Images on page: ${debugImgs.length}`);
-      debugImgs.forEach((img, i) => console.log(`    [${i}] ${img.w}x${img.h} cls="${img.cls}" src=${img.src}`));
-
-      const images = [];
-      const seenUrls = new Set();
-      let stableCount = 0;
-      const MAX_PAGES = 200; // Safety limit
-
-      for (let i = 0; i < MAX_PAGES; i++) {
-        // Extract current visible chapter image(s)
-        const currentImages = await this.page.evaluate(() => {
-          const found = [];
-          const imgs = document.querySelectorAll('img');
-          for (const img of imgs) {
-            const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-            if (src && src.startsWith('http') &&
-                !src.includes('avatar') && !src.includes('icon') &&
-                !src.includes('poster') && !src.includes('logo') &&
-                !src.includes('.svg') && !src.includes('favicon') &&
-                !src.includes('@280') &&
-                img.naturalWidth > 200 && img.naturalHeight > 200) {
-              let fullSrc = src;
-              if (fullSrc.startsWith('//')) fullSrc = 'https:' + fullSrc;
-              found.push(fullSrc);
-            }
-          }
-          return found;
-        });
-
-        let newFound = false;
-        for (const url of currentImages) {
-          if (!seenUrls.has(url)) {
-            seenUrls.add(url);
-            images.push({
-              index: images.length + 1,
-              url: url
-            });
-            newFound = true;
-          }
-        }
-
-        if (newFound) {
-          stableCount = 0;
-          if (images.length % 5 === 0) {
-            console.log(`  [COMIX] Collected ${images.length} pages so far...`);
-          }
-        } else {
-          stableCount++;
-          // If we've clicked 3 times with no new images, we're likely at the end
-          if (stableCount >= 3) {
-            console.log(`  [COMIX] No new images after ${stableCount} clicks, assuming end of chapter`);
-            break;
-          }
-        }
-
-        // Check if we are already on the last page before advancing
-        const isLastPage = await this.page.evaluate(() => {
-          const activeSeg = document.querySelector('.rpage-progress__seg.is-active');
-          const allSegs = Array.from(document.querySelectorAll('.rpage-progress__seg'));
-          if (activeSeg && allSegs.length > 0) {
-            return allSegs.indexOf(activeSeg) === allSegs.length - 1;
-          }
-          return false;
-        });
-
-        if (isLastPage) {
-          console.log('  [COMIX] Reached last page, completing chapter extraction to avoid opening comments');
-          break;
-        }
-
-        // Advance to the next page using robust click + Arrow key navigation
-        await this._advancePage();
-
-        // Extra wait if image is still loading
-        await this.page.waitForFunction(() => {
-          const imgs = document.querySelectorAll('img');
-          for (const img of imgs) {
-            if (img.src && img.src.startsWith('http') &&
-                !img.src.includes('avatar') && !img.src.includes('icon') &&
-                !img.src.includes('poster') && !img.src.includes('.svg') &&
-                img.naturalWidth > 200) {
-              return img.complete && img.naturalHeight > 0;
-            }
-          }
-          return true;
-        }, { timeout: 5000 }).catch(() => {});
-      }
-
-      console.log(`  Found ${images.length} images`);
-
-      // Extract headers for authenticated downloads
-      const cookies = await this.page.cookies();
-      const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      const ua = fsUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-      return images.map(img => ({
-        ...img,
-        headers: {
-          'Cookie': cookieString,
-          'Referer': chapterUrl,
-          'User-Agent': ua
-        }
-      }));
-
-    } finally {
-      await this.closePage();
-    }
-  }
-
-  /**
-   * Advance to the next page using a robust blend of clicking the right side
-   * of the screen and pressing the right Arrow key (with RTL automatic keyboard fallback).
-   */
-  async _advancePage() {
-    // 1. Determine active page index before action
-    const prevIndex = await this.page.evaluate(() => {
-      const activeSeg = document.querySelector('.rpage-progress__seg.is-active');
-      if (activeSeg) {
-        const allSegs = Array.from(document.querySelectorAll('.rpage-progress__seg'));
-        return allSegs.indexOf(activeSeg);
-      }
-      return -1;
-    });
-
-    // 2. Perform DOM click on right side of viewport
-    try {
-      const viewport = await this.page.viewport();
-      const clickX = Math.floor((viewport?.width || 1920) * 0.75);
-      const clickY = Math.floor((viewport?.height || 1080) * 0.5);
-      await this.page.mouse.click(clickX, clickY);
-    } catch (e) {
-      // Ignore click errors
-    }
-
-    // 3. Press ArrowRight key to advance
-    await this.page.keyboard.press('ArrowRight');
-    await new Promise(r => setTimeout(r, 600));
-
-    // 4. Verify if page index updated. If stuck, trigger ArrowLeft fallback (manga RTL direction)
-    if (prevIndex !== -1) {
-      const nextIndex = await this.page.evaluate(() => {
-        const activeSeg = document.querySelector('.rpage-progress__seg.is-active');
-        if (activeSeg) {
-          const allSegs = Array.from(document.querySelectorAll('.rpage-progress__seg'));
-          return allSegs.indexOf(activeSeg);
-        }
-        return -1;
-      });
-
-      if (nextIndex === prevIndex) {
-        console.log('  [COMIX] ArrowRight did not advance page, attempting ArrowLeft key...');
-        await this.page.keyboard.press('ArrowLeft');
-        await new Promise(r => setTimeout(r, 600));
-      }
-    }
-  }
-
-  /**
-   * Scroll webtoon mode: dismiss overlays, scroll down the reader container to load lazy images,
-   * and extract all images from the DOM.
-   */
-  /**
-   * Scroll webtoon mode: dismiss overlays, scroll down the reader container to load lazy images,
-   * and extract all images from the DOM.
-   */
-  async _getChapterImagesScroll(chapterUrl, fsCookies, fsUserAgent) {
-    await this.createPageClean();
-
-    try {
-      if (fsCookies.length > 0) {
-        await this.page.setCookie(...fsCookies);
-        console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
-      }
-      if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
-
-      console.log(`  Loading chapter (scroll): ${chapterUrl}`);
-      await this.page.goto(chapterUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
       // Wait for initial render
       await new Promise(r => setTimeout(r, 3000));
 
-      // Dismiss any popup/dialog overlays
-      await this._dismissPopup();
+      // Dismiss the "Reader controls" hint overlay and any open settings panel
+      await this.dismissReaderOverlays();
 
-      // Scroll the container to load all lazy images
-      console.log('  Scrolling container to load all images...');
-      await this.page.evaluate(async () => {
-        const scroller = document.querySelector('main.rpage-main--long-strip')
-                      || document.querySelector('main.rpage-main')
-                      || document.documentElement;
-        if (!scroller) return;
-        
-        scroller.scrollTop = 0;
-        await new Promise(r => setTimeout(r, 300));
-        
-        let lastTop = -1;
-        let same = 0;
-        for (let i = 0; i < 500; i++) {
-          scroller.scrollTop += 1200;
-          await new Promise(r => setTimeout(r, 350));
-          if (scroller.scrollTop === lastTop) {
-            same++;
-            if (same >= 4) break;
-          } else {
-            same = 0;
-          }
-          lastTop = scroller.scrollTop;
-        }
+      // Wait for the reader skeleton (either the long-strip main or progress bar)
+      await this.page.waitForSelector('main.rpage-main, .rpage-progress__seg', { timeout: 15000 })
+        .catch(() => {});
+
+      // Detect reader mode. Comix.to wraps webtoons in main.rpage-main--long-strip
+      // and paginated manga in a Swiper carousel.
+      const isLongStrip = await this.page.evaluate(() => {
+        const main = document.querySelector('main.rpage-main');
+        if (main && main.classList.contains('rpage-main--long-strip')) return true;
+        const panel = document.querySelector('.rpage-settings__panel');
+        if (panel && /STRIP MARGIN/i.test(panel.innerText)) return true;
+        return false;
       });
 
-      // Wait for final rendering to settle
+      console.log(`  Reader mode: ${isLongStrip ? 'long-strip (webtoon)' : 'paged (manga)'}`);
+
+      // Walk through the chapter to trigger every image fetch
+      if (isLongStrip) {
+        await this.walkLongStrip();
+      } else {
+        await this.walkPagedReader();
+      }
+
+      // Give any in-flight requests a moment to settle
       await new Promise(r => setTimeout(r, 1500));
 
-      // Extract images from DOM
-      const images = await this.page.evaluate(() => {
-        // Prefer the specific class used by the new comix reader
-        let imgElements = document.querySelectorAll('img.rpage-page__img');
-        if (imgElements.length === 0) {
-          imgElements = document.querySelectorAll('img.fit-w');
-        }
-        if (imgElements.length === 0) {
-          imgElements = document.querySelectorAll('.reader-content img, .chapter-content img, .page-container img, .reading-content img, #readerarea img, .chapter-images img, [class*="page"] img, img[src*="cdn"], img[data-src*="cdn"]');
-        }
-
-        const imageUrls = [];
-        const seenUrls = new Set();
-
-        imgElements.forEach((img) => {
-          let src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.src;
-          if (img.offsetParent === null && !img.classList.contains('rpage-page__img')) return;
-
-          if (src &&
-            !src.includes('loading') &&
-            !src.includes('placeholder') &&
-            !src.includes('pixel') &&
-            !seenUrls.has(src)) {
-
-            seenUrls.add(src);
-
-            if (src.startsWith('//')) {
-              src = 'https:' + src;
-            } else if (src.startsWith('/')) {
-              src = window.location.origin + src;
-            }
-
-            imageUrls.push({
-              index: imageUrls.length + 1,
-              url: src
-            });
-          }
-        });
-
-        return imageUrls;
-      });
-
-      console.log(`  Found ${images.length} images`);
+      const images = this.orderCapturedImages(captured);
+      console.log(`  Found ${images.length} images (network-captured)`);
 
       // Extract headers for authenticated downloads
       const cookies = await this.page.cookies();
@@ -798,8 +504,30 @@ export class ComixScraper extends BaseScraper {
       }));
 
     } finally {
+      this.page.off('response', onResponse);
       await this.closePage();
     }
+  }
+
+  // Deduplicate captured URLs and order them by the numeric portion of the
+  // filename (01.webp -> 1, 19.webp -> 19). Ties or unparseable filenames
+  // fall back to capture order.
+  orderCapturedImages(captured) {
+    const seen = new Map(); // url -> first-seen position
+    captured.forEach((url, i) => {
+      if (!seen.has(url)) seen.set(url, i);
+    });
+    const list = [...seen.entries()].map(([url, captureOrder]) => {
+      const m = url.match(/\/(\d+)\.(?:webp|jpe?g|png|avif)(?:\?|$)/i);
+      return { url, captureOrder, num: m ? parseInt(m[1], 10) : null };
+    });
+    list.sort((a, b) => {
+      if (a.num !== null && b.num !== null) return a.num - b.num;
+      if (a.num !== null) return -1;
+      if (b.num !== null) return 1;
+      return a.captureOrder - b.captureOrder;
+    });
+    return list.map((item, i) => ({ index: i + 1, url: item.url }));
   }
 
   /**
@@ -807,63 +535,104 @@ export class ComixScraper extends BaseScraper {
    * Clicks the "Got it" button on `.rpage-hint` and the "Close settings" button.
    * Also force-hides all modal/settings panel overlays via direct DOM style injections to prevent blocking clicks.
    */
-  async _dismissPopup() {
-    try {
-      const actions = await this.page.evaluate(() => {
-        let actions = [];
-        // 1. Dismiss hint overlay
-        const hint = document.querySelector('.rpage-hint');
-        if (hint) {
-          const gotIt = Array.from(hint.querySelectorAll('button'))
-            .find(b => /got it/i.test(b.innerText || ''));
-          if (gotIt) {
-            gotIt.click();
-            actions.push('hint-dismissed');
+  async dismissReaderOverlays() {
+    const result = await this.page.evaluate(() => {
+      let actions = [];
+      const hint = document.querySelector('.rpage-hint');
+      if (hint) {
+        const gotIt = Array.from(hint.querySelectorAll('button'))
+          .find(b => /got it/i.test(b.innerText || ''));
+        if (gotIt) {
+          gotIt.click();
+          actions.push('hint-dismissed');
+        }
+      }
+      const closeSettings = document.querySelector('button[aria-label="Close settings"]') 
+                         || document.querySelector('.rpage-settings__close');
+      if (closeSettings) {
+        closeSettings.click();
+        actions.push('settings-closed-via-btn');
+      } else {
+        const panel = document.querySelector('.rpage-settings__panel');
+        if (panel && getComputedStyle(panel).display !== 'none') {
+          const settingsBtn = document.querySelector('button[aria-label="Settings"]') 
+                           || document.querySelector('.rpage-bottombar__settings');
+          if (settingsBtn) {
+            settingsBtn.click();
+            actions.push('settings-closed-via-toggle');
           }
         }
-
-        // 2. Dismiss/Close settings panel
-        const closeSettings = document.querySelector('button[aria-label="Close settings"]') 
-                           || document.querySelector('.rpage-settings__close');
-        if (closeSettings) {
-          closeSettings.click();
-          actions.push('settings-closed-via-btn');
-        } else {
-          // Fallback: click settings button to toggle closed if settings panel is open
-          const panel = document.querySelector('.rpage-settings__panel');
-          if (panel && getComputedStyle(panel).display !== 'none') {
-            const settingsBtn = document.querySelector('button[aria-label="Settings"]') 
-                             || document.querySelector('.rpage-bottombar__settings');
-            if (settingsBtn) {
-              settingsBtn.click();
-              actions.push('settings-closed-via-toggle');
-            }
-          }
-        }
-
-        // 3. Force-hide modal and settings overlays using CSS rules to ensure no blocking clicks
-        const selectors = ['.rpage-hint', '.rpage-settings__panel', '.modal', '[class*="overlay"]', '[class*="backdrop"]'];
-        let hiddenCount = 0;
-        selectors.forEach(sel => {
-          const els = document.querySelectorAll(sel);
-          els.forEach(el => {
-            el.style.display = 'none';
-            el.style.visibility = 'hidden';
-            el.style.opacity = '0';
-            el.style.pointerEvents = 'none';
-            hiddenCount++;
-          });
+      }
+      // Force hide overlays
+      const selectors = ['.rpage-hint', '.rpage-settings__panel', '.modal', '[class*="overlay"]', '[class*="backdrop"]'];
+      selectors.forEach(sel => {
+        const els = document.querySelectorAll(sel);
+        els.forEach(el => {
+          el.style.display = 'none';
+          el.style.visibility = 'hidden';
+          el.style.opacity = '0';
+          el.style.pointerEvents = 'none';
         });
-        if (hiddenCount > 0) {
-          actions.push(`force-hid-${hiddenCount}-elements`);
-        }
-        return actions;
       });
-      console.log(`  [COMIX] Dismiss popup actions: ${actions.join(', ') || 'none'}`);
-    } catch (e) {
-      console.log(`  [COMIX] Error dismissing popups: ${e.message}`);
-    }
+      return actions;
+    });
+    if (result.length) console.log(`  [COMIX] Dismissed: ${result.join(', ')}`);
     await new Promise(r => setTimeout(r, 500));
+  }
+
+  // Webtoon: scroll the long-strip <main> from top to bottom so the lazy
+  // loader fetches every page image. We don't read URLs here — the network
+  // listener handles capture.
+  async walkLongStrip() {
+    console.log('  Scrolling long-strip reader...');
+    await this.page.evaluate(async () => {
+      const scroller = document.querySelector('main.rpage-main--long-strip')
+                    || document.querySelector('main.rpage-main')
+                    || document.documentElement;
+      if (!scroller) return;
+      scroller.scrollTop = 0;
+      await new Promise(r => setTimeout(r, 300));
+      let lastTop = -1;
+      let same = 0;
+      for (let i = 0; i < 500; i++) {
+        scroller.scrollTop += 1200;
+        await new Promise(r => setTimeout(r, 250));
+        if (scroller.scrollTop === lastTop) {
+          same++;
+          if (same >= 4) break;
+        } else {
+          same = 0;
+        }
+        lastTop = scroller.scrollTop;
+      }
+    });
+  }
+
+  // Paged manga: Swiper carousel only renders the active slide + neighbors,
+  // so we click through every progress segment to force each page's image
+  // to be fetched. We don't extract src here — the network listener does.
+  async walkPagedReader() {
+    const totalPages = await this.page.evaluate(
+      () => document.querySelectorAll('.rpage-progress__seg').length
+    );
+    console.log(`  Paged reader: ${totalPages} pages`);
+    if (totalPages === 0) return;
+
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+      const clicked = await this.page.evaluate((n) => {
+        const btn = document.querySelector(`button[aria-label="Go to page ${n}"]`);
+        if (!btn) return false;
+        btn.click();
+        return true;
+      }, pageNum);
+      if (!clicked) {
+        console.warn(`  Page ${pageNum}: no progress button`);
+        continue;
+      }
+      // Short pause is enough — we don't need the DOM to settle, just
+      // enough time for Swiper to schedule the network fetch.
+      await new Promise(r => setTimeout(r, 350));
+    }
   }
 }
 
