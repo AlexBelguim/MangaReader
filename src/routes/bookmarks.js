@@ -1077,16 +1077,22 @@ async function getChapterDir(bookmarkId, chapterNum) {
 }
 
 // Helper to get sorted image list for a chapter.
-// Returns URL strings (not objects) so cached older frontends with a
-// reloadImages that only handles strings keep working after we push fixes.
+// Sort MUST match downloader._getImagesFromDir so the index order is stable
+// between the initial reader-images load and the post-swap/rotate reload.
+// If the two sorts disagree, indices shift and the operation appears to
+// target a different spread than what's on screen.
 async function getChapterImages(bookmarkId, chapterNum) {
     const chapterDir = await getChapterDir(bookmarkId, chapterNum);
     if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
 
     const files = await fs.readdir(chapterDir);
-    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-    imageFiles.sort(collator.compare);
+    const imageFiles = files
+        .filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+        .sort((a, b) => {
+            const numA = parseInt(a.match(/^(\d+)/)?.[1] || '0');
+            const numB = parseInt(b.match(/^(\d+)/)?.[1] || '0');
+            return numA - numB;
+        });
 
     const relativeChapterDir = path.relative(CONFIG.downloadsDir, chapterDir).replace(/\\/g, '/');
     return imageFiles.map(file => `/downloads/${relativeChapterDir}/${file}`);
