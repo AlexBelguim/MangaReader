@@ -23,6 +23,9 @@ class ScraperView {
     this.previewInfo = null;
     this.previewImages = [];
     this.previewIndex = 0;
+
+    // AbortController for info fetching
+    this.infoAbortController = null;
   }
 
   async mount(params) {
@@ -51,6 +54,10 @@ class ScraperView {
   }
 
   unmount() {
+    if (this.infoAbortController) {
+      this.infoAbortController.abort();
+      this.infoAbortController = null;
+    }
     this.container.innerHTML = '';
     document.body.className = '';
   }
@@ -157,8 +164,9 @@ class ScraperView {
               <option value="date" ${this.browseSort === 'date' ? 'selected' : ''}>Latest</option>
             </select>
           </div>
-          <div class="browse-actions">
+          <div class="browse-actions" style="display: flex; gap: 8px;">
             <button id="browse-apply-btn" class="btn btn-primary">Apply Filters</button>
+            <button id="browse-refresh-btn" class="btn btn-secondary" title="Bypass cache and reload fresh results">🔄 Refresh</button>
           </div>
         </div>
 
@@ -380,6 +388,17 @@ class ScraperView {
       });
     }
 
+    const browseRefreshBtn = document.getElementById('browse-refresh-btn');
+    if (browseRefreshBtn) {
+      browseRefreshBtn.addEventListener('click', () => {
+        this.browseQuery = document.getElementById('browse-query').value.trim();
+        this.browseSort = document.getElementById('browse-sort').value;
+        this.browsePage = 1;
+        this.browseResults = [];
+        this.performBrowse(false, true); // Pass true for forceRefresh
+      });
+    }
+
     const browseQueryInput = document.getElementById('browse-query');
     if (browseQueryInput) {
        browseQueryInput.addEventListener('keypress', (e) => {
@@ -403,6 +422,10 @@ class ScraperView {
     const previewCloseBtn = document.getElementById('preview-close-btn');
     if (previewCloseBtn) {
        previewCloseBtn.addEventListener('click', () => {
+          if (this.infoAbortController) {
+             this.infoAbortController.abort();
+             this.infoAbortController = null;
+          }
           document.getElementById('preview-info-modal').style.display = 'none';
        });
     }
@@ -419,6 +442,10 @@ class ScraperView {
     const previewReadBtn = document.getElementById('preview-read-btn');
     if (previewReadBtn) {
        previewReadBtn.addEventListener('click', () => {
+          if (this.infoAbortController) {
+             this.infoAbortController.abort();
+             this.infoAbortController = null;
+          }
           this.openTempReader();
        });
     }
@@ -585,7 +612,7 @@ class ScraperView {
     }
   }
 
-  async performBrowse(append = false) {
+  async performBrowse(append = false, forceRefresh = false) {
     const container = document.getElementById('browse-results-container');
     const loadBtn = document.getElementById('browse-load-more-btn');
     const loadingIndicator = document.getElementById('browse-loading-indicator');
@@ -610,7 +637,10 @@ class ScraperView {
     }
 
     try {
-      const url = `/scrapers/browse?scraper=${encodeURIComponent(this.browseScraper)}&q=${encodeURIComponent(this.browseQuery)}&sort=${encodeURIComponent(this.browseSort)}&page=${this.browsePage}`;
+      let url = `/scrapers/browse?scraper=${encodeURIComponent(this.browseScraper)}&q=${encodeURIComponent(this.browseQuery)}&sort=${encodeURIComponent(this.browseSort)}&page=${this.browsePage}`;
+      if (forceRefresh) {
+        url += `&refresh=true`;
+      }
       const data = await api.get(url);
       
       if (data.success) {
@@ -708,6 +738,12 @@ class ScraperView {
   }
 
   async openInfoModal(result) {
+    if (this.infoAbortController) {
+      this.infoAbortController.abort();
+    }
+    this.infoAbortController = new AbortController();
+    const signal = this.infoAbortController.signal;
+
     const modal = document.getElementById('preview-info-modal');
     const body = document.getElementById('preview-info-body');
     const readBtn = document.getElementById('preview-read-btn');
@@ -736,7 +772,7 @@ class ScraperView {
     readBtn.disabled = !(result.url || result.galleryId);
 
     try {
-       const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`);
+       const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`, { signal });
        if (data.success && data.info) {
           this.previewInfo = { ...this.previewInfo, ...data.info };
           
@@ -790,6 +826,10 @@ class ScraperView {
           }
        }
     } catch (e) {
+       if (e.name === 'AbortError' || signal.aborted) {
+          console.log("Scraper details fetch aborted successfully.");
+          return;
+       }
        console.error("Info error:", e);
        document.getElementById('preview-extended-info').innerHTML = `<p class="error-state" style="margin:0; padding:1rem; text-align:left;">Failed to load details: ${e.message}</p>`;
        readBtn.disabled = false; // Let them try

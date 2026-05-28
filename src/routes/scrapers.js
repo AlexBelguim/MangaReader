@@ -202,6 +202,7 @@ router.get('/browse', async (req, res) => {
     const query = req.query.q || '';
     const sort = req.query.sort || 'popular';
     const page = parseInt(req.query.page) || 1;
+    const refresh = req.query.refresh === 'true';
     
     if (!targetScraper) {
       return res.status(400).json({ error: 'Scraper is required' });
@@ -219,7 +220,12 @@ router.get('/browse', async (req, res) => {
       return res.status(400).json({ error: `Scraper does not support browse: ${targetScraper}` });
     }
     
-    const data = await scraper.browse(sort, page, query);
+    const abortController = new AbortController();
+    req.on('close', () => {
+      abortController.abort();
+    });
+
+    const data = await scraper.browse(sort, page, query, refresh, { signal: abortController.signal });
     
     // Download covers in parallel if necessary
     const needsDownload = data.results.filter(r => r.cover && !r.cover.startsWith('/covers/'));
@@ -258,7 +264,12 @@ router.get('/info', async (req, res) => {
     const scraper = scraperFactory.getScraperForUrl(targetUrl);
     if (!scraper) return res.status(404).json({ error: 'No scraper found for URL' });
     
-    const info = await scraper.getMangaInfo(targetUrl);
+    const abortController = new AbortController();
+    req.on('close', () => {
+      abortController.abort();
+    });
+
+    const info = await scraper.getMangaInfo(targetUrl, { signal: abortController.signal });
     res.json({ success: true, info });
   } catch (error) {
     console.error('[API] Scraper info error:', error);

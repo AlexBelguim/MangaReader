@@ -21,8 +21,22 @@ export class NhentaiScraper extends BaseScraper {
     return match ? match[1] : null;
   }
 
-  async getMangaInfo(url) {
+  async getMangaInfo(url, options = {}) {
     const { browser, page } = await launchBrowser({ stealth: true });
+
+    if (options.signal?.aborted) {
+      await browser.close();
+      throw new Error('Aborted');
+    }
+
+    const abortHandler = () => {
+      console.log(`  [nhentai] Abort signal received for getMangaInfo. Closing page...`);
+      page.close().catch(() => {});
+    };
+
+    if (options.signal) {
+      options.signal.addEventListener('abort', abortHandler);
+    }
 
     try {
       const galleryId = this.getGalleryId(url);
@@ -32,6 +46,10 @@ export class NhentaiScraper extends BaseScraper {
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
       await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
       await this.randomDelay(1000, 2000);
+
+      if (options.signal?.aborted) {
+        throw new Error('Aborted');
+      }
 
       const info = await page.evaluate(() => {
         const titleEl = document.querySelector('#info h1, #info h2, .title');
@@ -91,6 +109,9 @@ export class NhentaiScraper extends BaseScraper {
         duplicateChapters: [], pageCount: info.pageCount
       };
     } finally {
+      if (options.signal) {
+        options.signal.removeEventListener('abort', abortHandler);
+      }
       await browser.close();
     }
   }
@@ -164,6 +185,13 @@ export class NhentaiScraper extends BaseScraper {
     const { launchBrowser } = await import('../util/stealth-browser.js');
     
     let browser, page;
+    
+    if (options.signal?.aborted) {
+      throw new Error('Aborted');
+    }
+
+    let abortHandler;
+
     try {
       const launched = await launchBrowser({ stealth: true });
       browser = launched.browser;
@@ -173,6 +201,14 @@ export class NhentaiScraper extends BaseScraper {
       if (!galleryId) throw new Error('Invalid nhentai URL');
 
       console.log(`  [Stream] Fetching images for gallery ${galleryId}...`);
+
+      if (options.signal) {
+        abortHandler = () => {
+          console.log(`  [Stream] Abort signal received for streamChapterImages. Closing page...`);
+          page.close().catch(() => {});
+        };
+        options.signal.addEventListener('abort', abortHandler);
+      }
 
       await page.goto(`https://nhentai.net/g/${galleryId}/1/`, {
         waitUntil: 'domcontentloaded', timeout: 60000
@@ -222,6 +258,9 @@ export class NhentaiScraper extends BaseScraper {
         await this.randomDelay(50, 100);
       }
     } finally {
+      if (options.signal && abortHandler) {
+        options.signal.removeEventListener('abort', abortHandler);
+      }
       if (browser) await browser.close();
     }
   }
@@ -270,12 +309,12 @@ export class NhentaiScraper extends BaseScraper {
    * @param {string} query - Search query (default: 'english')
    * @returns {{ results: Array, totalPages: number, currentPage: number }}
    */
-  async browse(sort = 'popular-today', page = 1, query = 'english') {
+  async browse(sort = 'popular-today', page = 1, query = 'english', refresh = false, options = {}) {
     const { browse } = await import('../features/browse.js');
     const { waitForCloudflare } = await import('../util/cloudflare.js');
 
     return browse(this, sort, page, query, {
-      cacheTtl: 15 * 60 * 1000, // 15 minute cache per sort/query/page combo
+      cacheTtl: 24 * 60 * 60 * 1000, // 24 hour cache per sort/query/page combo
       buildBrowseUrl: (s, p, q) => `https://nhentai.net/search/?q=${encodeURIComponent(q)}&sort=${s}&page=${p}`,
       waitForResults: async (p) => await waitForCloudflare(p, { delayFn: () => this.randomDelay(2000, 3000) }),
       extractResults: async (p) => {
@@ -325,7 +364,7 @@ export class NhentaiScraper extends BaseScraper {
         return { results, totalPages };
         });
       }
-    });
+    }, refresh, options);
   }
 
   /**

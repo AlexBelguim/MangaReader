@@ -75,9 +75,11 @@ export function invalidateCache(scraperName) {
  * @param {boolean} [config.useCleanPage=false] - Use createPageClean instead of createPage
  * @param {number} [config.timeout=60000] - Navigation timeout
  * @param {number} [config.cacheTtl=0] - Cache TTL in ms. 0 = no caching.
+ * @param {boolean} [refresh=false] - Invalidate the cache for this request
+ * @param {object} [options={}] - Options containing AbortSignal
  * @returns {{ results: Array, totalPages: number, currentPage: number }}
  */
-export async function browse(scraper, sort, pageNum, query, config) {
+export async function browse(scraper, sort, pageNum, query, config, refresh = false, options = {}) {
   const {
     buildBrowseUrl,
     setupPage,
@@ -88,14 +90,31 @@ export async function browse(scraper, sort, pageNum, query, config) {
     cacheTtl = 0,
   } = config;
 
-  // Check cache first
-  if (cacheTtl > 0) {
+  const key = cacheKey(scraper.websiteName, sort, pageNum, query);
+
+  // Check cache or invalidate if refresh requested
+  if (refresh) {
+    _browseCache.delete(key);
+  } else if (cacheTtl > 0) {
     const cached = getCached(scraper.websiteName, sort, pageNum, query, cacheTtl);
     if (cached) return cached;
   }
 
   const browseUrl = buildBrowseUrl(sort, pageNum, query);
   console.log(`  [${scraper.websiteName}] Browse: ${browseUrl}`);
+
+  if (options.signal?.aborted) {
+    throw new Error('Aborted');
+  }
+
+  let abortHandler;
+  if (options.signal) {
+    abortHandler = () => {
+      console.log(`  [Browse] Abort signal received for ${scraper.websiteName}. Closing page...`);
+      scraper.closePage().catch(() => {});
+    };
+    options.signal.addEventListener('abort', abortHandler);
+  }
 
   if (useCleanPage) {
     await scraper.createPageClean();
@@ -112,6 +131,10 @@ export async function browse(scraper, sort, pageNum, query, config) {
     
     // Add small randomized delay to simulate human timing
     await scraper.randomDelay(1000, 2000);
+
+    if (options.signal?.aborted) {
+      throw new Error('Aborted');
+    }
 
     if (waitForResults) {
       await waitForResults(scraper.page);
@@ -140,6 +163,9 @@ export async function browse(scraper, sort, pageNum, query, config) {
     return result;
 
   } finally {
+    if (options.signal && abortHandler) {
+      options.signal.removeEventListener('abort', abortHandler);
+    }
     await scraper.closePage();
   }
 }

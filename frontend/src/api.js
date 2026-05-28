@@ -88,8 +88,8 @@ class ApiClient {
     }
 
     // Convenience methods
-    get(endpoint) {
-        return this.request(endpoint);
+    get(endpoint, options = {}) {
+        return this.request(endpoint, { ...options, method: 'GET' });
     }
 
     post(endpoint, body) {
