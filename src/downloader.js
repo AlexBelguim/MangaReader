@@ -208,18 +208,18 @@ class Downloader {
           // It's a double spread, split it
           const halfWidth = Math.floor(metadata.width / 2);
 
-          const rightPath = path.join(chapterDir, `${String(fileIndex).padStart(3, '0')}${ext}`);
-          const leftPath = path.join(chapterDir, `${String(fileIndex + 1).padStart(3, '0')}${ext}`);
+          const leftPath = path.join(chapterDir, `${String(fileIndex).padStart(3, '0')}${ext}`);
+          const rightPath = path.join(chapterDir, `${String(fileIndex + 1).padStart(3, '0')}${ext}`);
 
-          // Right half (Page 1)
-          await sharp(fileBuffer)
-            .extract({ left: halfWidth, top: 0, width: metadata.width - halfWidth, height: metadata.height })
-            .toFile(rightPath);
-
-          // Left half (Page 2)
+          // Left half (Page 1)
           await sharp(fileBuffer)
             .extract({ left: 0, top: 0, width: halfWidth, height: metadata.height })
             .toFile(leftPath);
+
+          // Right half (Page 2)
+          await sharp(fileBuffer)
+            .extract({ left: halfWidth, top: 0, width: metadata.width - halfWidth, height: metadata.height })
+            .toFile(rightPath);
 
           // Cleanup raw
           await fs.unlink(rawFilePath);
