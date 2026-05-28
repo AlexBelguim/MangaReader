@@ -1147,9 +1147,16 @@ function getCurrentPageFilename() {
  * Reload images from server response and update display
  */
 async function reloadImages(newImages) {
-    // Add cache bust to force reload of rotated/modified images
+    // Add cache bust to force reload of rotated/modified images.
+    // Accepts both raw URL strings and { url, ... } objects so the format
+    // matches whatever the loader endpoint returns.
     const bust = Date.now();
-    state.images = newImages.map(url => url + (url.includes('?') ? '&' : '?') + `_t=${bust}`);
+    state.images = newImages.map(img => {
+        const url = typeof img === 'string' ? img : img?.url;
+        if (!url) return img;
+        const bustedUrl = url + (url.includes('?') ? '&' : '?') + `_t=${bust}`;
+        return typeof img === 'string' ? bustedUrl : { ...img, url: bustedUrl };
+    });
 
     // Clamp current page
     if (state.mode === 'manga') {

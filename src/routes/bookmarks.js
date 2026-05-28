@@ -1077,15 +1077,23 @@ async function getChapterDir(bookmarkId, chapterNum) {
 }
 
 // Helper to get sorted image list for a chapter
+// Returns the same shape as downloader._getImagesFromDir so the frontend can
+// treat it identically to the initial reader-images load.
 async function getChapterImages(bookmarkId, chapterNum) {
     const chapterDir = await getChapterDir(bookmarkId, chapterNum);
     if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
 
     const files = await fs.readdir(chapterDir);
-    const images = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-    images.sort(collator.compare);
-    return images;
+    imageFiles.sort(collator.compare);
+
+    const relativeChapterDir = path.relative(CONFIG.downloadsDir, chapterDir).replace(/\\/g, '/');
+    return imageFiles.map((file, index) => ({
+        index: index + 1,
+        url: `/downloads/${relativeChapterDir}/${file}`,
+        isLocal: true
+    }));
 }
 
 // Rotate a page
