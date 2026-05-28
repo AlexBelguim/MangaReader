@@ -87,6 +87,15 @@ class Downloader {
   }
 
   async downloadImage(url, filePath, customHeaders = null) {
+    if (url.startsWith('data:')) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) {
+        return Promise.reject(new Error('Invalid base64 data URL'));
+      }
+      const data = Buffer.from(match[2], 'base64');
+      return fs.writeFile(filePath, data).then(() => filePath);
+    }
+
     // Handle protocol-relative URLs
     let fullUrl = url;
     if (url.startsWith('//')) {

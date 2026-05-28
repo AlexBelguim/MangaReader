@@ -78,8 +78,17 @@ class ScraperFactory {
             }
           }
 
+          const launchArgs = [...(CONFIG.puppeteer.args || [])];
+          if (!launchArgs.includes('--disable-web-security')) {
+            launchArgs.push('--disable-web-security');
+          }
+          if (!launchArgs.includes('--disable-features=IsolateOrigins,site-per-process')) {
+            launchArgs.push('--disable-features=IsolateOrigins,site-per-process');
+          }
+
           this.browser = await puppeteer.launch({
             ...CONFIG.puppeteer,
+            args: launchArgs,
             userDataDir
           });
         }

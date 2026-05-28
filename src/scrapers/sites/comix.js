@@ -429,24 +429,16 @@ export class ComixScraper extends BaseScraper {
 
     await this.createPageClean();
 
+    // Bypasses canvas anti-scraping monkey-patches by saving pristine toDataURL reference
+    await this.page.evaluateOnNewDocument(() => {
+      window.__cleanToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    });
+
     if (fsCookies.length > 0) {
       await this.page.setCookie(...fsCookies);
       console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
     }
     if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
-
-    // Capture chapter image URLs at the network layer. The new reader
-    // renders every 3rd page as a <canvas> (anti-scrape) so DOM-only
-    // extraction misses them, but the browser still fetches every webp.
-    const captured = [];
-    const onResponse = (res) => {
-      const url = res.url();
-      // Chapter images live on the wowpic CDN under /si/<token>/NN.<ext>
-      if (!/wowpic\d*\.\w+\/si\/[^/]+\/\d+\.(webp|jpe?g|png|avif)(\?|$)/i.test(url)) return;
-      if (res.status() !== 200) return;
-      captured.push(url);
-    };
-    this.page.on('response', onResponse);
 
     try {
       console.log(`  Loading chapter: ${chapterUrl}`);
@@ -502,18 +494,15 @@ export class ComixScraper extends BaseScraper {
 
       console.log(`  Reader mode: ${isLongStrip ? 'long-strip (webtoon)' : 'paged (manga)'}`);
 
-      // Walk through the chapter to trigger every image fetch
+      // Walk through the chapter to extract every image/canvas
+      let images = [];
       if (isLongStrip) {
-        await this.walkLongStrip();
+        images = await this.walkLongStrip();
       } else {
-        await this.walkPagedReader();
+        images = await this.walkPagedReader();
       }
 
-      // Give any in-flight requests a moment to settle
-      await new Promise(r => setTimeout(r, 1500));
-
-      const images = this.orderCapturedImages(captured);
-      console.log(`  Found ${images.length} images (network-captured)`);
+      console.log(`  Found ${images.length} images (DOM & Canvas-borrowed extraction)`);
 
       // Extract headers for authenticated downloads
       const cookies = await this.page.cookies();
@@ -530,7 +519,6 @@ export class ComixScraper extends BaseScraper {
       }));
 
     } finally {
-      this.page.off('response', onResponse);
       await this.closePage();
     }
   }
@@ -618,11 +606,12 @@ export class ComixScraper extends BaseScraper {
     await new Promise(r => setTimeout(r, 500));
   }
 
-  // Webtoon: scroll the long-strip <main> from top to bottom so the lazy
-  // loader fetches every page image. We don't read URLs here — the network
-  // listener handles capture.
+  // Webtoon: walk each page vertical wrapper in order, waiting for loaded img or painted canvas
+  // Webtoon: scroll from top to bottom to lazy-load all pages, then extract img/canvas from all .rpage-page wrappers in order
   async walkLongStrip() {
     console.log('  Scrolling long-strip reader...');
+    
+    // Scroll to the bottom to trigger all lazy loading
     await this.page.evaluate(async () => {
       const scroller = document.querySelector('main.rpage-main--long-strip')
                     || document.querySelector('main.rpage-main')
@@ -633,28 +622,70 @@ export class ComixScraper extends BaseScraper {
       let lastTop = -1;
       let same = 0;
       for (let i = 0; i < 500; i++) {
-        scroller.scrollTop += 1200;
+        scroller.scrollTop += 1500;
         await new Promise(r => setTimeout(r, 250));
         if (scroller.scrollTop === lastTop) {
           same++;
-          if (same >= 4) break;
+          if (same >= 5) break;
         } else {
           same = 0;
         }
         lastTop = scroller.scrollTop;
       }
     });
+
+    // Give it a moment to settle
+    await new Promise(r => setTimeout(r, 1500));
+
+    console.log('  Extracting all pages from scroll container...');
+    const images = await this.page.evaluate(() => {
+      const wrappers = Array.from(document.querySelectorAll('.rpage-page'));
+      // Sort wrappers by data-page attribute to ensure correct order
+      wrappers.sort((a, b) => {
+        const pageA = parseInt(a.getAttribute('data-page') || '0', 10);
+        const pageB = parseInt(b.getAttribute('data-page') || '0', 10);
+        return pageA - pageB;
+      });
+
+      return wrappers.map(wrapper => {
+        const pageIndex = parseInt(wrapper.getAttribute('data-page') || '0', 10);
+        const canvas = wrapper.querySelector('canvas');
+        if (canvas) {
+          try {
+            const cleanToDataURL = window.__cleanToDataURL || canvas.toDataURL;
+            return {
+              index: pageIndex,
+              url: cleanToDataURL.call(canvas, 'image/png')
+            };
+          } catch (e) {
+            console.error('Canvas extraction failed:', e);
+          }
+        }
+
+        const img = wrapper.querySelector('img');
+        if (img) {
+          return {
+            index: pageIndex,
+            url: img.src
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+    });
+
+    return images;
   }
 
-  // Paged manga: Swiper carousel only renders the active slide + neighbors,
-  // so we click through every progress segment to force each page's image
-  // to be fetched. We don't extract src here — the network listener does.
+  // Paged manga: click through Swiper progress segment buttons in order, extracting img or painted canvas
   async walkPagedReader() {
     const totalPages = await this.page.evaluate(
       () => document.querySelectorAll('.rpage-progress__seg').length
     );
     console.log(`  Paged reader: ${totalPages} pages`);
-    if (totalPages === 0) return;
+    if (totalPages === 0) return [];
+
+    const images = [];
 
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       const clicked = await this.page.evaluate((n) => {
@@ -667,10 +698,57 @@ export class ComixScraper extends BaseScraper {
         console.warn(`  Page ${pageNum}: no progress button`);
         continue;
       }
-      // Short pause is enough — we don't need the DOM to settle, just
-      // enough time for Swiper to schedule the network fetch.
-      await new Promise(r => setTimeout(r, 350));
+
+      // Wait for image/canvas to load and paint
+      await this.page.waitForFunction((n) => {
+        const slide = document.querySelector('.swiper-slide-active');
+        if (!slide) return false;
+        const canvas = slide.querySelector('canvas');
+        if (canvas && canvas.width > 100) return true;
+        const img = slide.querySelector('img');
+        return img && img.complete && img.naturalWidth > 100;
+      }, { timeout: 8000 }, pageNum).catch(() => {});
+
+      // Settle time for painting
+      await new Promise(r => setTimeout(r, 200));
+
+      // Extract image/canvas data
+      const pageResult = await this.page.evaluate((n) => {
+        const slide = document.querySelector('.swiper-slide-active');
+        if (!slide) return null;
+
+        const canvas = slide.querySelector('canvas');
+        if (canvas) {
+          try {
+            const cleanToDataURL = window.__cleanToDataURL || canvas.toDataURL;
+            return {
+              index: n,
+              url: cleanToDataURL.call(canvas, 'image/png')
+            };
+          } catch (e) {
+            console.error('Canvas extraction failed:', e);
+          }
+        }
+
+        const img = slide.querySelector('img');
+        if (img) {
+          return {
+            index: n,
+            url: img.src
+          };
+        }
+
+        return null;
+      }, pageNum);
+
+      if (pageResult) {
+        images.push(pageResult);
+      } else {
+        console.warn(`  Page ${pageNum}: extraction returned null`);
+      }
     }
+
+    return images;
   }
 }
 
