@@ -688,7 +688,7 @@ export function setupListeners() {
   if (sourcesCard) {
     sourcesCard.addEventListener('click', () => {
       const q = state.searchAuthor || state.searchQuery;
-      if (q) window.location.hash = `#/scrapers?q=${encodeURIComponent(q)}`;
+      if (q) window.location.hash = `#/scrapers?browse=nhentai.net&q=${encodeURIComponent(q)}`;
     });
   }
 

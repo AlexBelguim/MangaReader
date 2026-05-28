@@ -31,24 +31,37 @@ class ScraperView {
 
   async mount(params) {
     this.container = document.getElementById('app');
-    
+
     // Set view layout if needed
     document.body.className = 'scrapers-mode';
 
+    // Parse deep-link params: ?browse=<scraper>&q=<term> opens a scraper's
+    // browse view pre-filled; ?q=<term> runs the cross-site search.
+    const qs = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const browseTarget = qs.get('browse');
+    const deepQuery = qs.get('q');
+
+    if (browseTarget) {
+      this.browseScraper = browseTarget;
+      this.viewMode = 'browse';
+      this.browseQuery = deepQuery || this.browseQuery;
+      this.browseSort = 'popular';
+      this.browsePage = 1;
+      this.browseResults = [];
+      this.browseTotalPages = 1;
+    }
+
     this.updateView();
-    
+
     // Fetch available scrapers
     await this.loadScrapers();
-    
-    // If we were in browse mode (e.g. returning from reader), re-fetch browse results
+
+    // If we're in browse mode (deep link, or returning from reader), fetch results
     if (this.viewMode === 'browse' && this.browseScraper) {
       this.performBrowse();
-    }
-    
-    // Automatically search if there's a 'q' query param in the hash
-    const hashMatches = window.location.hash.match(/\?q=([^&]*)/);
-    if (hashMatches && hashMatches[1]) {
-      this.currentQuery = decodeURIComponent(hashMatches[1]);
+    } else if (deepQuery) {
+      // Cross-site search deep link
+      this.currentQuery = deepQuery;
       this.updateView();
       this.performSearch();
     }
