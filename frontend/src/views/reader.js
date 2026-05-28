@@ -2157,12 +2157,13 @@ async function startStream(url, scraperName) {
             const lines = buffer.split('\n\n');
             buffer = lines.pop(); // Keep incomplete chunk
             
+            let imagesAddedThisBatch = false;
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     const jsonStr = line.substring(6);
                     try {
                         const data = JSON.parse(jsonStr);
-                        
+
                         if (data.type === 'metadata') {
                             state.manga.title = data.title;
                             state.manga.alias = data.title;
@@ -2170,10 +2171,7 @@ async function startStream(url, scraperName) {
                         } else if (data.type === 'image') {
                             const proxiedUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(data.url)}`;
                             state.images.push(proxiedUrl);
-                            
-                            // Don't fully re-render every page, just update spread
-                            // To prevent too much layout shifting, we can debounce or just update directly
-                            updateSpread();
+                            imagesAddedThisBatch = true;
                         } else if (data.type === 'error') {
                             showToast('Stream error: ' + data.message, 'error');
                         } else if (data.type === 'done') {
@@ -2184,6 +2182,9 @@ async function startStream(url, scraperName) {
                     }
                 }
             }
+            // Update the view once per read batch instead of per image to avoid
+            // a burst of synchronous re-renders when many pages arrive together.
+            if (imagesAddedThisBatch) updateSpread();
         }
     } catch (e) {
         if (e.name !== 'AbortError') {

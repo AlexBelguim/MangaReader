@@ -769,7 +769,10 @@ class ScraperView {
       </div>
     `;
     
-    readBtn.disabled = !(result.url || result.galleryId);
+    // Keep "Read Now" disabled until details (incl. page count) have loaded.
+    // Reading before info resolves spawns a second concurrent scrape that
+    // nhentai rate-limits, producing a "no page count" stream error.
+    readBtn.disabled = true;
 
     try {
        const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`, { signal });

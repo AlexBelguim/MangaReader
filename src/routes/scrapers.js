@@ -302,6 +302,9 @@ router.get('/preview-images-stream', async (req, res) => {
       'Connection': 'keep-alive'
     });
 
+    let clientGone = false;
+    req.on('close', () => { clientGone = true; });
+
     if (scraper.streamChapterImages) {
        // Use the scraper's native streaming generator
        const urlToStream = (scraper.websiteName === 'nhentai.net') ? (galleryId || url) : url;
@@ -310,24 +313,30 @@ router.get('/preview-images-stream', async (req, res) => {
          abortController.abort();
        });
        for await (const chunk of scraper.streamChapterImages(urlToStream, { signal: abortController.signal })) {
+          if (clientGone) break;
           res.write(`data: ${JSON.stringify(chunk)}\n\n`);
        }
     } else if (url && scraper.getChapterImages) {
        const images = await scraper.getChapterImages(url);
-       res.write(`data: ${JSON.stringify({ type: 'metadata', pageCount: images.length, title: 'Preview' })}\n\n`);
+       if (!clientGone) res.write(`data: ${JSON.stringify({ type: 'metadata', pageCount: images.length, title: 'Preview' })}\n\n`);
        for (const img of images) {
+          if (clientGone) break;
           res.write(`data: ${JSON.stringify({ type: 'image', index: img.index || images.indexOf(img)+1, url: img.url })}\n\n`);
        }
     } else {
        throw new Error('This scraper does not support preview streaming');
     }
-    
-    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-    res.end();
+
+    if (!clientGone && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+      res.end();
+    }
   } catch (error) {
     console.error('[API] Scraper preview stream error:', error);
-    res.write(`data: ${JSON.stringify({ type: 'error', message: error.message })}\n\n`);
-    res.end();
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: error.message })}\n\n`);
+      res.end();
+    }
   }
 });
 

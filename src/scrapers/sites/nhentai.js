@@ -2,6 +2,12 @@ import { BaseScraper } from '../base.js';
 import { launchBrowser } from '../util/stealth-browser.js';
 import { waitForCloudflare } from '../util/cloudflare.js';
 
+// Gallery image URLs are immutable, so cache them briefly to avoid relaunching
+// a browser every time the same gallery is reopened in the reader.
+const GALLERY_URL_CACHE = new Map(); // galleryId -> { ts, data }
+const GALLERY_URL_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const GALLERY_URL_CACHE_MAX = 200;
+
 /**
  * Scraper for nhentai.net website
  * 
@@ -117,170 +123,57 @@ export class NhentaiScraper extends BaseScraper {
   }
 
   async getChapterImages(chapterUrl) {
-    const { browser, page } = await launchBrowser({ stealth: true });
+    const galleryId = this.getGalleryId(chapterUrl) || chapterUrl;
+    if (!galleryId) throw new Error('Invalid nhentai URL');
 
-    try {
-      const galleryId = this.getGalleryId(chapterUrl);
-      if (!galleryId) throw new Error('Invalid nhentai URL');
+    // Derive full-resolution image URLs from the gallery overview in a single
+    // page load. Navigating the per-page reader (one request per page) gets
+    // HTTP 429 rate-limited partway through large galleries, leaving pages
+    // missing. The derived i*.nhentai.net URLs are the same full-res files the
+    // reader serves.
+    const { images, pageCount } = await this.getGalleryImageUrls(galleryId);
 
-      console.log(`  Fetching images for gallery ${galleryId}...`);
-
-      // Go to page 1 to get total page count
-      await page.goto(`https://nhentai.net/g/${galleryId}/1/`, {
-        waitUntil: 'domcontentloaded', timeout: 60000
-      });
-      await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
-
-      const totalPages = await page.evaluate(() => {
-        const el = document.querySelector('.num-pages');
-        return el ? (parseInt(el.textContent.trim()) || 0) : 0;
-      });
-      if (totalPages === 0) throw new Error('Could not determine total page count');
-      console.log(`  Total pages: ${totalPages}`);
-
-      const images = [];
-      const failedPages = [];
-
-      // Fetch all pages
-      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-        if (pageNum % 10 === 1) {
-          console.log(`  Fetching pages ${pageNum}-${Math.min(pageNum + 9, totalPages)}...`);
-        }
-        const imageUrl = await this._fetchPageImage(page, galleryId, pageNum);
-        if (imageUrl) { images.push({ index: pageNum, url: imageUrl }); }
-        else { failedPages.push(pageNum); }
-        await this.randomDelay(50, 100);
-      }
-
-      // Retry failed pages
-      for (let retry = 1; retry <= 3 && failedPages.length > 0; retry++) {
-        console.log(`  Retry attempt ${retry}/3 for ${failedPages.length} failed pages...`);
-        await this.randomDelay(1000, 2000);
-        const stillFailed = [];
-        for (const pageNum of failedPages) {
-          const imageUrl = await this._fetchPageImage(page, galleryId, pageNum);
-          if (imageUrl) { images.push({ index: pageNum, url: imageUrl }); }
-          else { stillFailed.push(pageNum); }
-          await this.randomDelay(200, 400);
-        }
-        failedPages.length = 0;
-        failedPages.push(...stillFailed);
-      }
-
-      images.sort((a, b) => a.index - b.index);
-      console.log(`  Found ${images.length}/${totalPages} images`);
-
-      if (images.length < totalPages) {
-        throw new Error(`Failed to fetch ${totalPages - images.length} images (got ${images.length}/${totalPages})`);
-      }
-      return images;
-    } finally {
-      await browser.close();
+    if (images.length === 0) throw new Error('Could not extract any images');
+    console.log(`  Found ${images.length}/${pageCount || images.length} images`);
+    if (pageCount && images.length < pageCount) {
+      throw new Error(`Failed to fetch ${pageCount - images.length} images (got ${images.length}/${pageCount})`);
     }
+
+    return images.map((url, i) => ({ index: i + 1, url }));
   }
 
-  // Stream chapter images one by one using an async generator
+  // Stream chapter images one by one using an async generator.
+  // Derives full-res URLs from the gallery overview in a single page load to
+  // avoid the per-page reader 429 rate-limiting that left galleries incomplete.
   async *streamChapterImages(chapterUrl, options = {}) {
-    const { waitForCloudflare } = await import('../util/cloudflare.js');
-    const { launchBrowser } = await import('../util/stealth-browser.js');
-    
-    let browser, page;
-    
-    if (options.signal?.aborted) {
-      throw new Error('Aborted');
+    if (options.signal?.aborted) throw new Error('Aborted');
+
+    const galleryId = this.getGalleryId(chapterUrl) || chapterUrl; // Allow passing galleryId directly
+    if (!galleryId) throw new Error('Invalid nhentai URL');
+
+    console.log(`  [Stream] Fetching images for gallery ${galleryId}...`);
+
+    let images, title, pageCount;
+    try {
+      ({ images, title, pageCount } = await this.getGalleryImageUrls(galleryId, { signal: options.signal }));
+    } catch (err) {
+      // A client-initiated abort tears the browser down mid-navigation, which
+      // surfaces as a puppeteer "frame detached" error — not a real failure.
+      if (options.signal?.aborted) return;
+      throw err;
     }
 
-    let abortHandler;
+    if (options.signal?.aborted) return;
+    if (images.length === 0) throw new Error('Could not extract any images');
 
-    try {
-      const launched = await launchBrowser({ stealth: true });
-      browser = launched.browser;
-      page = launched.page;
-      
-      const galleryId = this.getGalleryId(chapterUrl) || chapterUrl; // Allow passing galleryId directly
-      if (!galleryId) throw new Error('Invalid nhentai URL');
+    yield { type: 'metadata', pageCount: pageCount || images.length, title };
 
-      console.log(`  [Stream] Fetching images for gallery ${galleryId}...`);
-
-      if (options.signal) {
-        abortHandler = () => {
-          console.log(`  [Stream] Abort signal received for streamChapterImages. Closing page...`);
-          page.close().catch(() => {});
-        };
-        options.signal.addEventListener('abort', abortHandler);
+    for (let i = 0; i < images.length; i++) {
+      if (options.signal?.aborted) {
+        console.log(`  [Stream] Client aborted stream for gallery ${galleryId}.`);
+        break;
       }
-
-      await page.goto(`https://nhentai.net/g/${galleryId}/1/`, {
-        waitUntil: 'domcontentloaded', timeout: 60000
-      });
-      await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
-
-      const info = await page.evaluate(() => {
-        const el = document.querySelector('.num-pages');
-        const totalPages = el ? (parseInt(el.textContent.trim()) || 0) : 0;
-        const infoLink = document.querySelector('a#info');
-        const titleEl = infoLink || document.querySelector('h1');
-        const title = titleEl ? titleEl.textContent.trim() : 'Unknown';
-        return { totalPages, title };
-      });
-      
-      if (info.totalPages === 0) throw new Error('Could not determine total page count');
-      
-      yield { type: 'metadata', pageCount: info.totalPages, title: info.title };
-
-      // Fetch all pages
-      for (let pageNum = 1; pageNum <= info.totalPages; pageNum++) {
-        if (options.signal?.aborted) {
-            console.log(`  [Stream] Client aborted stream for gallery ${galleryId}.`);
-            break;
-        }
-        
-        let imageUrl = null;
-        try {
-           const response = await page.goto(`https://nhentai.net/g/${galleryId}/${pageNum}/`, {
-             waitUntil: 'domcontentloaded', timeout: 30000
-           });
-           if (response.status() !== 404) {
-              imageUrl = await page.evaluate(() => {
-                for (const img of document.querySelectorAll('img')) {
-                  if (img.src && img.src.includes('.nhentai.net/galleries/')) return img.src;
-                }
-                return null;
-              });
-           }
-        } catch (err) {
-           console.log(`[SSE] Error fetching page ${pageNum}: ${err.message}`);
-        }
-        
-        if (imageUrl) {
-           yield { type: 'image', index: pageNum, url: imageUrl };
-        }
-        await this.randomDelay(50, 100);
-      }
-    } finally {
-      if (options.signal && abortHandler) {
-        options.signal.removeEventListener('abort', abortHandler);
-      }
-      if (browser) await browser.close();
-    }
-  }
-
-  async _fetchPageImage(page, galleryId, pageNum) {
-    try {
-      const response = await page.goto(`https://nhentai.net/g/${galleryId}/${pageNum}/`, {
-        waitUntil: 'domcontentloaded', timeout: 30000
-      });
-      if (response.status() === 404) return null;
-
-      return await page.evaluate(() => {
-        for (const img of document.querySelectorAll('img')) {
-          if (img.src && img.src.includes('.nhentai.net/galleries/')) return img.src;
-        }
-        return null;
-      });
-    } catch (error) {
-      console.log(`  Error fetching page ${pageNum}: ${error.message}`);
-      return null;
+      yield { type: 'image', index: i + 1, url: images[i] };
     }
   }
 
@@ -372,24 +265,45 @@ export class NhentaiScraper extends BaseScraper {
    * @param {string} galleryId - The nhentai gallery ID
    * @returns {{ images: string[], title: string, pageCount: number }}
    */
-  async getGalleryImageUrls(galleryId) {
+  async getGalleryImageUrls(galleryId, options = {}) {
+    if (options.signal?.aborted) throw new Error('Aborted');
+
+    const cached = GALLERY_URL_CACHE.get(galleryId);
+    if (cached && Date.now() - cached.ts < GALLERY_URL_CACHE_TTL) {
+      console.log(`  [nhentai] Gallery ${galleryId}: served ${cached.data.images.length} image URLs from cache`);
+      return cached.data;
+    }
+
     const { browser, page } = await launchBrowser({ stealth: true });
+
+    // Tear the browser down immediately if the caller aborts (e.g. the reader
+    // is closed mid-fetch) instead of waiting for navigation to finish.
+    const abortHandler = () => {
+      console.log(`  [nhentai] Abort received for gallery ${galleryId}. Closing browser...`);
+      browser.close().catch(() => {});
+    };
+    if (options.signal) options.signal.addEventListener('abort', abortHandler);
 
     try {
       console.log(`  [nhentai] Fast fetching images for gallery ${galleryId} via thumbnails...`);
 
       let totalPages = 1;
       let title = 'Unknown';
-      let allThumbs = [];
+      // Dedup by page number — nhentai usually serves every thumbnail on one
+      // page, so a pagination "next" widget (if present) can re-serve the same
+      // thumbs. Keying by page number prevents duplicates and runaway looping.
+      const byPage = new Map(); // page number -> thumbnail URL
       let currentPage = 1;
       let hasMoreThumbPages = true;
+      const MAX_THUMB_PAGES = 30; // safety cap against an unbounded "next" link
 
-      while (hasMoreThumbPages) {
+      while (hasMoreThumbPages && currentPage <= MAX_THUMB_PAGES) {
+         if (options.signal?.aborted) throw new Error('Aborted');
          await page.goto(`https://nhentai.net/g/${galleryId}/?page=${currentPage}`, {
            waitUntil: 'domcontentloaded', timeout: 60000
          });
          await waitForCloudflare(page, { delayFn: () => this.randomDelay(2000, 3000) });
-         
+
          const data = await page.evaluate(() => {
            // On first page load, get total pages and title
            let pCount = 1;
@@ -422,39 +336,54 @@ export class NhentaiScraper extends BaseScraper {
             totalPages = data.pageCount;
             title = data.title;
          }
-         
-         allThumbs = allThumbs.concat(data.thumbs);
-         hasMoreThumbPages = data.hasNext;
+
+         // Convert each thumbnail to its full-resolution URL, keyed by page.
+         // Thumbnail: https://t3.nhentai.net/galleries/{mediaId}/{n}t.{ext}
+         //   (nhentai sometimes serves a doubled extension, e.g. {n}t.webp.webp)
+         // Full:      https://i3.nhentai.net/galleries/{mediaId}/{n}.{ext}
+         let addedThisPage = 0;
+         for (const thumbUrl of data.thumbs) {
+            const m = thumbUrl.match(/\/galleries\/(\d+)\/(\d+)t\.([a-zA-Z0-9]+)/);
+            if (!m) continue;
+            const [, mediaId, pageNum, ext] = m;
+            const page = parseInt(pageNum, 10);
+            if (byPage.has(page)) continue;
+            byPage.set(page, `https://i3.nhentai.net/galleries/${mediaId}/${pageNum}.${ext}`);
+            addedThisPage++;
+         }
+
+         // Stop if this page contributed no new thumbnails (e.g. nhentai
+         // re-served the same single-page grid) to avoid duplicate looping.
+         hasMoreThumbPages = data.hasNext && addedThisPage > 0;
          currentPage++;
-         
+
          if (hasMoreThumbPages) {
             await this.randomDelay(500, 1000);
          }
       }
 
-      if (allThumbs.length === 0) {
+      if (byPage.size === 0) {
         throw new Error('Could not extract thumbnails');
       }
 
-      // Convert thumbnail URLs to full image URLs
-      // Thumbnail: https://t3.nhentai.net/galleries/3891442/1t.webp or 1t.jpg
-      // Full: https://i3.nhentai.net/galleries/3891442/1.webp or 1.jpg
-      const images = allThumbs.map(thumbUrl => {
-         return thumbUrl
-            .replace(/\/\/t\d+\.nhentai\.net/, '//i3.nhentai.net')
-            .replace(/(\d+)t\./, '$1.');
-      });
+      const images = [...byPage.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, url]) => url);
 
-      console.log(`  [nhentai] Gallery ${galleryId}: Extracted ${images.length} fast image URLs`);
+      console.log(`  [nhentai] Gallery ${galleryId}: Extracted ${images.length} full image URLs`);
 
-      return {
-        galleryId,
-        title: title,
-        pageCount: totalPages,
-        images
-      };
+      const result = { galleryId, title, pageCount: totalPages, images };
+
+      // Cache (immutable URLs); evict oldest entry if over capacity.
+      if (GALLERY_URL_CACHE.size >= GALLERY_URL_CACHE_MAX) {
+        GALLERY_URL_CACHE.delete(GALLERY_URL_CACHE.keys().next().value);
+      }
+      GALLERY_URL_CACHE.set(galleryId, { ts: Date.now(), data: result });
+
+      return result;
     } finally {
-      await browser.close();
+      if (options.signal) options.signal.removeEventListener('abort', abortHandler);
+      await browser.close().catch(() => {});
     }
   }
 }
