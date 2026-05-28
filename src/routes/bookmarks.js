@@ -1076,9 +1076,9 @@ async function getChapterDir(bookmarkId, chapterNum) {
     return validVersion ? validVersion.path : null;
 }
 
-// Helper to get sorted image list for a chapter
-// Returns the same shape as downloader._getImagesFromDir so the frontend can
-// treat it identically to the initial reader-images load.
+// Helper to get sorted image list for a chapter.
+// Returns URL strings (not objects) so cached older frontends with a
+// reloadImages that only handles strings keep working after we push fixes.
 async function getChapterImages(bookmarkId, chapterNum) {
     const chapterDir = await getChapterDir(bookmarkId, chapterNum);
     if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
@@ -1089,11 +1089,7 @@ async function getChapterImages(bookmarkId, chapterNum) {
     imageFiles.sort(collator.compare);
 
     const relativeChapterDir = path.relative(CONFIG.downloadsDir, chapterDir).replace(/\\/g, '/');
-    return imageFiles.map((file, index) => ({
-        index: index + 1,
-        url: `/downloads/${relativeChapterDir}/${file}`,
-        isLocal: true
-    }));
+    return imageFiles.map(file => `/downloads/${relativeChapterDir}/${file}`);
 }
 
 // Rotate a page
