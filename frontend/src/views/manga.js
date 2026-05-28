@@ -905,10 +905,11 @@ export function setupListeners() {
       e.preventDefault();
       const artist = link.dataset.artist;
       if (artist) {
-        // Apply the dedicated author filter (shows the 🎨 badge and the
-        // "search sources" card) and go to the library.
-        localStorage.setItem('library_artist_filter', artist);
-        localStorage.removeItem('library_search');
+        // Put the author in the library search bar, and mark it as an
+        // author-driven search so the "search sources" card shows.
+        localStorage.setItem('library_search', artist);
+        localStorage.setItem('library_search_author', artist);
+        localStorage.removeItem('library_artist_filter');
         router.go('/');
       }
     });

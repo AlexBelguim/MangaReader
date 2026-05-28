@@ -19,6 +19,9 @@ let state = {
   activeCategory: localStorage.getItem('library_active_category') || null,
   artistFilter: null,
   searchQuery: localStorage.getItem('library_search') || '',
+  // Set when the current search came from clicking an author, so we can show
+  // the "search sources" card only for author-driven searches (not manual typing).
+  searchAuthor: localStorage.getItem('library_search_author') || null,
   sortBy: localStorage.getItem('library_sort') || 'updated',
   viewMode: 'manga', // 'manga' or 'series'
   loading: true
@@ -243,14 +246,15 @@ export function render() {
     // Render manga view — use shared filter function
     const filtered = getFilteredBookmarks();
 
-    // When filtering by author, offer a card to look that author up across the
-    // online scrapers (find more works by this author).
-    const sourcesCard = state.artistFilter ? `
-      <div class="manga-card search-sources-card" id="search-sources-card" title="Search online sources for ${escapeHtml(state.artistFilter)}"
+    // When the search came from clicking an author, offer a card to look that
+    // author up across the online scrapers (find more works by this author).
+    const showSourcesCard = state.searchAuthor && state.searchQuery === state.searchAuthor;
+    const sourcesCard = showSourcesCard ? `
+      <div class="manga-card search-sources-card" id="search-sources-card" title="Search online sources for ${escapeHtml(state.searchAuthor)}"
            style="display:flex;align-items:center;justify-content:center;cursor:pointer;border:2px dashed var(--border-color, #3a3a4a);background:transparent;min-height:220px;text-align:center;">
         <div style="padding:1rem;color:var(--text-muted, #9aa);">
           <div style="font-size:2.5rem;line-height:1;margin-bottom:.5rem;">＋</div>
-          <div style="font-size:.85rem;">Search sources for<br><strong style="color:var(--text-color, #fff);">${escapeHtml(state.artistFilter)}</strong></div>
+          <div style="font-size:.85rem;">Search sources for<br><strong style="color:var(--text-color, #fff);">${escapeHtml(state.searchAuthor)}</strong></div>
         </div>
       </div>` : '';
 
@@ -440,9 +444,11 @@ function handleClearFilters() {
   state.activeCategory = null;
   state.artistFilter = null;
   state.searchQuery = '';
+  state.searchAuthor = null;
   localStorage.removeItem('library_active_category');
   localStorage.removeItem('library_artist_filter');
   localStorage.removeItem('library_search');
+  localStorage.removeItem('library_search_author');
   mount();
 }
 
@@ -637,6 +643,9 @@ export function setupListeners() {
     searchInput.addEventListener('input', (e) => {
       state.searchQuery = e.target.value;
       localStorage.setItem('library_search', e.target.value);
+      // Manual typing is no longer an author-driven search — drop the marker.
+      state.searchAuthor = null;
+      localStorage.removeItem('library_search_author');
       // Re-render grid only
       const grid = document.getElementById('library-grid');
       if (grid) {
@@ -648,7 +657,9 @@ export function setupListeners() {
           searchInput.parentElement.insertAdjacentHTML('beforeend', '<button class="search-clear" id="search-clear">×</button>');
           document.getElementById('search-clear')?.addEventListener('click', () => {
             state.searchQuery = '';
+            state.searchAuthor = null;
             localStorage.removeItem('library_search');
+            localStorage.removeItem('library_search_author');
             searchInput.value = '';
             mount();
           });
@@ -665,6 +676,9 @@ export function setupListeners() {
   if (searchClear) {
     searchClear.addEventListener('click', () => {
       state.searchQuery = '';
+      state.searchAuthor = null;
+      localStorage.removeItem('library_search');
+      localStorage.removeItem('library_search_author');
       mount();
     });
   }
@@ -673,7 +687,7 @@ export function setupListeners() {
   const sourcesCard = document.getElementById('search-sources-card');
   if (sourcesCard) {
     sourcesCard.addEventListener('click', () => {
-      const q = state.artistFilter;
+      const q = state.searchAuthor || state.searchQuery;
       if (q) window.location.hash = `#/scrapers?q=${encodeURIComponent(q)}`;
     });
   }
@@ -886,6 +900,9 @@ export async function mount() {
   if (state.searchQuery !== storedSearch) {
     state.searchQuery = storedSearch;
   }
+
+  // Sync the author-search marker (set when an author link was clicked)
+  state.searchAuthor = localStorage.getItem('library_search_author') || null;
 
   // Show loading first
   if (state.loading) {
