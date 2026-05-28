@@ -415,11 +415,12 @@ export class ComixScraper extends BaseScraper {
   // ── Chapter Images ──
 
   async getChapterImages(chapterUrl) {
-    // Get FlareSolverr cookies first
+    // Get FlareSolverr cookies first using the lightweight homepage to avoid double-loading chapter pages
     let fsCookies = [];
     let fsUserAgent = '';
     try {
-      const fsResult = await fetchPage(chapterUrl);
+      console.log(`  [COMIX] Fetching homepage via FlareSolverr to get Cloudflare cookies...`);
+      const fsResult = await fetchPage(BASE_URL);
       fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
       fsUserAgent = fsResult.userAgent;
     } catch (error) {
@@ -460,17 +461,42 @@ export class ComixScraper extends BaseScraper {
       // Dismiss the "Reader controls" hint overlay and any open settings panel
       await this.dismissReaderOverlays();
 
-      // Wait for the reader skeleton (either the long-strip main or progress bar)
-      await this.page.waitForSelector('main.rpage-main, .rpage-progress__seg', { timeout: 15000 })
-        .catch(() => {});
+      // Wait for mode-specific interactive elements to fully render
+      await this.page.waitForFunction(() => {
+        const isLongStrip = document.querySelector('main.rpage-main--long-strip') || 
+                           (document.querySelector('.rpage-settings__panel') && 
+                            /STRIP MARGIN/i.test(document.querySelector('.rpage-settings__panel').textContent));
+        if (isLongStrip) {
+          return document.querySelectorAll('img.rpage-page__img').length > 0 || 
+                 document.querySelector('main.rpage-main');
+        } else {
+          return document.querySelectorAll('.rpage-progress__seg').length > 0;
+        }
+      }, { timeout: 15000 }).catch((e) => {
+        console.warn(`  [COMIX] Wait for reader elements timed out: ${e.message}`);
+      });
 
-      // Detect reader mode. Comix.to wraps webtoons in main.rpage-main--long-strip
-      // and paginated manga in a Swiper carousel.
+      // Brief settle time
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Detect reader mode with maximum robustness (using textContent, class checks, and #initial-data JSON parsing)
       const isLongStrip = await this.page.evaluate(() => {
         const main = document.querySelector('main.rpage-main');
         if (main && main.classList.contains('rpage-main--long-strip')) return true;
         const panel = document.querySelector('.rpage-settings__panel');
-        if (panel && /STRIP MARGIN/i.test(panel.innerText)) return true;
+        if (panel && /STRIP MARGIN/i.test(panel.textContent)) return true;
+        
+        const el = document.querySelector('#initial-data');
+        if (el) {
+          try {
+            const data = JSON.parse(el.textContent);
+            const queries = data.queries || {};
+            for (const key of Object.keys(queries)) {
+              const val = queries[key];
+              if (val && val.type) return val.type !== 'manga'; // manhwa/manhua = webtoon/strip
+            }
+          } catch(e) {}
+        }
         return false;
       });
 
@@ -574,6 +600,18 @@ export class ComixScraper extends BaseScraper {
           el.style.pointerEvents = 'none';
         });
       });
+
+      // Inject CSS style block to permanently hide all overlays and disable their mouse interactions
+      const style = document.createElement('style');
+      style.innerHTML = `
+        .rpage-hint, .rpage-settings__panel, .modal, [class*="overlay"], [class*="backdrop"] {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `;
+      document.head.appendChild(style);
       return actions;
     });
     if (result.length) console.log(`  [COMIX] Dismissed: ${result.join(', ')}`);

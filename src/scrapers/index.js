@@ -1,9 +1,14 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { CONFIG } from '../config.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+
+// Register stealth plugin
+puppeteer.use(StealthPlugin());
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SITES_DIR = path.join(__dirname, 'sites');
