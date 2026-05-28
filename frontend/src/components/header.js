@@ -141,6 +141,20 @@ export function setupHeaderListeners() {
     });
   }
 
+  // Add Manga / Add Series — the library binds these to open its modal. On
+  // other pages (e.g. scrapers) the modal markup isn't present, so route to the
+  // library and signal it to open the modal on arrival.
+  const addManga = document.getElementById('add-manga-btn');
+  const mobileAddManga = document.getElementById('mobile-add-btn');
+  const handleAddFallback = () => {
+    if (!document.getElementById('add-modal')) {
+      sessionStorage.setItem('open_add_modal', '1');
+      router.go('/');
+    }
+  };
+  if (addManga) addManga.addEventListener('click', handleAddFallback);
+  if (mobileAddManga) mobileAddManga.addEventListener('click', handleAddFallback);
+
   // Scan Folder
   const scanBtn = document.getElementById('scan-btn');
   const mobileScanBtn = document.getElementById('mobile-scan-btn');

@@ -901,17 +901,37 @@ export function setupListeners() {
 
   // Artist link clicks - fill search bar in library and navigate there
   app.querySelectorAll('.artist-link').forEach(link => {
-    link.addEventListener('click', (e) => {
+    link.addEventListener('click', async (e) => {
       e.preventDefault();
       const artist = link.dataset.artist;
-      if (artist) {
-        // Put the author in the library search bar, and mark it as an
-        // author-driven search so the "search sources" card shows.
-        localStorage.setItem('library_search', artist);
+      if (!artist) return;
+
+      // Always put the author in the library search bar.
+      localStorage.setItem('library_search', artist);
+      localStorage.removeItem('library_artist_filter');
+
+      // Only enable the "search sources" card when this manga's source supports
+      // browsing, and remember which source so the card browses there.
+      let browseSource = null;
+      try {
+        const src = manga.website;
+        if (src && src !== 'Local') {
+          const list = window._scrapersList ||
+            (window._scrapersList = (await api.get('/scrapers/list')).scrapers);
+          const entry = (list || []).find(s => s.name === src);
+          if (entry && entry.supportsBrowse) browseSource = src;
+        }
+      } catch (_) { /* ignore — just don't show the card */ }
+
+      if (browseSource) {
         localStorage.setItem('library_search_author', artist);
-        localStorage.removeItem('library_artist_filter');
-        router.go('/');
+        localStorage.setItem('library_search_author_source', browseSource);
+      } else {
+        localStorage.removeItem('library_search_author');
+        localStorage.removeItem('library_search_author_source');
       }
+
+      router.go('/');
     });
   });
 

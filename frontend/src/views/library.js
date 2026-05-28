@@ -22,6 +22,8 @@ let state = {
   // Set when the current search came from clicking an author, so we can show
   // the "search sources" card only for author-driven searches (not manual typing).
   searchAuthor: localStorage.getItem('library_search_author') || null,
+  // The browse-capable source the author came from (drives the card's target).
+  searchAuthorSource: localStorage.getItem('library_search_author_source') || null,
   sortBy: localStorage.getItem('library_sort') || 'updated',
   viewMode: 'manga', // 'manga' or 'series'
   loading: true
@@ -445,10 +447,12 @@ function handleClearFilters() {
   state.artistFilter = null;
   state.searchQuery = '';
   state.searchAuthor = null;
+  state.searchAuthorSource = null;
   localStorage.removeItem('library_active_category');
   localStorage.removeItem('library_artist_filter');
   localStorage.removeItem('library_search');
   localStorage.removeItem('library_search_author');
+  localStorage.removeItem('library_search_author_source');
   mount();
 }
 
@@ -645,7 +649,9 @@ export function setupListeners() {
       localStorage.setItem('library_search', e.target.value);
       // Manual typing is no longer an author-driven search — drop the marker.
       state.searchAuthor = null;
+      state.searchAuthorSource = null;
       localStorage.removeItem('library_search_author');
+      localStorage.removeItem('library_search_author_source');
       // Re-render grid only
       const grid = document.getElementById('library-grid');
       if (grid) {
@@ -658,8 +664,10 @@ export function setupListeners() {
           document.getElementById('search-clear')?.addEventListener('click', () => {
             state.searchQuery = '';
             state.searchAuthor = null;
+            state.searchAuthorSource = null;
             localStorage.removeItem('library_search');
             localStorage.removeItem('library_search_author');
+            localStorage.removeItem('library_search_author_source');
             searchInput.value = '';
             mount();
           });
@@ -677,8 +685,10 @@ export function setupListeners() {
     searchClear.addEventListener('click', () => {
       state.searchQuery = '';
       state.searchAuthor = null;
+      state.searchAuthorSource = null;
       localStorage.removeItem('library_search');
       localStorage.removeItem('library_search_author');
+      localStorage.removeItem('library_search_author_source');
       mount();
     });
   }
@@ -688,7 +698,8 @@ export function setupListeners() {
   if (sourcesCard) {
     sourcesCard.addEventListener('click', () => {
       const q = state.searchAuthor || state.searchQuery;
-      if (q) window.location.hash = `#/scrapers?browse=nhentai.net&q=${encodeURIComponent(q)}`;
+      const source = state.searchAuthorSource || 'nhentai.net';
+      if (q) window.location.hash = `#/scrapers?browse=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`;
     });
   }
 
@@ -903,6 +914,7 @@ export async function mount() {
 
   // Sync the author-search marker (set when an author link was clicked)
   state.searchAuthor = localStorage.getItem('library_search_author') || null;
+  state.searchAuthorSource = localStorage.getItem('library_search_author_source') || null;
 
   // Show loading first
   if (state.loading) {
@@ -917,6 +929,13 @@ export async function mount() {
   // Render with data
   app.innerHTML = render();
   setupListeners();
+
+  // If we arrived here via the header "Add Manga" button on another page,
+  // open the add modal now.
+  if (sessionStorage.getItem('open_add_modal')) {
+    sessionStorage.removeItem('open_add_modal');
+    document.getElementById('add-modal')?.classList.add('open');
+  }
 
   // Subscribe to store updates for live refresh
   storeUnsubs.forEach(fn => fn());
