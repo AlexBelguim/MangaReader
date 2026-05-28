@@ -2106,37 +2106,48 @@ function setupVolumeListeners(app) {
       fileInput.style.display = 'none';
       document.body.appendChild(fileInput);
 
+      // The input persists across mounts, so read the current target from
+      // its dataset (set at click time) rather than capturing stale closures.
       fileInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
-        const volId = editModal.dataset.editingVolId;
-        if (!volId) return;
+        const mangaId = fileInput.dataset.mangaId;
+        const volId = fileInput.dataset.volId;
+        const btn = document.getElementById('vol-cover-upload-btn');
+
+        // Reset input so the same file can be selected again
+        fileInput.value = '';
+
+        if (!mangaId || !volId) return;
 
         try {
-          // Reset input so the same file can be selected again
-          fileInput.value = '';
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+          }
 
-          uploadBtn.disabled = true;
-          uploadBtn.textContent = 'Uploading...';
-
-          await api.uploadVolumeCover(manga.id, volId, file);
+          await api.uploadVolumeCover(mangaId, volId, file);
 
           showToast('Cover uploaded', 'success');
-          await loadData(manga.id);
-          // Update the volume cover source directly in the DOM if we are looking at it
-          // the mount call below handles the full refresh
-          mount([manga.id, 'volume', volId]);
+          await loadData(mangaId);
+          mount([mangaId, 'volume', volId]);
         } catch (err) {
           showToast('Upload failed: ' + err.message, 'error');
         } finally {
-          uploadBtn.disabled = false;
-          uploadBtn.innerHTML = '📤 Upload Image';
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '📤 Upload Image';
+          }
         }
       });
     }
 
-    uploadBtn.addEventListener('click', () => fileInput.click());
+    uploadBtn.addEventListener('click', () => {
+      fileInput.dataset.mangaId = manga.id;
+      fileInput.dataset.volId = editModal.dataset.editingVolId || '';
+      fileInput.click();
+    });
   }
 
   // --- Cover Selector Modal (Trigger) ---
