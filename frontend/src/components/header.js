@@ -104,14 +104,20 @@ export function setupHeaderListeners() {
     });
   });
 
-  // Home/Logo click - Clear filters
+  // Home/Logo click - clear filters AND refresh library data (like the refresh button)
   const logo = document.querySelector('.logo');
   if (logo) {
     logo.addEventListener('click', (e) => {
       // Clear persistence
       localStorage.removeItem('library_active_category');
+      localStorage.removeItem('library_artist_filter');
+      localStorage.removeItem('library_search');
 
-      // Dispatch event to clear filters in library
+      // Force a fresh reload of bookmarks from the server. The library
+      // subscribes to the store, so this re-renders the grid with fresh data.
+      store.loadBookmarks(true).catch(() => {});
+
+      // Dispatch event to clear filters in library (if it's already mounted)
       window.dispatchEvent(new CustomEvent('clearFilters'));
     });
   }

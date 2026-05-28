@@ -28,6 +28,10 @@ let state = {
 let viewModeHandler = null;
 let storeUnsubs = [];
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 /**
  * Sort bookmarks by current sort preference
  */
@@ -239,7 +243,18 @@ export function render() {
     // Render manga view — use shared filter function
     const filtered = getFilteredBookmarks();
 
-    const cards = filtered.map(renderMangaCard).join('');
+    // When filtering by author, offer a card to look that author up across the
+    // online scrapers (find more works by this author).
+    const sourcesCard = state.artistFilter ? `
+      <div class="manga-card search-sources-card" id="search-sources-card" title="Search online sources for ${escapeHtml(state.artistFilter)}"
+           style="display:flex;align-items:center;justify-content:center;cursor:pointer;border:2px dashed var(--border-color, #3a3a4a);background:transparent;min-height:220px;text-align:center;">
+        <div style="padding:1rem;color:var(--text-muted, #9aa);">
+          <div style="font-size:2.5rem;line-height:1;margin-bottom:.5rem;">＋</div>
+          <div style="font-size:.85rem;">Search sources for<br><strong style="color:var(--text-color, #fff);">${escapeHtml(state.artistFilter)}</strong></div>
+        </div>
+      </div>` : '';
+
+    const cards = filtered.map(renderMangaCard).join('') + sourcesCard;
 
     content = `
       <div class="library-controls">
@@ -611,6 +626,7 @@ export function setupListeners() {
   if (artistBadge) {
     artistBadge.addEventListener('click', () => {
       state.artistFilter = null;
+      localStorage.removeItem('library_artist_filter');
       mount();
     });
   }
@@ -650,6 +666,15 @@ export function setupListeners() {
     searchClear.addEventListener('click', () => {
       state.searchQuery = '';
       mount();
+    });
+  }
+
+  // "Search sources" card — look up the current query across online scrapers
+  const sourcesCard = document.getElementById('search-sources-card');
+  if (sourcesCard) {
+    sourcesCard.addEventListener('click', () => {
+      const q = state.artistFilter;
+      if (q) window.location.hash = `#/scrapers?q=${encodeURIComponent(q)}`;
     });
   }
 
@@ -850,9 +875,9 @@ export async function mount() {
     state.activeCategory = storedCategory;
   }
 
-  // Sync artistFilter with localStorage
-  const storedArtist = localStorage.getItem('library_artist_filter');
-  if (storedArtist && state.artistFilter !== storedArtist) {
+  // Sync artistFilter with localStorage (reflects clears too)
+  const storedArtist = localStorage.getItem('library_artist_filter') || null;
+  if (state.artistFilter !== storedArtist) {
     state.artistFilter = storedArtist;
   }
 

@@ -905,9 +905,10 @@ export function setupListeners() {
       e.preventDefault();
       const artist = link.dataset.artist;
       if (artist) {
-        // Store artist name in search and go to library
-        localStorage.setItem('library_search', artist);
-        localStorage.removeItem('library_artist_filter');
+        // Apply the dedicated author filter (shows the 🎨 badge and the
+        // "search sources" card) and go to the library.
+        localStorage.setItem('library_artist_filter', artist);
+        localStorage.removeItem('library_search');
         router.go('/');
       }
     });

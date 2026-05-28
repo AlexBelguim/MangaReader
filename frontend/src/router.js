@@ -36,7 +36,10 @@ class Router {
     async navigate() {
         console.log('[Router] navigate called');
         const hash = window.location.hash.slice(1) || '/';
-        const [path, ...params] = hash.split('/').filter(Boolean);
+        // Strip any query string (e.g. "/scrapers?q=foo") before route matching;
+        // the view reads the query itself from window.location.hash.
+        const pathname = hash.split('?')[0];
+        const [path, ...params] = pathname.split('/').filter(Boolean);
 
         const route = `/${path || ''}`;
 

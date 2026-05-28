@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { renderHeader, setupHeaderListeners } from '../components/header.js';
 
 class ScraperView {
   constructor() {
@@ -85,6 +86,7 @@ class ScraperView {
 
   render() {
     this.container.innerHTML = `
+      ${renderHeader()}
       <div class="view-container scrapers-container" style="${this.viewMode === 'main' ? '' : 'display: none;'}">
         <div class="view-header">
           <h1>🔌 Scrapers</h1>
@@ -213,6 +215,10 @@ class ScraperView {
         </div>
       </div>
     `;
+
+    // Re-bind the shared header listeners each render (it's idempotent per
+    // header element), since render() replaces the header markup.
+    setupHeaderListeners();
   }
 
   renderScraperList() {
@@ -442,6 +448,8 @@ class ScraperView {
     const previewReadBtn = document.getElementById('preview-read-btn');
     if (previewReadBtn) {
        previewReadBtn.addEventListener('click', () => {
+          // Guard: ignore clicks while details (incl. page count) are still loading.
+          if (previewReadBtn.disabled) return;
           if (this.infoAbortController) {
              this.infoAbortController.abort();
              this.infoAbortController = null;
@@ -772,7 +780,9 @@ class ScraperView {
     // Keep "Read Now" disabled until details (incl. page count) have loaded.
     // Reading before info resolves spawns a second concurrent scrape that
     // nhentai rate-limits, producing a "no page count" stream error.
-    readBtn.disabled = true;
+    // pointer-events:none guarantees the click can't fire even though the
+    // button keeps its inline success-color background.
+    this._setReadBtnEnabled(readBtn, false);
 
     try {
        const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`, { signal });
@@ -820,12 +830,12 @@ class ScraperView {
              ${tagsHtml}
           `;
           
-          readBtn.disabled = false;
+          this._setReadBtnEnabled(readBtn, true);
        } else {
           document.getElementById('preview-extended-info').innerHTML = `<p class="error-state" style="margin:0; padding:1rem; text-align:left;">Could not fetch extra details.</p>`;
           // Still allow reading if it's nhentai because we can use galleryId directly if it was parsed
           if (this.previewInfo.galleryId || this.previewInfo.url) {
-             readBtn.disabled = false;
+             this._setReadBtnEnabled(readBtn, true);
           }
        }
     } catch (e) {
@@ -835,8 +845,16 @@ class ScraperView {
        }
        console.error("Info error:", e);
        document.getElementById('preview-extended-info').innerHTML = `<p class="error-state" style="margin:0; padding:1rem; text-align:left;">Failed to load details: ${e.message}</p>`;
-       readBtn.disabled = false; // Let them try
+       this._setReadBtnEnabled(readBtn, true); // Let them try
     }
+  }
+
+  _setReadBtnEnabled(btn, enabled) {
+    if (!btn) return;
+    btn.disabled = !enabled;
+    btn.style.opacity = enabled ? '1' : '0.5';
+    btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+    btn.style.pointerEvents = enabled ? 'auto' : 'none';
   }
 
   async openTempReader() {
