@@ -328,7 +328,11 @@ class Downloader {
   async getLocalChapterImages(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
     // First try to find the specific version if URL provided
     if (chapterUrl) {
-      const version = this.getVersionFromUrl(chapterUrl);
+      // Migrated local URLs carry their version folder token explicitly as
+      // "...-v<token>" (token == getVersionFromUrl(originalUrl)). Honor it so
+      // the correct version folder resolves; otherwise hash the URL as before.
+      const explicit = chapterUrl.startsWith('local://') && chapterUrl.match(/-v([a-z0-9]+)$/i);
+      const version = explicit ? explicit[1] : this.getVersionFromUrl(chapterUrl);
       const versionedDir = this.getChapterDir(mangaTitle, chapterNumber, alias, version);
 
       if (await fs.pathExists(versionedDir)) {

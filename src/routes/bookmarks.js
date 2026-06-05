@@ -327,43 +327,50 @@ router.post('/:id/migrate-source', async (req, res) => {
         if (!scraper) return res.status(400).json({ error: 'No scraper found for this URL' });
 
         const db = getDb();
-        const downloadedChapters = new Set(bookmark.downloadedChapters || []);
 
-        // Convert downloaded chapter URLs to local:// in both chapters and downloaded_versions tables
-        if (downloadedChapters.size > 0) {
-            const chapters = bookmark.chapters || [];
+        // Convert ONLY the version rows that were actually downloaded. Keying
+        // each new local URL off the original URL's version token keeps it
+        // unique per version (avoids the UNIQUE(bookmark_id, url) collision that
+        // happened when two versions of a chapter shared version number 1) and
+        // lets the reader resolve the right on-disk version folder.
+        const downloadedVersionRows = db.prepare(
+            'SELECT chapter_number, url FROM downloaded_versions WHERE bookmark_id = ?'
+        ).all(bookmark.id);
 
-            for (const ch of chapters) {
-                if (downloadedChapters.has(ch.number)) {
-                    const oldUrl = ch.url;
-                    // Include version to avoid UNIQUE constraint when multiple versions of same chapter exist
-                    const localUrl = `local://${bookmark.id}/chapter-${ch.number}-v${ch.version || 1}`;
+        const updateChapterUrl = db.prepare('UPDATE chapters SET url = ?, removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?');
+        const updateVersionUrl = db.prepare('UPDATE downloaded_versions SET url = ? WHERE bookmark_id = ? AND url = ?');
+        const clearDeleted = db.prepare('DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url = ?');
 
-                    // Update chapter URL to local
-                    db.prepare('UPDATE chapters SET url = ?, removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?')
-                        .run(localUrl, bookmark.id, oldUrl);
+        let migratedCount = 0;
+        const migrate = db.transaction(() => {
+            for (const row of downloadedVersionRows) {
+                const oldUrl = row.url;
+                if (!oldUrl || oldUrl.startsWith('local://')) continue; // already local
 
-                    // Update downloaded_versions to point to local URL
-                    db.prepare('UPDATE downloaded_versions SET url = ? WHERE bookmark_id = ? AND chapter_number = ? AND url = ?')
-                        .run(localUrl, bookmark.id, ch.number, oldUrl);
+                // Token matches the version suffix used by the download folder
+                // (Chapter NNNNN v<token>), so getLocalChapterImages finds it.
+                const token = downloader.getVersionFromUrl(oldUrl);
+                const localUrl = `local://${bookmark.id}/chapter-${row.chapter_number}-v${token}`;
 
-                    // Clean up any deleted_chapter_urls referencing the old URL
-                    db.prepare('DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url = ?')
-                        .run(bookmark.id, oldUrl);
-                }
+                updateChapterUrl.run(localUrl, bookmark.id, oldUrl);
+                updateVersionUrl.run(localUrl, bookmark.id, oldUrl);
+                clearDeleted.run(bookmark.id, oldUrl);
+                migratedCount++;
             }
-        }
 
-        // Update the bookmark's URL and website
-        const newWebsite = scraper.websiteName || new URL(newUrl).hostname;
-        db.prepare('UPDATE bookmarks SET url = ?, website = ?, updated_at = ? WHERE id = ?')
-            .run(newUrl, newWebsite, new Date().toISOString(), bookmark.id);
+            // Update the bookmark's URL and website
+            const newWebsite = scraper.websiteName || new URL(newUrl).hostname;
+            db.prepare('UPDATE bookmarks SET url = ?, website = ?, updated_at = ? WHERE id = ?')
+                .run(newUrl, newWebsite, new Date().toISOString(), bookmark.id);
+        });
+        migrate();
 
+        const downloadedChapters = new Set(bookmark.downloadedChapters || []);
         console.log(`[Migrate Source] ${bookmark.alias || bookmark.title}: ${bookmark.url} -> ${newUrl}`);
-        console.log(`[Migrate Source] Converted ${downloadedChapters.size} downloaded chapters to local versions`);
+        console.log(`[Migrate Source] Converted ${migratedCount} downloaded versions to local`);
 
         const updated = await bookmarkDb.getById(bookmark.id);
-        res.json({ success: true, bookmark: updated, migratedChapters: downloadedChapters.size });
+        res.json({ success: true, bookmark: updated, migratedChapters: migratedCount });
     } catch (error) {
         console.error('[Migrate Source] Error:', error);
         res.status(500).json({ error: error.message });

@@ -150,13 +150,17 @@ export const bookmarkDb = {
       FROM chapters WHERE bookmark_id = ? ORDER BY number, version
     `).all(id);
 
-        // Build chapterSettings from chapters locked state
+        // Build chapterSettings (lock state) from the durable chapter_settings
+        // table. chapters.locked is reset whenever a re-scrape REPLACEs chapter
+        // rows, so it drifts out of sync; chapter_settings persists across
+        // re-scrapes and is the source of truth the UI reads to keep locks
+        // sticky across refreshes.
         const chapterSettings = {};
-        for (const c of chapters) {
-            if (c.locked) {
-                if (!chapterSettings[c.number]) chapterSettings[c.number] = {};
-                chapterSettings[c.number].locked = true;
-            }
+        const lockedSettings = db.prepare(
+            'SELECT chapter_number FROM chapter_settings WHERE bookmark_id = ? AND locked = 1'
+        ).all(id);
+        for (const row of lockedSettings) {
+            chapterSettings[row.chapter_number] = { locked: true };
         }
 
         // Get downloaded chapters
@@ -557,10 +561,20 @@ export const bookmarkDb = {
             // Track which URLs are in the new scrape
             const newUrls = new Set(updates.chapters.map(ch => ch.url));
 
-            // Prepare statements
+            // Locked chapters are a safeguard: they must NOT be modified by a
+            // re-scrape. Lock state lives in chapter_settings (durable across
+            // re-scrapes) keyed by chapter number, so freeze every row whose
+            // number is locked - keeping all versions of that chapter frozen.
+            const lockedNumbers = new Set(
+                db.prepare('SELECT chapter_number FROM chapter_settings WHERE bookmark_id = ? AND locked = 1')
+                    .all(id).map(r => r.chapter_number)
+            );
+
+            // Prepare statements - carry locked/in_volume_id through the REPLACE
+            // so an unlocked chapter's protection flags survive an update.
             const insertChapter = db.prepare(`
-        INSERT OR REPLACE INTO chapters (bookmark_id, number, title, url, version, total_versions, original_number, removed_from_remote, is_old_version, url_changed, release_group, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO chapters (bookmark_id, number, title, url, version, total_versions, original_number, removed_from_remote, is_old_version, url_changed, release_group, uploaded_at, locked, in_volume_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
             const updateRemoved = db.prepare(`
         UPDATE chapters SET removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?
@@ -568,6 +582,10 @@ export const bookmarkDb = {
 
             // Insert/update new chapters
             for (const ch of updates.chapters) {
+                // Never overwrite a locked chapter - it is frozen by the lock.
+                if (lockedNumbers.has(ch.number)) continue;
+
+                const prev = existingByUrl.get(ch.url);
                 insertChapter.run(
                     id,
                     ch.number,
@@ -580,13 +598,16 @@ export const bookmarkDb = {
                     ch.isOldVersion ? 1 : 0,
                     ch.urlChanged ? 1 : 0,
                     ch.releaseGroup || '',
-                    ch.uploadedAt || ''
+                    ch.uploadedAt || '',
+                    prev?.locked ? 1 : 0,
+                    prev?.in_volume_id ?? null
                 );
             }
 
-            // Mark chapters not in new scrape as "removed_from_remote" but DON'T delete them
+            // Mark chapters not in new scrape as "removed_from_remote" but DON'T delete them.
+            // Locked chapters are exempt - their state must not change.
             for (const existing of existingChapters) {
-                if (!newUrls.has(existing.url)) {
+                if (!newUrls.has(existing.url) && !lockedNumbers.has(existing.number)) {
                     updateRemoved.run(id, existing.url);
                     console.log(`[DB Update] Marked chapter ${existing.number} as removed_from_remote (preserving data)`);
                 }

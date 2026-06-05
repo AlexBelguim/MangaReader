@@ -662,20 +662,25 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
   // Check if we are in Volume Mode
   const isVolumeMode = !!state.activeVolume;
 
-  // Volume Mode Restrictions:
-  // 1. Only show downloaded versions
-  // 2. Effectively "lock" the chapter (visual indication)
+  // Chapter settings / lock state (needed before version filtering)
+  const chapterSettings = manga.chapterSettings || {};
+  // In volume mode, chapters are always treated as locked.
+  const isLocked = isVolumeMode ? true : !!(chapterSettings[num]?.locked);
+
+  // Volume Mode & Lock Restrictions:
+  // A locked chapter means "the downloaded version(s) are the ones we want" -
+  // so hide every undownloaded version, exactly like volume mode does.
   let displayVersions = visibleVersions;
-  if (isVolumeMode) {
-    displayVersions = visibleVersions.filter(v => {
+  if (isVolumeMode || isLocked) {
+    const downloadedOnly = visibleVersions.filter(v => {
       if (Array.isArray(downloadedVersions)) {
         return downloadedVersions.includes(v.url);
       }
       return downloadedVersions === v.url;
     });
-
-    // If no downloaded versions, maybe show a placeholder or keep empty?
-    // User said "only show the downloaded version", implies hiding others.
+    // Guard: if a chapter is locked but nothing is recorded as downloaded,
+    // fall back to showing all versions so the row isn't left empty.
+    displayVersions = downloadedOnly.length > 0 ? downloadedOnly : visibleVersions;
   }
 
   // Sort displayVersions so downloaded ones come first - ensures the primary
@@ -694,12 +699,6 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
 
   // Get the first version URL for single-version operations
   const firstVersionUrl = displayVersions[0]?.url ? encodeURIComponent(displayVersions[0].url) : null;
-
-  // Get chapter settings
-  const chapterSettings = manga.chapterSettings || {};
-  // In volume mode, force lock visual (or maybe just hide lock button?)
-  // User said "chapters in volumes should be locked"
-  const isLocked = isVolumeMode ? true : (chapterSettings[num]?.locked);
 
   const classes = [
     'chapter-item',

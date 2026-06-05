@@ -621,74 +621,124 @@ export class ComixScraper extends BaseScraper {
     await new Promise(r => setTimeout(r, 500));
   }
 
-  // Webtoon: walk each page vertical wrapper in order, waiting for loaded img or painted canvas
-  // Webtoon: scroll from top to bottom to lazy-load all pages, then extract img/canvas from all .rpage-page wrappers in order
+  // Webtoon / long-strip readers virtualize the page list: only a handful of
+  // `.rpage-page` wrappers are mounted around the viewport at any moment, and
+  // off-screen ones are unmounted (their canvas/img discarded). Scrolling to the
+  // bottom and then reading the DOM therefore only yields the last few pages.
+  // Instead we sweep top->bottom in small overlapping steps, capturing whichever
+  // pages are mounted and painted at each step into a page-indexed map. Repeated
+  // sweeps fill any pages that hadn't finished painting on an earlier pass.
   async walkLongStrip() {
-    console.log('  Scrolling long-strip reader...');
-    
-    // Scroll to the bottom to trigger all lazy loading
-    await this.page.evaluate(async () => {
-      const scroller = document.querySelector('main.rpage-main--long-strip')
-                    || document.querySelector('main.rpage-main')
-                    || document.documentElement;
-      if (!scroller) return;
-      scroller.scrollTop = 0;
-      await new Promise(r => setTimeout(r, 300));
-      let lastTop = -1;
-      let same = 0;
-      for (let i = 0; i < 500; i++) {
-        scroller.scrollTop += 1500;
-        await new Promise(r => setTimeout(r, 250));
-        if (scroller.scrollTop === lastTop) {
-          same++;
-          if (same >= 5) break;
-        } else {
-          same = 0;
+    console.log('  Walking long-strip (webtoon) reader with incremental capture...');
+
+    // Locate and cache the real scroll container on the window for reuse.
+    const scrollerInfo = await this.page.evaluate(() => {
+      const isScrollable = (el) => {
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        return (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
+          && el.scrollHeight > el.clientHeight + 100;
+      };
+      let scroller = document.querySelector('main.rpage-main--long-strip')
+        || document.querySelector('main.rpage-main');
+      if (!isScrollable(scroller)) {
+        // Fall back to the tallest scrollable element on the page.
+        let best = null, bestH = 0;
+        for (const el of document.querySelectorAll('*')) {
+          if (isScrollable(el) && el.scrollHeight > bestH) { best = el; bestH = el.scrollHeight; }
         }
-        lastTop = scroller.scrollTop;
+        scroller = best || document.scrollingElement || document.documentElement;
       }
+      window.__comixScroller = scroller;
+      return {
+        tag: scroller.tagName,
+        scrollHeight: scroller.scrollHeight,
+        clientHeight: scroller.clientHeight
+      };
     });
+    console.log(`  Scroller: <${scrollerInfo.tag}> ${scrollerInfo.scrollHeight}px content / ${scrollerInfo.clientHeight}px viewport`);
 
-    // Give it a moment to settle
-    await new Promise(r => setTimeout(r, 1500));
+    const captured = new Map(); // data-page (int) -> image url
 
-    console.log('  Extracting all pages from scroll container...');
-    const images = await this.page.evaluate(() => {
-      const wrappers = Array.from(document.querySelectorAll('.rpage-page'));
-      // Sort wrappers by data-page attribute to ensure correct order
-      wrappers.sort((a, b) => {
-        const pageA = parseInt(a.getAttribute('data-page') || '0', 10);
-        const pageB = parseInt(b.getAttribute('data-page') || '0', 10);
-        return pageA - pageB;
-      });
-
-      return wrappers.map(wrapper => {
-        const pageIndex = parseInt(wrapper.getAttribute('data-page') || '0', 10);
-        const canvas = wrapper.querySelector('canvas');
-        if (canvas) {
-          try {
-            const cleanToDataURL = window.__cleanToDataURL || canvas.toDataURL;
-            return {
-              index: pageIndex,
-              url: cleanToDataURL.call(canvas, 'image/png')
-            };
-          } catch (e) {
-            console.error('Canvas extraction failed:', e);
+    // Capture every mounted+painted page currently in the DOM that we don't
+    // already have. Skipping known pages keeps the per-step toDataURL cost low.
+    const captureVisible = async () => {
+      const pages = await this.page.evaluate((haveArr) => {
+        const have = new Set(haveArr);
+        const out = [];
+        for (const w of document.querySelectorAll('.rpage-page')) {
+          const idx = parseInt(w.getAttribute('data-page') || '', 10);
+          if (!Number.isFinite(idx) || have.has(idx)) continue;
+          const canvas = w.querySelector('canvas');
+          if (canvas && canvas.width > 100) {
+            try {
+              const fn = window.__cleanToDataURL || HTMLCanvasElement.prototype.toDataURL;
+              out.push({ index: idx, url: fn.call(canvas, 'image/png') });
+              continue;
+            } catch (e) { /* tainted canvas — fall through to img */ }
+          }
+          const img = w.querySelector('img');
+          if (img && img.complete && img.naturalWidth > 100 && img.src && !img.src.startsWith('data:image/svg')) {
+            out.push({ index: idx, url: img.src });
           }
         }
+        return out;
+      }, [...captured.keys()]);
+      for (const p of pages) {
+        if (!captured.has(p.index)) captured.set(p.index, p.url);
+      }
+    };
 
-        const img = wrapper.querySelector('img');
-        if (img) {
-          return {
-            index: pageIndex,
-            url: img.src
-          };
+    // One top->bottom sweep, capturing at every overlapping step.
+    const sweep = async () => {
+      await this.page.evaluate(() => { if (window.__comixScroller) window.__comixScroller.scrollTop = 0; });
+      await new Promise(r => setTimeout(r, 400));
+
+      let sameBottom = 0;
+      for (let step = 0; step < 1000; step++) {
+        await captureVisible();
+
+        const s = await this.page.evaluate(() => {
+          const el = window.__comixScroller;
+          if (!el) return null;
+          const before = el.scrollTop;
+          // Overlap by scrolling ~60% of a viewport so each page is visible
+          // across multiple steps and has time to lazy-load and paint.
+          el.scrollTop = before + Math.max(200, Math.round(el.clientHeight * 0.6));
+          return { before, after: el.scrollTop };
+        });
+        if (!s) break;
+
+        await new Promise(r => setTimeout(r, 350));
+
+        // Bottom reached when scrollTop can no longer advance.
+        if (s.after <= s.before + 2) {
+          if (++sameBottom >= 3) break;
+        } else {
+          sameBottom = 0;
         }
+      }
 
-        return null;
-      }).filter(Boolean);
-    });
+      // Settle at the bottom and capture the final window.
+      await new Promise(r => setTimeout(r, 600));
+      await captureVisible();
+    };
 
+    // Repeat sweeps until no new pages appear (fills late-painting pages),
+    // capped to avoid pathological loops.
+    let prevSize = -1;
+    for (let pass = 0; pass < 3 && captured.size !== prevSize; pass++) {
+      prevSize = captured.size;
+      await sweep();
+      console.log(`  Long-strip pass ${pass + 1}: ${captured.size} pages so far`);
+    }
+
+    // Emit in page order; the downloader names files by array order.
+    const images = [...captured.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, url], i) => ({ index: i + 1, url }));
+
+    console.log(`  Long-strip: captured ${images.length} pages total`);
     return images;
   }
 

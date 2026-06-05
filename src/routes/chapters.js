@@ -160,12 +160,18 @@ router.post('/:bookmarkId/hide-version', async (req, res) => {
 
         const db = getDb();
 
-        // Check if chapter is protected
+        // Check if chapter is protected. Lock state is read from the durable
+        // chapter_settings table (keyed by number) since chapters.locked can
+        // drift out of sync after a re-scrape; in_volume_id still comes from
+        // the chapter row.
         const chapter = db.prepare(
             'SELECT locked, in_volume_id FROM chapters WHERE bookmark_id = ? AND url = ?'
         ).get(bookmarkId, url);
+        const lockedSetting = db.prepare(
+            'SELECT locked FROM chapter_settings WHERE bookmark_id = ? AND chapter_number = ?'
+        ).get(bookmarkId, chapterNumber);
 
-        if (chapter?.locked || chapter?.in_volume_id) {
+        if (chapter?.locked || lockedSetting?.locked || chapter?.in_volume_id) {
             return res.status(400).json({
                 error: 'Cannot hide a protected chapter. Unlock it first or remove from volume.'
             });
