@@ -108,12 +108,12 @@ router.get('/:id/chapters/:num/versions', async (req, res) => {
             const folderHash = hashMatch ? hashMatch[1] : null;
             let matchedUrl = null;
             for (const url of urlList) {
-                const urlHash = downloader.getVersionFromUrl(url);
+                const urlHash = downloader.getVersionTokenFromUrl(url);
                 if (folderHash && urlHash === folderHash) { matchedUrl = url; break; }
             }
             if (!matchedUrl && !v.isVersioned && urlList.length > 0) {
                 for (const url of urlList) {
-                    const urlHash = downloader.getVersionFromUrl(url);
+                    const urlHash = downloader.getVersionTokenFromUrl(url);
                     const hasMatchingFolder = versions.some(ver => {
                         const verHashMatch = ver.folder.match(/ v([a-z0-9]+)$/i);
                         return verHashMatch && verHashMatch[1] === urlHash;

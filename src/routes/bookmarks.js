@@ -337,11 +337,17 @@ router.post('/:id/migrate-source', async (req, res) => {
             'SELECT chapter_number, url FROM downloaded_versions WHERE bookmark_id = ?'
         ).all(bookmark.id);
 
+        const chapterRowExists = db.prepare('SELECT 1 FROM chapters WHERE bookmark_id = ? AND url = ?');
+        const deleteChapterRow = db.prepare('DELETE FROM chapters WHERE bookmark_id = ? AND url = ?');
         const updateChapterUrl = db.prepare('UPDATE chapters SET url = ?, removed_from_remote = 1 WHERE bookmark_id = ? AND url = ?');
+        const versionRowExists = db.prepare('SELECT 1 FROM downloaded_versions WHERE bookmark_id = ? AND url = ?');
+        const deleteVersionRow = db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND url = ?');
         const updateVersionUrl = db.prepare('UPDATE downloaded_versions SET url = ? WHERE bookmark_id = ? AND url = ?');
         const clearDeleted = db.prepare('DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url = ?');
 
+        const newHost = new URL(newUrl).hostname;
         let migratedCount = 0;
+        let removedStale = 0;
         const migrate = db.transaction(() => {
             for (const row of downloadedVersionRows) {
                 const oldUrl = row.url;
@@ -352,11 +358,42 @@ router.post('/:id/migrate-source', async (req, res) => {
                 const token = downloader.getVersionFromUrl(oldUrl);
                 const localUrl = `local://${bookmark.id}/chapter-${row.chapter_number}-v${token}`;
 
-                updateChapterUrl.run(localUrl, bookmark.id, oldUrl);
-                updateVersionUrl.run(localUrl, bookmark.id, oldUrl);
+                // A re-run (or a re-download after migration) can leave the
+                // local row already present — collapse the duplicate instead of
+                // colliding on UNIQUE(bookmark_id, url).
+                if (chapterRowExists.get(bookmark.id, localUrl)) deleteChapterRow.run(bookmark.id, oldUrl);
+                else updateChapterUrl.run(localUrl, bookmark.id, oldUrl);
+
+                if (versionRowExists.get(bookmark.id, localUrl)) deleteVersionRow.run(bookmark.id, oldUrl);
+                else updateVersionUrl.run(localUrl, bookmark.id, oldUrl);
+
                 clearDeleted.run(bookmark.id, oldUrl);
                 migratedCount++;
             }
+
+            // Cleanup: every remaining remote chapter row that isn't from the
+            // new source is an undownloaded leftover of the old source (the
+            // downloaded ones just became local://). Drop them so they don't
+            // linger as phantom versions. Locked chapters stay frozen.
+            const lockedNumbers = new Set(
+                db.prepare('SELECT chapter_number FROM chapter_settings WHERE bookmark_id = ? AND locked = 1')
+                    .all(bookmark.id).map(r => r.chapter_number)
+            );
+            const remoteRows = db.prepare(
+                "SELECT number, url FROM chapters WHERE bookmark_id = ? AND url NOT LIKE 'local://%'"
+            ).all(bookmark.id);
+            for (const row of remoteRows) {
+                let host = null;
+                try { host = new URL(row.url).hostname; } catch { /* malformed -> stale */ }
+                if (host === newHost || lockedNumbers.has(row.number)) continue;
+                deleteChapterRow.run(bookmark.id, row.url);
+                removedStale++;
+            }
+
+            // Hidden/deleted markers pointing at the old source are meaningless
+            // now; local:// markers (hidden local versions) are kept.
+            db.prepare("DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url NOT LIKE 'local://%' AND url NOT LIKE ?")
+                .run(bookmark.id, `%${newHost}%`);
 
             // Update the bookmark's URL and website
             const newWebsite = scraper.websiteName || new URL(newUrl).hostname;
@@ -365,12 +402,11 @@ router.post('/:id/migrate-source', async (req, res) => {
         });
         migrate();
 
-        const downloadedChapters = new Set(bookmark.downloadedChapters || []);
         console.log(`[Migrate Source] ${bookmark.alias || bookmark.title}: ${bookmark.url} -> ${newUrl}`);
-        console.log(`[Migrate Source] Converted ${migratedCount} downloaded versions to local`);
+        console.log(`[Migrate Source] Converted ${migratedCount} downloaded versions to local, removed ${removedStale} stale old-source rows`);
 
         const updated = await bookmarkDb.getById(bookmark.id);
-        res.json({ success: true, bookmark: updated, migratedChapters: migratedCount });
+        res.json({ success: true, bookmark: updated, migratedChapters: migratedCount, removedStaleChapters: removedStale });
     } catch (error) {
         console.error('[Migrate Source] Error:', error);
         res.status(500).json({ error: error.message });

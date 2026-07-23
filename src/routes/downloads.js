@@ -5,7 +5,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
-import { bookmarkDb, chapterSettingsDb } from '../database.js';
+import { bookmarkDb, chapterSettingsDb, getDb } from '../database.js';
 import { downloader } from '../downloader.js';
 import { favoritesDb } from '../db/favorites.js';
 import { trophyDb } from '../db/trophies.js';
@@ -695,30 +695,51 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
         const localNumbers = localChapters.map(c => c.number);
         const localNumberSet = new Set(localNumbers);
 
-        const previousDownloaded = bookmark.downloadedChapters || [];
-        const removedChapters = previousDownloaded.filter(num => !localNumberSet.has(num));
-        const addedChapters = localNumbers.filter(num => !previousDownloaded.includes(num));
-
-        const existingChapterNumbers = new Set((bookmark.chapters || []).map(c => c.number));
-        const missingFromData = localNumbers.filter(num => !existingChapterNumbers.has(num));
-
-        let chaptersToMerge = null;
-        if (missingFromData.length > 0) {
-            const existingChapters = bookmark.chapters || [];
-            const newChapterEntries = missingFromData.map(num => ({
-                number: num, title: `Chapter ${num}`,
-                url: `local://${bookmark.id}/chapter-${num}`,
-                version: 1, totalVersions: 1, removedFromRemote: true
-            }));
-            chaptersToMerge = [...existingChapters, ...newChapterEntries];
-        }
-
         const existingFolders = new Map();
         localChapters.forEach(ch => {
             if (!existingFolders.has(ch.number)) existingFolders.set(ch.number, new Set());
             if (ch.version) existingFolders.get(ch.number).add(ch.version);
             else existingFolders.get(ch.number).add('base');
         });
+
+        // Manually deleted version folders leave stale local:// chapter rows
+        // behind — drop any local row whose folder is gone so the UI stops
+        // offering versions that 404. Locked chapters stay frozen.
+        const db = getDb();
+        const lockedNumbers = new Set(
+            db.prepare('SELECT chapter_number FROM chapter_settings WHERE bookmark_id = ? AND locked = 1')
+                .all(bookmark.id).map(r => r.chapter_number)
+        );
+        const deleteChapterRow = db.prepare('DELETE FROM chapters WHERE bookmark_id = ? AND url = ?');
+        let prunedLocalRows = 0;
+        const chapters = (bookmark.chapters || []).filter(ch => {
+            if (!ch.url || !ch.url.startsWith('local://')) return true;
+            if (lockedNumbers.has(ch.number)) return true;
+            const folders = existingFolders.get(ch.number);
+            const tokenMatch = ch.url.match(/-v([a-z0-9]+)$/i);
+            const onDisk = tokenMatch ? !!(folders && folders.has(tokenMatch[1])) : !!folders;
+            if (onDisk) return true;
+            deleteChapterRow.run(bookmark.id, ch.url);
+            prunedLocalRows++;
+            return false;
+        });
+
+        const previousDownloaded = bookmark.downloadedChapters || [];
+        const removedChapters = previousDownloaded.filter(num => !localNumberSet.has(num));
+        const addedChapters = localNumbers.filter(num => !previousDownloaded.includes(num));
+
+        const existingChapterNumbers = new Set(chapters.map(c => c.number));
+        const missingFromData = localNumbers.filter(num => !existingChapterNumbers.has(num));
+
+        let chaptersToMerge = null;
+        if (missingFromData.length > 0) {
+            const newChapterEntries = missingFromData.map(num => ({
+                number: num, title: `Chapter ${num}`,
+                url: `local://${bookmark.id}/chapter-${num}`,
+                version: 1, totalVersions: 1, removedFromRemote: true
+            }));
+            chaptersToMerge = [...chapters, ...newChapterEntries];
+        }
 
         const currentVersions = bookmark.downloadedVersions || {};
         const newVersions = {};
@@ -728,7 +749,7 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
             const existingVersionHashes = existingFolders.get(num) || new Set();
             const urlArray = Array.isArray(urls) ? urls : [urls];
             const validUrls = urlArray.filter(url => {
-                const versionHash = downloader.getVersionFromUrl(url);
+                const versionHash = downloader.getVersionTokenFromUrl(url);
                 return existingVersionHashes.has(versionHash) ||
                     (existingVersionHashes.has('base') && urlArray.length === 1);
             });
@@ -743,15 +764,13 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
 
         const updateData = { downloadedChapters: localNumbers, downloadedVersions: newVersions };
 
+        const excludedSet = new Set(bookmark.excludedChapters || []);
         if (chaptersToMerge) {
             updateData.chapters = chaptersToMerge;
             updateData.totalChapters = chaptersToMerge.length;
-            const excludedSet = new Set(bookmark.excludedChapters || []);
             updateData.uniqueChapters = new Set(chaptersToMerge.map(c => c.number).filter(n => !excludedSet.has(n))).size;
         } else {
-            const currentChapters = bookmark.chapters || [];
-            const excludedSet = new Set(bookmark.excludedChapters || []);
-            updateData.uniqueChapters = new Set(currentChapters.map(c => c.number).filter(n => !excludedSet.has(n))).size;
+            updateData.uniqueChapters = new Set(chapters.map(c => c.number).filter(n => !excludedSet.has(n))).size;
         }
 
         await bookmarkDb.update(bookmark.id, updateData);
@@ -759,7 +778,8 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
         res.json({
             success: true, localChapters, count: localNumbers.length,
             removedChapters, addedChapters, addedToData: missingFromData,
-            changed: removedChapters.length > 0 || addedChapters.length > 0 || missingFromData.length > 0
+            prunedLocalVersions: prunedLocalRows,
+            changed: removedChapters.length > 0 || addedChapters.length > 0 || missingFromData.length > 0 || prunedLocalRows > 0
         });
     } catch (error) {
         res.status(500).json({ error: error.message });

@@ -137,6 +137,52 @@ export class MangaHereScraper extends BaseScraper {
       await this.page.goto(chapterUrl, { waitUntil: 'networkidle2', timeout: 60000 });
       await this.randomDelay(1000, 2000);
 
+      // Current reader loads pages on demand via chapterfun.ashx (packed JS
+      // that defines `d`, an array whose first entry is the page image).
+      // Pull the page list ourselves: chapterid + page count from the pager.
+      const meta = await this.page.evaluate(() => {
+        const cid = typeof window.chapterid !== 'undefined' ? window.chapterid : null;
+        const key = document.querySelector('#dm5_key')?.value || '';
+        let total = 0;
+        document.querySelectorAll('.pager-list a[data-page]').forEach(a => {
+          const n = parseInt(a.getAttribute('data-page'), 10);
+          if (Number.isFinite(n) && n > total) total = n;
+        });
+        return { cid, key, total };
+      });
+
+      if (meta.cid && meta.total > 0) {
+        console.log(`  [MangaHere] Fetching ${meta.total} pages via chapterfun.ashx (cid=${meta.cid})`);
+        const images = [];
+        for (let p = 1; p <= meta.total; p++) {
+          const src = await this.page.evaluate(async ({ cid, key, p }) => {
+            try {
+              const resp = await fetch(`chapterfun.ashx?cid=${cid}&page=${p}&key=${encodeURIComponent(key)}`, { credentials: 'include' });
+              const text = await resp.text();
+              // NB: don't name this binding `d` — the eval'd payload declares
+              // `var d` and a const/let name clash throws SyntaxError.
+              const arr = eval(text + '\n;d');
+              return Array.isArray(arr) && arr.length > 0 ? arr[0] : null;
+            } catch { return null; }
+          }, { cid: meta.cid, key: meta.key, p });
+
+          if (src) {
+            let url = src;
+            if (url.startsWith('//')) url = 'https:' + url;
+            else if (url.startsWith('/')) url = new URL(chapterUrl).origin + url;
+            images.push({ index: images.length + 1, url });
+          } else {
+            console.warn(`  [MangaHere] Page ${p}: no image returned`);
+          }
+          await new Promise(r => setTimeout(r, 200));
+        }
+
+        console.log(`  [MangaHere] Found ${images.length} images`);
+        // CDN rejects requests without a Referer — send the chapter page.
+        return images.map(img => ({ ...img, headers: { 'Referer': chapterUrl } }));
+      }
+
+      // Fallback for the legacy reader: window.newImgs / DOM extraction
       const images = await this.page.evaluate(() => {
         // MangaHere puts images in window.newImgs array
         if (typeof window.newImgs !== 'undefined' && Array.isArray(window.newImgs)) {

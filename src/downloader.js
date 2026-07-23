@@ -50,6 +50,16 @@ class Downloader {
     return Math.abs(hash).toString(36).substring(0, 4);
   }
 
+  // Resolve the version folder token for a chapter URL. Migrated local URLs
+  // ("local://<id>/chapter-<num>-v<token>") embed the token of the original
+  // remote URL, so the hash of the local URL itself would never match the
+  // on-disk folder — honor the explicit token instead.
+  getVersionTokenFromUrl(url) {
+    if (!url) return null;
+    const explicit = url.startsWith('local://') && url.match(/-v([a-z0-9]+)$/i);
+    return explicit ? explicit[1] : this.getVersionFromUrl(url);
+  }
+
   // Find existing version folders for a chapter
   async getExistingVersions(mangaTitle, chapterNumber, alias = null) {
     const mangaDir = this.getMangaDir(mangaTitle, alias);
@@ -159,7 +169,7 @@ class Downloader {
 
       if (existingVersions.length > 0) {
         // There's already a download - use version suffix for new one
-        version = this.getVersionFromUrl(chapterUrl);
+        version = this.getVersionTokenFromUrl(chapterUrl);
 
         // Check if this exact version already exists
         const versionFolder = `Chapter ${String(chapterNumber).padStart(5, '0')} v${version}`;
@@ -298,7 +308,7 @@ class Downloader {
   async isChapterDownloaded(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
     // If URL provided, check for that specific version
     if (chapterUrl) {
-      const version = this.getVersionFromUrl(chapterUrl);
+      const version = this.getVersionTokenFromUrl(chapterUrl);
       const versionedDir = this.getChapterDir(mangaTitle, chapterNumber, alias, version);
       if (await this._dirHasImages(versionedDir)) {
         return true;
@@ -328,11 +338,7 @@ class Downloader {
   async getLocalChapterImages(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
     // First try to find the specific version if URL provided
     if (chapterUrl) {
-      // Migrated local URLs carry their version folder token explicitly as
-      // "...-v<token>" (token == getVersionFromUrl(originalUrl)). Honor it so
-      // the correct version folder resolves; otherwise hash the URL as before.
-      const explicit = chapterUrl.startsWith('local://') && chapterUrl.match(/-v([a-z0-9]+)$/i);
-      const version = explicit ? explicit[1] : this.getVersionFromUrl(chapterUrl);
+      const version = this.getVersionTokenFromUrl(chapterUrl);
       const versionedDir = this.getChapterDir(mangaTitle, chapterNumber, alias, version);
 
       if (await fs.pathExists(versionedDir)) {
@@ -482,7 +488,7 @@ class Downloader {
 
     if (chapterUrl) {
       // Delete specific version
-      const version = this.getVersionFromUrl(chapterUrl);
+      const version = this.getVersionTokenFromUrl(chapterUrl);
       chapterDir = this.getChapterDir(mangaTitle, chapterNumber, alias, version);
 
       // If versioned dir doesn't exist, check all existing versions to find the right one
