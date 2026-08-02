@@ -384,6 +384,8 @@ router.post('/bookmarks/:id/download', async (req, res) => {
         taskQueue.addAsync({
             type: 'download',
             description: `Download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
+            mangaId: bookmark.id,
+            mangaTitle: bookmark.alias || bookmark.title,
             execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
         });
 
@@ -416,6 +418,8 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
         taskQueue.addAsync({
             type: 'download',
             description: `Download chapter ${chapterNumber} (version) for ${bookmark.alias || bookmark.title}`,
+            mangaId: bookmark.id,
+            mangaTitle: bookmark.alias || bookmark.title,
             execute: async () => {
                 const task = activeDownloads.get(taskId);
                 if (!task) return;
@@ -962,6 +966,8 @@ export function queueBackgroundDownload(bookmark, chaptersToDownload) {
     taskQueue.addAsync({
         type: 'download',
         description: `Auto-download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
+        mangaId: bookmark.id,
+        mangaTitle: bookmark.alias || bookmark.title,
         execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
     });
 
