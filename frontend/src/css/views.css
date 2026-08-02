@@ -2397,6 +2397,11 @@ body.demo-mode #rotate-btn,
 body.demo-mode #swap-btn,
 body.demo-mode #split-btn,
 body.demo-mode #trophy-btn,
+body.demo-mode #add-entry-btn,
+body.demo-mode #edit-series-btn,
+body.demo-mode .series-set-cover-btn,
+body.demo-mode [data-action="move-up"],
+body.demo-mode [data-action="move-down"],
 body.demo-mode .chapter-actions {
   display: none !important;
 }

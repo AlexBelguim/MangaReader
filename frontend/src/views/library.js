@@ -872,12 +872,16 @@ function filterByCategory(category) {
  */
 async function loadData(force = false) {
   try {
-    // Demo visitors can only read the bookmark list — categories, series and
-    // favorites are 403 for the demo role, so don't ask for them.
+    // Demo visitors can only read the bookmark + series lists — categories
+    // and favorites are 403 for the demo role, so don't ask for them.
     if (session.isDemo) {
-      state.bookmarks = await store.loadBookmarks(force);
+      const [bookmarks, series] = await Promise.all([
+        store.loadBookmarks(force),
+        store.loadSeries(force)
+      ]);
+      state.bookmarks = bookmarks;
       state.categories = [];
-      state.series = [];
+      state.series = series;
       state.favorites = { favorites: {}, listOrder: [] };
       state.loading = false;
       return;
@@ -907,27 +911,38 @@ async function loadData(force = false) {
 export async function mount() {
   const app = document.getElementById('app');
 
-  // Sync activeCategory with localStorage in case it was changed externally (e.g. by header logo click)
-  const storedCategory = localStorage.getItem('library_active_category');
-  if (state.activeCategory !== storedCategory) {
-    state.activeCategory = storedCategory;
-  }
+  if (session.isDemo) {
+    // The demo shares an origin (and localStorage) with the main app. Don't
+    // inherit the owner's filters — a category/artist/search filter that
+    // matches nothing is what makes the demo library look empty.
+    state.activeCategory = null;
+    state.artistFilter = null;
+    state.searchQuery = '';
+    state.searchAuthor = null;
+    state.searchAuthorSource = null;
+  } else {
+    // Sync activeCategory with localStorage in case it was changed externally (e.g. by header logo click)
+    const storedCategory = localStorage.getItem('library_active_category');
+    if (state.activeCategory !== storedCategory) {
+      state.activeCategory = storedCategory;
+    }
 
-  // Sync artistFilter with localStorage (reflects clears too)
-  const storedArtist = localStorage.getItem('library_artist_filter') || null;
-  if (state.artistFilter !== storedArtist) {
-    state.artistFilter = storedArtist;
-  }
+    // Sync artistFilter with localStorage (reflects clears too)
+    const storedArtist = localStorage.getItem('library_artist_filter') || null;
+    if (state.artistFilter !== storedArtist) {
+      state.artistFilter = storedArtist;
+    }
 
-  // Sync searchQuery with localStorage (e.g. set by artist link click from manga detail)
-  const storedSearch = localStorage.getItem('library_search') || '';
-  if (state.searchQuery !== storedSearch) {
-    state.searchQuery = storedSearch;
-  }
+    // Sync searchQuery with localStorage (e.g. set by artist link click from manga detail)
+    const storedSearch = localStorage.getItem('library_search') || '';
+    if (state.searchQuery !== storedSearch) {
+      state.searchQuery = storedSearch;
+    }
 
-  // Sync the author-search marker (set when an author link was clicked)
-  state.searchAuthor = localStorage.getItem('library_search_author') || null;
-  state.searchAuthorSource = localStorage.getItem('library_search_author_source') || null;
+    // Sync the author-search marker (set when an author link was clicked)
+    state.searchAuthor = localStorage.getItem('library_search_author') || null;
+    state.searchAuthorSource = localStorage.getItem('library_search_author_source') || null;
+  }
 
   // Show loading first
   if (state.loading) {

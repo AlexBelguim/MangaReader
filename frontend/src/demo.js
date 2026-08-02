@@ -14,7 +14,7 @@ import { router } from './router.js';
 import { setSessionUser } from './session.js';
 
 const AGE_GATE_KEY = 'demo_age_confirmed';
-const DEMO_ROUTES = new Set(['/', '/manga', '/read']);
+const DEMO_ROUTES = new Set(['/', '/manga', '/read', '/series']);
 
 function waitForAgeGate() {
     const gate = document.getElementById('age-gate');

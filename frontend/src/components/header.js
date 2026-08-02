@@ -24,6 +24,10 @@ export function renderHeader(viewMode = 'manga') {
       <div class="header-content">
         <a href="#/" class="logo">${logoLockup()}</a>
         <div class="header-actions">
+          <div class="view-toggle">
+            <button class="view-toggle-btn ${viewMode === 'manga' ? 'active' : ''}" data-view="manga" title="Manga view">${icon('library', { title: 'Manga view' })}</button>
+            <button class="view-toggle-btn ${viewMode === 'series' ? 'active' : ''}" data-view="series" title="Series view">${icon('book-open', { title: 'Series view' })}</button>
+          </div>
           <span class="demo-badge">Demo</span>
           <a href="/login.html" class="btn btn-secondary" title="Exit the demo">${icon('log-out', { title: 'Exit the demo' })} Exit</a>
         </div>

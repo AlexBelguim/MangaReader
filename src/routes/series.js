@@ -3,13 +3,50 @@
  */
 
 import express from 'express';
-import { seriesDb } from '../database.js';
+import { seriesDb, getDb } from '../database.js';
 
 const router = express.Router();
+
+/** IDs of bookmarks flagged for the public demo page. */
+const getDemoBookmarkIds = () =>
+    new Set(getDb().prepare('SELECT id FROM bookmarks WHERE is_demo = 1').all().map(r => r.id));
+
+/**
+ * Strip a series (as returned by seriesDb.getById) down to its demo-flagged
+ * entries, rebuilding counts and cover from those entries only. Returns null
+ * when nothing demo-visible remains — the series must not appear in the demo.
+ */
+function scopeSeriesForDemo(series, demoIds) {
+    if (!series) return null;
+    const entries = (series.entries || []).filter(e => demoIds.has(e.bookmark_id));
+    if (entries.length === 0) return null;
+
+    const coverEntry = entries.find(e => e.id === series.cover_entry_id) || entries[0];
+    return {
+        ...series,
+        entries,
+        entry_count: entries.length,
+        total_chapters: entries.reduce((sum, e) => sum + (e.chapter_count || 0), 0),
+        downloaded_chapters: entries.reduce((sum, e) => sum + (e.downloadedChapters?.length || 0), 0),
+        cover: coverEntry.localCover || coverEntry.cover,
+        localCover: coverEntry.localCover,
+        coverTitle: coverEntry.alias || coverEntry.title,
+        coverBookmarkId: coverEntry.bookmark_id
+    };
+}
 
 // Get all series
 router.get('/', (req, res) => {
     try {
+        // Demo: rebuild the list from scoped series so no non-demo title,
+        // entry count or cover leaks.
+        if (req.user?.role === 'demo') {
+            const demoIds = getDemoBookmarkIds();
+            const scoped = seriesDb.getAll()
+                .map(s => scopeSeriesForDemo(seriesDb.getById(s.id), demoIds))
+                .filter(Boolean);
+            return res.json(scoped);
+        }
         const series = seriesDb.getAll();
         res.json(series);
     } catch (error) {
@@ -19,6 +56,10 @@ router.get('/', (req, res) => {
 
 // Get bookmarks not in any series
 router.get('/available-bookmarks', (req, res) => {
+    // Would list every ungrouped bookmark — never for the demo
+    if (req.user?.role === 'demo') {
+        return res.status(403).json({ error: 'Not available in the demo', demo: true });
+    }
     try {
         const bookmarks = seriesDb.getBookmarksNotInSeries();
         res.json(bookmarks);
@@ -44,9 +85,15 @@ router.post('/', (req, res) => {
 // Get a series by ID
 router.get('/:id', (req, res) => {
     try {
-        const series = seriesDb.getById(req.params.id);
+        let series = seriesDb.getById(req.params.id);
         if (!series) {
             return res.status(404).json({ error: 'Series not found' });
+        }
+        if (req.user?.role === 'demo') {
+            series = scopeSeriesForDemo(series, getDemoBookmarkIds());
+            if (!series) {
+                return res.status(403).json({ error: 'Not available in the demo', demo: true });
+            }
         }
         res.json(series);
     } catch (error) {
