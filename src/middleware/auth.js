@@ -60,7 +60,11 @@ const DOWNLOAD_PATH_RE = /download|check|scan|cbz|auto-check|queue/;
  * token expires.
  */
 export const guardPermissions = (req, res, next) => {
-    if (req.user?.role === 'demo') {
+    // Path exempted by the auth middleware (e.g. /scrapers/proxy-cover) —
+    // no user context, nothing to guard.
+    if (!req.user) return next();
+
+    if (req.user.role === 'demo') {
         if (req.method === 'GET' && DEMO_GET_WHITELIST.some(p => req.path.startsWith(p))) {
             return next();
         }

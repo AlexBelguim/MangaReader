@@ -17,11 +17,11 @@ let state = {
     chapter: null,
     images: [],
     trophyPages: {}, // { pageIndex: { isSingle: true, pages: [] } }
-    mode: 'webtoon', // 'webtoon' or 'manga'
+    mode: 'manga', // 'webtoon' or 'manga'
     direction: 'rtl', // 'ltr' or 'rtl'
     firstPageSingle: true,
     lastPageSingle: false,
-    singlePageMode: false, // true = show one page at a time
+    singlePageMode: true, // true = show one page at a time
     currentPage: 0,
     zoom: 100,
     loading: true,
@@ -1791,11 +1791,11 @@ async function loadData(mangaId, chapterNum, versionUrl) {
     console.log('[Reader] loadData called:', { mangaId, chapterNum, versionUrl });
     try {
         // Load settings from localStorage
-        state.mode = localStorage.getItem('reader_mode') || 'webtoon';
+        state.mode = localStorage.getItem('reader_mode') || 'manga';
         state.direction = localStorage.getItem('reader_direction') || 'rtl';
-        // Single-page is a global preference; per-chapter settings below can
-        // still override it, and browse/stream mode forces it on (see below).
-        state.singlePageMode = localStorage.getItem('reader_single_page') === '1';
+        // Single-page is a global preference (default on); per-chapter settings
+        // below can still override it, and browse/stream mode forces it on.
+        state.singlePageMode = localStorage.getItem('reader_single_page') !== '0';
 
         // Special handling for Favorite Galleries
         if (mangaId === 'gallery') {
