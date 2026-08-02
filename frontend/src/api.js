@@ -120,17 +120,45 @@ class ApiClient {
     // ==================== AUTH ====================
 
     async login(username, password) {
-        const data = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        }).then(r => r.json());
+        let response;
+        try {
+            response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+        } catch {
+            // fetch itself rejected — no server on the other end at all
+            throw new Error('Cannot reach the server. Is the backend running?');
+        }
+
+        // Read as text first. Going straight to .json() turns any empty or
+        // non-JSON reply (backend down, proxy error, gateway timeout) into
+        // "Unexpected end of JSON input", which says nothing useful.
+        const raw = await response.text();
+        let data = null;
+        if (raw) {
+            try {
+                data = JSON.parse(raw);
+            } catch {
+                throw new Error(`Server returned a non-JSON response (HTTP ${response.status}).`);
+            }
+        }
+
+        if (!data) {
+            throw new Error(
+                response.ok
+                    ? 'Server returned an empty response.'
+                    : `Login failed: HTTP ${response.status}. Is the backend running?`
+            );
+        }
 
         if (data.token) {
             this.setToken(data.token);
             return true;
         }
-        throw new Error(data.error || 'Login failed');
+
+        throw new Error(data.error || `Login failed (HTTP ${response.status})`);
     }
 
     logout() {

@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
+import { icon, placeholder, coverImg } from '../icons.js';
 
 class ScraperView {
   constructor() {
@@ -102,7 +103,7 @@ class ScraperView {
       ${renderHeader()}
       <div class="view-container scrapers-container" style="${this.viewMode === 'main' ? '' : 'display: none;'}">
         <div class="view-header">
-          <h1>🔌 Scrapers</h1>
+          <h1>${icon('plug')} Scrapers</h1>
           <p class="subtitle">All available manga scrapers and their capabilities.</p>
         </div>
 
@@ -126,7 +127,7 @@ class ScraperView {
 
           <div id="scraper-results-container" class="scraper-results${this.results.length > 0 || this.isSearching ? '' : ' scraper-results--hidden'}">
              <div class="empty-state">
-               <div class="empty-icon">🔎</div>
+               <div class="empty-icon">${icon('search-x')}</div>
                <p>Type a title above to search across available scrapers.</p>
              </div>
           </div>
@@ -161,7 +162,7 @@ class ScraperView {
         <div class="view-header browse-view-header">
           <button id="exit-browse-btn" class="btn btn-secondary browse-back-btn">← Back</button>
           <h1 class="browse-title">
-             ${this.browseScraper ? this.getDomainIcon(this.browseScraper) : '🌐'} Browse: ${this.browseScraper}
+             ${this.browseScraper ? this.getDomainIcon(this.browseScraper) : icon('globe')} Browse: ${this.browseScraper}
           </h1>
         </div>
 
@@ -181,7 +182,7 @@ class ScraperView {
           </div>
           <div class="browse-actions" style="display: flex; gap: 8px;">
             <button id="browse-apply-btn" class="btn btn-primary">Apply Filters</button>
-            <button id="browse-refresh-btn" class="btn btn-secondary" title="Bypass cache and reload fresh results">🔄 Refresh</button>
+            <button id="browse-refresh-btn" class="btn btn-secondary" title="Bypass cache and reload fresh results">${icon('refresh-cw')} Refresh</button>
           </div>
         </div>
 
@@ -207,7 +208,7 @@ class ScraperView {
            <div style="padding: 1rem 1.5rem; background: var(--bg-color); display: flex; gap: 1rem; justify-content: flex-end; border-top: 1px solid var(--border-color);">
               <button id="preview-close-btn" class="btn btn-secondary">Close</button>
               <button id="preview-add-btn" class="btn btn-primary">Add to Library</button>
-              <button id="preview-read-btn" class="btn btn-primary" style="background: var(--success-color);">📖 Read Now</button>
+              <button id="preview-read-btn" class="btn btn-primary" style="background: var(--success);">${icon('book-open')} Read Now</button>
            </div>
         </div>
       </div>
@@ -241,7 +242,7 @@ class ScraperView {
     if (this.scrapers.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
-          <div class="empty-icon">🔌</div>
+          <div class="empty-icon">${icon('plug')}</div>
           <p>No scrapers found.</p>
         </div>
       `;
@@ -273,20 +274,20 @@ class ScraperView {
 
           <div class="scraper-card-body">
             <div class="capability-row">
-              <span class="capability-label">🔍 Search</span>
+              <span class="capability-label">${icon('search')} Search</span>
               ${s.canSearch
                 ? '<span class="capability-pill capability-yes">✓ Supported</span>'
                 : '<span class="capability-pill capability-no">✗ Not available</span>'}
             </div>
             <div class="capability-row">
-              <span class="capability-label">➕ Adding</span>
+              <span class="capability-label">${icon('plus')} Adding</span>
               <span class="capability-pill capability-yes">✓ Supported</span>
             </div>
             <div class="capability-row">
-              <span class="capability-label">📖 Browsing</span>
+              <span class="capability-label">${icon('book-open')} Browsing</span>
               ${s.canBrowse
                 ? '<span class="capability-pill capability-yes">✓ Supported</span>'
-                : '<span class="capability-pill capability-soon">🚧 Coming soon</span>'}
+                : `<span class="capability-pill capability-soon">${icon('traffic-cone')} Coming soon</span>`}
             </div>
           </div>
 
@@ -296,13 +297,13 @@ class ScraperView {
               data-scraper="${s.name}"
               ${!s.canSearch ? 'disabled' : ''}
               title="${s.canSearch ? `Search in ${s.name}` : 'Search not supported'}"
-            >🔍 Search</button>
+            >${icon('search')} Search</button>
             <button
               class="btn btn-secondary scraper-browse-card-btn"
               data-scraper="${s.name}"
               ${!s.canBrowse ? 'disabled' : ''}
               title="${s.canBrowse ? `Browse ${s.name}` : 'Browsing coming soon'}"
-            >📖 Browse</button>
+            >${icon('book-open')} Browse</button>
           </div>
 
         </div>
@@ -314,11 +315,11 @@ class ScraperView {
 
   getDomainIcon(name) {
     const lower = name.toLowerCase();
-    if (lower.includes('comix')) return '📚';
-    if (lower.includes('mangahere')) return '📖';
-    if (lower.includes('nhentai')) return '🔞';
-    if (lower.includes('chained')) return '⛓️';
-    return '🌐';
+    if (lower.includes('comix')) return icon('library');
+    if (lower.includes('mangahere')) return icon('book-open');
+    if (lower.includes('nhentai')) return icon('shield-alert');
+    if (lower.includes('chained')) return icon('link');
+    return icon('globe');
   }
 
   bindEvents() {
@@ -528,7 +529,7 @@ class ScraperView {
     if (this.results.length === 0) {
       container.innerHTML = `
         <div class="empty-state" style="margin-top: 2rem;">
-          <div class="empty-icon">🤷</div>
+          <div class="empty-icon">${icon('search-x')}</div>
           <p>No results found for "${this.currentQuery}".</p>
         </div>
       `;
@@ -547,8 +548,8 @@ class ScraperView {
         coverUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(rawCover)}`;
       }
       const coverHtml = coverUrl 
-        ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
-        : `<div class="placeholder">📖</div>`;
+        ? coverImg(coverUrl, 'Cover', { kind: 'series', self: true })
+        : placeholder('series');
       html += `
         <div class="manga-card scraper-result-card" data-url="${result.url}" style="cursor: pointer;">
           <div class="manga-card-cover">
@@ -699,7 +700,7 @@ class ScraperView {
     if (this.browseResults.length === 0) {
       container.innerHTML = `
         <div class="empty-state" style="grid-column: 1/-1; margin-top: 2rem;">
-          <div class="empty-icon">🤷</div>
+          <div class="empty-icon">${icon('search-x')}</div>
           <p>No results found.</p>
         </div>
       `;
@@ -720,8 +721,8 @@ class ScraperView {
         coverUrl = `/api/scrapers/proxy-cover?url=${encodeURIComponent(rawCover)}`;
       }
       const coverHtml = coverUrl 
-        ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
-        : `<div class="placeholder">📖</div>`;
+        ? coverImg(coverUrl, 'Cover', { kind: 'series', self: true })
+        : placeholder('series');
       
       html += `
         <div class="manga-card browse-result-card" data-index="${idx}" style="cursor: pointer;">
@@ -776,7 +777,7 @@ class ScraperView {
       <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
          <div style="flex: 0 0 200px; max-width: 100%;">
             <div class="manga-card-cover" style="height: 280px; border-radius: 8px;">
-               ${result.cover ? `<img src="${result.cover.startsWith('/covers/') ? result.cover : '/api/scrapers/proxy-cover?url=' + encodeURIComponent(result.cover)}" style="width: 100%; height: 100%; object-fit: cover;">` : '<div class="placeholder">📖</div>'}
+               ${result.cover ? `<img src="${result.cover.startsWith('/covers/') ? result.cover : '/api/scrapers/proxy-cover?url=' + encodeURIComponent(result.cover)}" style="width: 100%; height: 100%; object-fit: cover;">` : placeholder('series')}
             </div>
          </div>
          <div style="flex: 1; min-width: 250px;">

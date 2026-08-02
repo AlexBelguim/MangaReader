@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import { socket, SocketEvents } from '../socket.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
+import { icon } from '../icons.js';
 
 let state = {
   downloads: {},
@@ -56,24 +57,24 @@ function timeUntil(dateStr) {
 
 function taskTypeIcon(type) {
   switch (type) {
-    case 'download': return '📥';
-    case 'scrape': return '🔍';
-    case 'scan': return '📁';
-    default: return '⚙️';
+    case 'download': return icon('download');
+    case 'scrape': return icon('search');
+    case 'scan': return icon('folder');
+    default: return icon('settings');
   }
 }
 
 function statusColor(status) {
   switch (status) {
-    case 'running': return 'var(--color-success, #4caf50)';
+    case 'running': return 'var(--color-success)';
     case 'queued':
-    case 'pending': return 'var(--color-warning, #ff9800)';
-    case 'paused': return 'var(--color-info, #2196f3)';
-    case 'complete': return 'var(--color-success, #4caf50)';
+    case 'pending': return 'var(--color-warning)';
+    case 'paused': return 'var(--color-info)';
+    case 'complete': return 'var(--color-success)';
     case 'error':
     case 'failed':
-    case 'cancelled': return 'var(--color-error, #f44336)';
-    default: return 'var(--text-secondary, #999)';
+    case 'cancelled': return 'var(--color-error)';
+    default: return 'var(--text-secondary)';
   }
 }
 
@@ -107,7 +108,7 @@ function renderAutoCheckHeader() {
   return `
     <div class="queue-inline-header">
       <span class="text-muted">${ac.enabledCount} monitored · Last: ${timeAgo(ac.lastRun)}</span>
-      <button class="btn btn-sm btn-primary" id="run-autocheck-btn">▶ Run All Now</button>
+      <button class="btn btn-sm btn-primary" id="run-autocheck-btn">${icon('play')} Run All Now</button>
     </div>
   `;
 }
@@ -120,7 +121,7 @@ function renderScheduledMangaCard(manga) {
     <div class="queue-card scheduled-manga-card ${isDue ? 'due' : ''}" data-manga-id="${manga.id}">
       <div class="queue-card-header">
         <div class="task-info">
-          <span class="task-icon">📖</span>
+          <span class="task-icon">${icon('book-open')}</span>
           <div>
             <div class="task-title">${manga.title}</div>
             <div class="task-status" style="color: var(--text-secondary)">
@@ -129,7 +130,7 @@ function renderScheduledMangaCard(manga) {
           </div>
         </div>
         <div class="schedule-next-info">
-          <span class="${isDue ? 'text-success' : ''}">${isDue ? '⏳ Due now' : nextCheck}</span>
+          <span class="${isDue ? 'text-success' : ''}">${isDue ? `${icon('alarm-clock')} Due now` : nextCheck}</span>
         </div>
       </div>
     </div>
@@ -145,15 +146,15 @@ function renderDownloadCard(taskId, task) {
     <div class="queue-card task-card" data-task-id="${taskId}">
       <div class="queue-card-header">
         <div class="task-info">
-          <span class="task-icon">📥</span>
+          <span class="task-icon">${icon('download')}</span>
           <div>
             <div class="task-title">${task.mangaTitle || 'Download'}</div>
             <div class="task-status" style="color: ${statusColor(task.status)}">${statusLabel(task.status)}</div>
           </div>
         </div>
         <div class="task-actions">
-          ${isActive ? `<button class="btn btn-sm btn-icon" data-action="pause" data-task="${taskId}" title="Pause">⏸</button>` : ''}
-          ${isPaused ? `<button class="btn btn-sm btn-icon" data-action="resume" data-task="${taskId}" title="Resume">▶</button>` : ''}
+          ${isActive ? `<button class="btn btn-sm btn-icon" data-action="pause" data-task="${taskId}" title="Pause">${icon('pause', { title: 'Pause' })}</button>` : ''}
+          ${isPaused ? `<button class="btn btn-sm btn-icon" data-action="resume" data-task="${taskId}" title="Resume">${icon('play', { title: 'Resume' })}</button>` : ''}
           ${isActive || isPaused ? `<button class="btn btn-sm btn-icon btn-danger" data-action="cancel" data-task="${taskId}" title="Cancel">✕</button>` : ''}
         </div>
       </div>
@@ -163,7 +164,7 @@ function renderDownloadCard(taskId, task) {
           <span class="progress-text">${task.completed} / ${task.total} chapters (${pct}%)</span>
         </div>
         ${task.current ? `<div class="task-current">Currently: Chapter ${task.current}</div>` : ''}
-        ${task.errors && task.errors.length > 0 ? `<div class="task-errors">⚠ ${task.errors.length} error(s)</div>` : ''}
+        ${task.errors && task.errors.length > 0 ? `<div class="task-errors">${icon('triangle-alert')} ${task.errors.length} error(s)</div>` : ''}
       </div>
     </div>
   `;
@@ -249,7 +250,7 @@ function render() {
     ${renderHeader('manga')}
     <div class="container queue-container">
       <div class="queue-header">
-        <h2>📋 Task Queue</h2>
+        <h2>${icon('list-checks')} Task Queue</h2>
         ${totalActive > 0 ? `<span class="queue-badge">${totalActive} active</span>` : ''}
       </div>
 
@@ -310,11 +311,11 @@ function render() {
               <div style="display: flex; gap: 8px; align-items: center;">
                 ${emptyCheckCount > 0 ? `
                   <button class="btn btn-sm btn-secondary" id="toggle-empty-checks-btn" title="${state.showEmptyChecks ? 'Hide' : 'Show'} checks with no new chapters">
-                    ${state.showEmptyChecks ? '🔽 Hide' : '🔼 Show'} empty checks (${emptyCheckCount})
+                    ${state.showEmptyChecks ? `${icon('chevron-up')} Hide` : `${icon('chevron-down')} Show`} empty checks (${emptyCheckCount})
                   </button>
                 ` : ''}
                 <button class="btn btn-sm btn-danger queue-clear-btn" id="clear-history-btn">
-                  🗑️ Clear History
+                  ${icon('trash-2')} Clear History
                 </button>
               </div>
             </div>
@@ -331,7 +332,7 @@ function render() {
 
       ${activeDownloads.length === 0 && filteredQueueTasks.length === 0 && completedDownloads.length === 0 && schedules.length === 0 && (!state.historyTasks || state.historyTasks.length === 0) ? `
         <div class="queue-empty">
-          <div class="empty-icon">✨</div>
+          <div class="empty-icon">${icon('check')}</div>
           <h3>All Clear</h3>
           <p>No active tasks or scheduled checks. Enable auto-check on manga to see them here.</p>
         </div>
@@ -388,7 +389,8 @@ function setupListeners() {
   if (runBtn) {
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
-      runBtn.textContent = '⏳ Running...';
+      // innerHTML — these labels carry an inline SVG icon.
+      runBtn.innerHTML = `${icon('loader', { spin: true })} Running...`;
       try {
         showToast('Auto-check started...', 'info');
         const result = await api.runAutoCheck();
@@ -398,7 +400,7 @@ function setupListeners() {
       } catch (err) {
         showToast('Auto-check failed: ' + err.message, 'error');
         runBtn.disabled = false;
-        runBtn.textContent = '▶ Run Now';
+        runBtn.innerHTML = `${icon('play')} Run Now`;
       }
     });
   }
@@ -487,7 +489,7 @@ export async function mount() {
   app.innerHTML = `
     ${renderHeader('manga')}
     <div class="container queue-container">
-      <div class="queue-header"><h2>📋 Task Queue</h2></div>
+      <div class="queue-header"><h2>${icon('list-checks')} Task Queue</h2></div>
       <div class="loading-spinner"></div>
     </div>
   `;

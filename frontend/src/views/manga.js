@@ -11,6 +11,7 @@ import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { continueReading } from './reader.js';
 import { offlineManager } from '../offline-manager.js';
+import { icon, placeholder, coverImg } from '../icons.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -28,8 +29,25 @@ let state = {
   cbzFiles: [],
   manageChapters: false,
   offlineChapters: new Set(),
-  isAutoOffline: false
+  isAutoOffline: false,
+  // Collapsed by default once a library gets large enough for it to matter;
+  // the user's choice is remembered per-manga in localStorage.
+  volumesCollapsed: false
 };
+
+/** localStorage key for the per-manga volumes collapse state. */
+const volumesCollapseKey = (mangaId) => `volumes_collapsed_${mangaId}`;
+
+/**
+ * Restore the collapse preference for a manga.
+ * Defaults to collapsed when there are enough volumes that the grid would
+ * otherwise push the chapter list off screen.
+ */
+function loadVolumesCollapsed(manga) {
+  const stored = localStorage.getItem(volumesCollapseKey(manga?.id));
+  if (stored !== null) return stored === '1';
+  return (manga?.volumes?.length || 0) > 8;
+}
 
 // ==================== HELPERS ====================
 
@@ -51,7 +69,7 @@ function renderAutoCheckToggle(manga) {
   const isEnabled = manga.autoCheck === true;
 
   if (!isEnabled) {
-    return `<button class="btn btn-secondary" id="schedule-btn">⏰ Schedule</button>`;
+    return `<button class="btn btn-secondary" id="schedule-btn">${icon('alarm-clock')} Schedule</button>`;
   }
 
   const scheduleLabel = manga.checkSchedule === 'weekly'
@@ -60,7 +78,7 @@ function renderAutoCheckToggle(manga) {
       ? `Daily ${manga.checkTime || '06:00'}`
       : 'Every 6h';
 
-  return `<button class="btn btn-primary" id="schedule-btn">⏰ ${scheduleLabel}</button>`;
+  return `<button class="btn btn-primary" id="schedule-btn">${icon('alarm-clock')} ${scheduleLabel}</button>`;
 }
 
 /**
@@ -78,7 +96,7 @@ function renderScheduleModal(manga) {
       <div class="modal-overlay"></div>
       <div class="modal-content">
         <div class="modal-header">
-          <h2>⏰ Auto-Check Schedule</h2>
+          <h2>${icon('alarm-clock')} Auto-Check Schedule</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -152,6 +170,12 @@ export function render() {
   const chapters = manga.chapters || [];
   const downloadedChapters = new Set(manga.downloadedChapters || []);
   const readChapters = new Set(manga.readChapters || []);
+
+  // Distinct chapters, not version rows. `chapters` holds one entry per
+  // scanlation/version, so its raw length runs into the thousands for a
+  // long series and can't be compared against Downloaded/Read, which are
+  // both sets of chapter numbers.
+  const distinctChapterCount = new Set(chapters.map(c => c.number)).size;
   const excludedSet = new Set(manga.excludedChapters || []);
   const deletedUrls = new Set(manga.deletedChapterUrls || []);
   const volumes = manga.volumes || [];
@@ -252,7 +276,7 @@ export function render() {
             <div class="manga-detail-cover">
               ${volCoverUrl
         ? `<img src="${volCoverUrl}" alt="${vol.name}">`
-        : `<div class="placeholder">📚</div>`
+        : placeholder('book')
       }
             </div>
             <div class="manga-detail-info">
@@ -266,8 +290,8 @@ export function render() {
               </div>
                <div class="manga-detail-actions">
                  <button class="btn btn-secondary" onclick="window.location.hash='#/manga/${manga.id}'">Back to Manga</button>
-                 <button class="btn btn-secondary" id="manage-chapters-btn">${state.manageChapters ? 'Done Managing' : '➕ Add Chapters'}</button>
-                 <button class="btn btn-secondary" id="edit-vol-btn" data-vol-id="${vol.id}">✏️ Edit Volume</button>
+                 <button class="btn btn-secondary" id="manage-chapters-btn">${state.manageChapters ? 'Done Managing' : `${icon('plus')} Add Chapters`}</button>
+                 <button class="btn btn-secondary" id="edit-vol-btn" data-vol-id="${vol.id}">${icon('pencil')} Edit Volume</button>
                </div>
             </div>
           </div>
@@ -286,14 +310,14 @@ export function render() {
               <div class="manga-detail-cover">
                 ${coverUrl
         ? `<img src="${coverUrl}" alt="${displayName}">`
-        : `<div class="placeholder">📚</div>`
+        : placeholder('book')
       }
               </div>
               <div class="manga-detail-info">
                 <h1>${displayName}</h1>
                 <div class="manga-detail-meta">
                   <span class="meta-item accent" id="source-label" style="cursor: pointer;" title="Click to change source">${manga.website || 'Local'}</span>
-                  <span class="meta-item">${manga.chapters?.length || 0} Total Chapters</span>
+                  <span class="meta-item" title="${distinctChapterCount} distinct chapters across ${manga.chapters?.length || 0} version rows">${distinctChapterCount} Chapters</span>
                   ${downloadedChapters.size > 0 ? `<span class="meta-item downloaded">${downloadedChapters.size} Downloaded</span>` : ''}
                   ${readChapters.size > 0 ? `<span class="meta-item">${readChapters.size} Read</span>` : ''}
                 </div>
@@ -311,25 +335,25 @@ export function render() {
                 ` : ''}
                 <div class="manga-detail-actions">
                   <button class="btn btn-primary" id="continue-btn">
-                    ▶ ${manga.lastReadChapter ? 'Continue' : 'Start'} Reading
+                    ${icon('play')} ${manga.lastReadChapter ? 'Continue' : 'Start'} Reading
                   </button>
               <button class="btn btn-secondary" id="download-all-btn">
-                ↓ Download All
+                ${icon('download')} Download All
               </button>
-              <button class="btn btn-secondary" id="refresh-btn">🔄 Refresh</button>
-              ${manga.website !== 'Local' ? `<button class="btn btn-secondary" id="quick-check-btn">⚡ Quick Check</button>` : ''}
-              ${manga.website === 'Local' ? `<button class="btn btn-secondary" id="scan-folder-btn">📁 Scan Folder</button>` : ''}
+              <button class="btn btn-secondary" id="refresh-btn">${icon('refresh-cw')} Refresh</button>
+              ${manga.website !== 'Local' ? `<button class="btn btn-secondary" id="quick-check-btn">${icon('zap')} Quick Check</button>` : ''}
+              ${manga.website === 'Local' ? `<button class="btn btn-secondary" id="scan-folder-btn">${icon('folder')} Scan Folder</button>` : ''}
               <button class="btn btn-secondary ${state.isAutoOffline ? 'btn-active' : ''}" id="auto-offline-btn" title="Auto-save new chapters offline for reading without internet">
-                ${state.isAutoOffline ? '📴 Auto-Offline ✓' : '📴 Auto-Offline'}
+                ${icon('wifi-off')} Auto-Offline${state.isAutoOffline ? ` ${icon('check')}` : ''}
               </button>
-              <button class="btn btn-secondary" id="edit-btn">✏️ Edit</button>
+              <button class="btn btn-secondary" id="edit-btn">${icon('pencil')} Edit</button>
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
               ${renderAutoCheckToggle(manga)}
             </div>
             ${manga.description ? `<p class="manga-description">${manga.description}</p>` : ''}
             ${state.cbzFiles.length > 0 ? `
             <div class="cbz-section" style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
-              <h3 style="margin: 0 0 12px 0;">📦 CBZ Files (${state.cbzFiles.length})</h3>
+              <h3 style="margin: 0 0 12px 0;">${icon('package')} CBZ Files (${state.cbzFiles.length})</h3>
               <div class="cbz-list">
                 ${state.cbzFiles.map(cbz => `
                   <div class="cbz-item" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--bg-primary); border-radius: 4px; margin-bottom: 8px;">
@@ -337,7 +361,7 @@ export function render() {
                       <div style="font-weight: bold;">${cbz.name}</div>
                       <div style="font-size: 12px; color: var(--text-secondary);">
                         ${cbz.chapterNumber ? `Chapter ${cbz.chapterNumber}` : 'Unknown chapter'}
-                        ${cbz.isExtracted ? ' | ✅ Extracted' : ''}
+                        ${cbz.isExtracted ? ` | ${icon('check')} Extracted` : ''}
                       </div>
                     </div>
                     <button class="btn btn-small ${cbz.isExtracted ? 'btn-secondary' : 'btn-primary'}" 
@@ -404,7 +428,7 @@ function renderDeleteModal() {
       <div class="modal-overlay"></div>
       <div class="modal-content" style="max-width: 420px;">
         <div class="modal-header">
-          <h2>🗑️ Delete Manga</h2>
+          <h2>${icon('trash-2')} Delete Manga</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -434,7 +458,7 @@ function renderMigrateSourceModal() {
       <div class="modal-overlay"></div>
       <div class="modal-content" style="max-width: 700px;">
         <div class="modal-header">
-          <h2>🔄 Change Source</h2>
+          <h2>${icon('refresh-cw')} Change Source</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -449,7 +473,7 @@ function renderMigrateSourceModal() {
               <select id="migrate-search-scraper" style="width: 150px;">
                 <option value="comix.to">comix.to</option>
               </select>
-              <button class="btn btn-secondary" id="migrate-search-btn">🔍 Search</button>
+              <button class="btn btn-secondary" id="migrate-search-btn">${icon('search')} Search</button>
             </div>
           </div>
           
@@ -469,7 +493,7 @@ function renderMigrateSourceModal() {
             <label for="migrate-url-input">Manga URL</label>
             <input type="url" id="migrate-url-input" placeholder="https://..." style="width: 100%;">
           </div>
-          <p class="text-muted" style="font-size: 0.8em;">Current URL: <a href="${manga.url}" target="_blank" rel="noopener noreferrer" style="word-break:break-all; color: var(--primary-color, #a78bfa); text-decoration: underline;">${manga.url}</a></p>
+          <p class="text-muted" style="font-size: 0.8em;">Current URL: <a href="${manga.url}" target="_blank" rel="noopener noreferrer" style="word-break:break-all; color: var(--accent-primary); text-decoration: underline;">${manga.url}</a></p>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary modal-close-btn">Cancel</button>
@@ -493,7 +517,7 @@ function renderModals() {
       <div class="modal-overlay"></div>
       <div class="modal-content">
         <div class="modal-header">
-          <h2>✏️ Edit Manga</h2>
+          <h2>${icon('pencil')} Edit Manga</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -521,7 +545,7 @@ function renderModals() {
           <p class="text-muted" style="font-size: 0.8em;">Original title: ${manga?.title || ''}</p>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-danger" id="delete-manga-btn" style="margin-right:auto;">🗑️ Delete</button>
+          <button class="btn btn-danger" id="delete-manga-btn" style="margin-right:auto;">${icon('trash-2')} Delete</button>
           <button class="btn btn-secondary modal-close-btn">Cancel</button>
           <button class="btn btn-primary" id="save-manga-btn">Save</button>
         </div>
@@ -722,13 +746,13 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
             <span class="version-title" style="cursor: pointer; flex: 1;">${v.title || v.releaseGroup || 'Version'}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}</span>
             <div class="version-actions">
               ${isVersionDownloaded
-        ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">▶</button>
-                   <button class="btn-icon small danger" data-action="delete-version" data-num="${num}" data-url="${versionUrl}">🗑️</button>`
-        : `<button class="btn-icon small" data-action="download-version" data-num="${num}" data-url="${versionUrl}">↓</button>`
+        ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">${icon('play', { title: 'Read' })}</button>
+                   <button class="btn-icon small danger" data-action="delete-version" data-num="${num}" data-url="${versionUrl}">${icon('trash-2', { title: 'Delete version' })}</button>`
+        : `<button class="btn-icon small" data-action="download-version" data-num="${num}" data-url="${versionUrl}">${icon('download', { title: 'Download' })}</button>`
       }
               ${deletedUrls.has(v.url)
-        ? `<button class="btn-icon small warning" data-action="restore-version" data-num="${num}" data-url="${versionUrl}" title="Restore Version">↩️</button>`
-        : `<button class="btn-icon small" data-action="hide-version" data-num="${num}" data-url="${versionUrl}" title="Hide Version">👁️‍🗨️</button>`
+        ? `<button class="btn-icon small warning" data-action="restore-version" data-num="${num}" data-url="${versionUrl}" title="Restore Version">${icon('undo-2', { title: 'Restore version' })}</button>`
+        : `<button class="btn-icon small" data-action="hide-version" data-num="${num}" data-url="${versionUrl}" title="Hide Version">${icon('eye-off', { title: 'Hide version' })}</button>`
       }
             </div>
           </div>
@@ -750,7 +774,7 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
         ${isExtra ? '<span class="chapter-tag">Extra</span>' : ''}
         <div class="chapter-actions">
           ${isExcluded
-      ? `<button class="btn-icon small warning" data-action="restore-chapter" data-num="${num}" title="Restore Chapter">↩️</button>`
+      ? `<button class="btn-icon small warning" data-action="restore-chapter" data-num="${num}" title="Restore Chapter">${icon('undo-2', { title: 'Restore chapter' })}</button>`
       : (isVolumeMode
         ? `<div style="display: flex; align-items: center; gap: 4px;">
             <span style="opacity: 0.5; font-size: 0.8em">Vol</span>
@@ -759,33 +783,33 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
         : `<button class="btn-icon small lock-btn ${isLocked ? 'locked' : ''}"
                         data-action="lock" data-num="${num}"
                         title="${isLocked ? 'Unlock' : 'Lock'}">
-                  ${isLocked ? '🔒' : '🔓'}
+                  ${isLocked ? icon('lock', { title: 'Locked' }) : icon('lock-open', { title: 'Unlocked' })}
                 </button>`)
     }
           ${!isExcluded && firstVersionUrl ? (
       deletedUrls.has(displayVersions[0]?.url)
-        ? `<button class="btn-icon small warning" data-action="unhide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Unhide Chapter">↩️</button>`
-        : `<button class="btn-icon small" data-action="hide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Hide Chapter">👁️‍🗨️</button>`
+        ? `<button class="btn-icon small warning" data-action="unhide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Unhide Chapter">${icon('undo-2', { title: 'Unhide chapter' })}</button>`
+        : `<button class="btn-icon small" data-action="hide-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Hide Chapter">${icon('eye-off', { title: 'Hide chapter' })}</button>`
     ) : ''}
           <button class="btn-icon small ${isRead ? 'success' : 'muted'}"
                   data-action="read" data-num="${num}"
                   title="${isRead ? 'Mark unread' : 'Mark read'}">
-            ${isRead ? '👁️' : '○'}
+            ${isRead ? icon('eye', { title: 'Read' }) : icon('circle', { title: 'Unread' })}
           </button>
           ${isDownloaded
-      ? `<button class="btn-icon small danger" data-action="delete-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Delete Files">🗑️</button>
+      ? `<button class="btn-icon small danger" data-action="delete-chapter" data-num="${num}" data-url="${firstVersionUrl}" title="Delete Files">${icon('trash-2', { title: 'Delete files' })}</button>
          <button class="btn-icon small ${state.offlineChapters.has(num) ? 'success' : ''}" data-action="offline-save" data-num="${num}" title="${state.offlineChapters.has(num) ? 'Remove offline copy' : 'Save for offline reading'}">
-           ${state.offlineChapters.has(num) ? '📴' : '💾'}
+           ${state.offlineChapters.has(num) ? icon('wifi-off', { title: 'Available offline' }) : icon('hard-drive', { title: 'Save offline' })}
          </button>`
       : `<button class="btn-icon small ${isDownloaded ? 'success' : ''}"
               data-action="download" data-num="${num}"
               title="${isDownloaded ? 'Downloaded' : 'Download'}">
-          ${isDownloaded ? '✓' : '↓'}
+          ${isDownloaded ? icon('check', { title: 'Downloaded' }) : icon('download', { title: 'Download' })}
         </button>`
     }
           ${hasMultiple ? `
             <button class="btn-icon small versions-btn" data-action="versions" data-num="${num}">
-              ${visibleVersions.length} ▼
+              ${visibleVersions.length} ${icon('chevron-down')}
             </button>
           ` : ''}
         </div>
@@ -859,7 +883,7 @@ function renderVolumesSection(manga, downloadedChapters) {
         <div class="volume-cover">
           ${vol.cover
         ? `<img src="${vol.cover}" alt="${vol.name}">`
-        : `<div class="placeholder">📚</div>`
+        : placeholder('book')
       }
           <div class="volume-badges">
             <span class="badge badge-chapters">${volChapters.length} ch</span>
@@ -873,13 +897,27 @@ function renderVolumesSection(manga, downloadedChapters) {
     `;
   }).join('');
 
+  const collapsed = state.volumesCollapsed;
+  const totalVolDownloaded = volumes.reduce(
+    (n, v) => n + (v.chapters || []).filter(c => downloadedChapters.has(c)).length, 0
+  );
+
   return `
-    <div class="volumes-section">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h2 style="margin: 0;">Volumes</h2>
-        <button class="btn btn-secondary btn-small" id="add-volume-btn">+ Add Volume</button>
+    <div class="volumes-section${collapsed ? ' collapsed' : ''}">
+      <div class="volumes-header">
+        <button class="volumes-toggle" id="volumes-toggle-btn"
+                aria-expanded="${!collapsed}" aria-controls="volumes-grid"
+                title="${collapsed ? 'Expand volumes' : 'Collapse volumes'}">
+          ${icon(collapsed ? 'chevron-down' : 'chevron-up')}
+          <h2>Volumes</h2>
+          <span class="volumes-count">${volumes.length}</span>
+          ${collapsed && totalVolDownloaded > 0
+      ? `<span class="badge badge-downloaded">${totalVolDownloaded} downloaded</span>`
+      : ''}
+        </button>
+        <button class="btn btn-secondary btn-small" id="add-volume-btn">${icon('plus')} Add Volume</button>
       </div>
-      <div class="volumes-grid">
+      <div class="volumes-grid" id="volumes-grid">
         ${volumeCards || (manga.chapters?.length > 0 ? '<div class="empty-state-lite">No volumes yet. Create one to organize your chapters!</div>' : '')}
       </div>
     </div>
@@ -1045,7 +1083,7 @@ export function setupListeners() {
     const btn = document.getElementById('refresh-btn');
     try {
       btn.disabled = true;
-      btn.textContent = '⏳ Checking...';
+      btn.innerHTML = `${icon('loader', { spin: true })} Checking...`;
       showToast('Checking for updates...', 'info');
       await api.post(`/bookmarks/${manga.id}/check`);
       await loadData(manga.id);
@@ -1055,7 +1093,7 @@ export function setupListeners() {
       showToast('Check failed: ' + error.message, 'error');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '🔄 Refresh';
+        btn.innerHTML = `${icon('refresh-cw')} Refresh`;
       }
     }
   });
@@ -1065,7 +1103,7 @@ export function setupListeners() {
     const btn = document.getElementById('scan-folder-btn');
     try {
       btn.disabled = true;
-      btn.textContent = '⏳ Scanning...';
+      btn.innerHTML = `${icon('loader', { spin: true })} Scanning...`;
       showToast('Scanning folder...', 'info');
       const result = await api.scanBookmark(manga.id);
       await loadData(manga.id);
@@ -1082,7 +1120,7 @@ export function setupListeners() {
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '📁 Scan Folder';
+        btn.innerHTML = `${icon('folder')} Scan Folder`;
       }
     }
   });
@@ -1316,7 +1354,7 @@ export function setupListeners() {
     const btn = document.getElementById('quick-check-btn');
     try {
       btn.disabled = true;
-      btn.textContent = '⏳ Checking...';
+      btn.innerHTML = `${icon('loader', { spin: true })} Checking...`;
       showToast('Quick checking for updates...', 'info');
       const result = await api.post(`/bookmarks/${manga.id}/quick-check`);
       await loadData(manga.id);
@@ -1329,7 +1367,7 @@ export function setupListeners() {
     } catch (error) {
       showToast('Quick check failed: ' + error.message, 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '⚡ Quick Check'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = `${icon('zap')} Quick Check`; }
     }
   });
 
@@ -1382,8 +1420,8 @@ export function setupListeners() {
           return `
             <div class="manga-card migrate-result-card" data-url="${r.url}" style="cursor: pointer; font-size: 0.85em;">
               <div class="manga-card-cover" style="height: 150px;">
-                ${coverUrl ? `<img src="${coverUrl}" alt="Cover" loading="lazy" onerror="this.outerHTML='<div class=\\'placeholder\\'>📖</div>'">`
-                  : '<div class="placeholder">📖</div>'}
+                ${coverUrl ? coverImg(coverUrl, 'Cover', { kind: 'series', self: true })
+                  : placeholder('series')}
                 ${r.chapterCount ? `<div class="manga-card-badges"><span class="badge badge-chapters">${r.chapterCount} ch</span></div>` : ''}
               </div>
               <div class="manga-card-title" title="${r.title}" style="font-size: 0.8rem; padding: 4px;">${r.title}</div>
@@ -1830,6 +1868,7 @@ async function loadData(mangaId) {
     state.manga = manga;
     state.categories = categories;
     state.loading = false;
+    state.volumesCollapsed = loadVolumesCollapsed(manga);
 
     // Fetch CBZ files for local manga
     if (manga.website === 'Local') {
@@ -1924,7 +1963,7 @@ function renderAddVolumeModal() {
       <div class="modal-overlay"></div>
       <div class="modal-content">
         <div class="modal-header">
-          <h2>📦 Add New Volume</h2>
+          <h2>${icon('package')} Add New Volume</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -1945,6 +1984,24 @@ function renderAddVolumeModal() {
 function setupVolumeListeners(app) {
   const manga = state.manga;
   if (!manga) return;
+
+  // --- Volumes collapse toggle ---
+  // Toggles a class rather than re-rendering, so the grid animates and the
+  // chapter list below doesn't get rebuilt on every click.
+  const volToggle = app.querySelector('#volumes-toggle-btn');
+  if (volToggle) {
+    volToggle.addEventListener('click', () => {
+      state.volumesCollapsed = !state.volumesCollapsed;
+      localStorage.setItem(volumesCollapseKey(manga.id), state.volumesCollapsed ? '1' : '0');
+      const section = app.querySelector('.volumes-section');
+      section?.classList.toggle('collapsed', state.volumesCollapsed);
+      volToggle.setAttribute('aria-expanded', String(!state.volumesCollapsed));
+      volToggle.title = state.volumesCollapsed ? 'Expand volumes' : 'Collapse volumes';
+      // Swap the chevron without a full re-render.
+      const chev = volToggle.querySelector('svg');
+      if (chev) chev.outerHTML = icon(state.volumesCollapsed ? 'chevron-down' : 'chevron-up');
+    });
+  }
 
   // --- Add Volume Modal ---
   const addVolBtn = app.querySelector('#add-volume-btn');
@@ -2158,7 +2215,7 @@ function setupVolumeListeners(app) {
         } finally {
           if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '📤 Upload Image';
+            btn.innerHTML = `${icon('upload')} Upload Image`;
           }
         }
       });

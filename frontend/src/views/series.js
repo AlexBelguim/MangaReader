@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import { router } from '../router.js';
 import { renderHeader } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
+import { icon, placeholder, coverImg } from '../icons.js';
 
 // View state
 let state = {
@@ -64,8 +65,8 @@ export function render() {
         <div class="series-detail-header">
           <div class="series-detail-cover">
             ${coverUrl
-      ? `<img src="${coverUrl}" alt="${displayName}" onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'>📖</div>'">`
-      : `<div class="placeholder">📖</div>`
+      ? coverImg(coverUrl, displayName, { kind: 'series' })
+      : placeholder('series')
     }
           </div>
           <div class="series-detail-info">
@@ -76,7 +77,7 @@ export function render() {
             </div>
             <div class="series-detail-actions">
               <button class="btn btn-secondary" id="add-entry-btn">+ Add Entry</button>
-              <button class="btn btn-secondary" id="edit-series-btn">✏️ Edit</button>
+              <button class="btn btn-secondary" id="edit-series-btn">${icon('pencil')} Edit</button>
               <button class="btn btn-secondary" id="back-library-btn">← Library</button>
             </div>
           </div>
@@ -142,8 +143,8 @@ function renderSeriesEntry(entry, index, totalEntries) {
       </div>
       <div class="series-entry-cover">
         ${coverUrl
-      ? `<img src="${coverUrl}" alt="${displayName}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'>📚</div>'">`
-      : `<div class="placeholder">📚</div>`
+      ? coverImg(coverUrl, displayName, { kind: 'book' })
+      : placeholder('book')
     }
         <div class="series-entry-badges">
           <span class="badge badge-chapters">${entry.chapter_count || 0} ch</span>
@@ -152,7 +153,7 @@ function renderSeriesEntry(entry, index, totalEntries) {
       : ''
     }
         </div>
-        <button class="series-set-cover-btn" data-action="set-cover" data-id="${entry.bookmark_id}" data-entryid="${entry.id}" title="Use as series cover">🖼️</button>
+        <button class="series-set-cover-btn" data-action="set-cover" data-id="${entry.bookmark_id}" data-entryid="${entry.id}" title="Use as series cover">${icon('image', { title: 'Use as series cover' })}</button>
       </div>
       <div class="series-entry-info">
         <div class="series-entry-title">${displayName}</div>

@@ -3,13 +3,23 @@
  * Handles: app shell caching, offline chapter images from IndexedDB, push notifications
  */
 
-const CACHE_NAME = 'manga-reader-v1';
+// Bumped for the Ink & Vermillion identity. This MUST change whenever the
+// shell assets below change, otherwise installed clients keep serving the old
+// cached index.html and icons and never see the new theme.
+const CACHE_NAME = 'manga-reader-v2-ink';
+
+// Only the navigation entry points are precached.
+//
+// Everything else — CSS, JS, icons, fonts — is emitted by Vite under
+// /assets/ with a content hash, so its production filename is unknown here.
+// Listing the unhashed source paths would precache files that production
+// never requests. The fetch handler below is cache-first for all non-API
+// GETs, so those hashed assets are cached on first load anyway, which is
+// what actually makes the app work offline.
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png'
+  '/login.html'
 ];
 
 // ==================== INSTALL ====================
@@ -65,7 +75,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell & static assets: cache-first
+  // HTML documents: network-first, cache only as an offline fallback.
+  //
+  // This MUST NOT be cache-first. The built HTML references Vite's
+  // content-hashed assets (/assets/main-<hash>.js). Serving a stale cached
+  // document after a rebuild points the browser at hashes that no longer
+  // exist on disk — emptyOutDir has already deleted them — so the app loads
+  // the old shell or breaks outright. Network-first means a rebuild is picked
+  // up on the next load while offline still works from cache.
+  if (event.request.mode === 'navigate' ||
+      (event.request.headers.get('accept') || '').includes('text/html')) {
+    event.respondWith(
+      networkFirstWithCache(event.request)
+    );
+    return;
+  }
+
+  // Hashed static assets: cache-first is safe here, because a content hash
+  // means the URL itself changes whenever the bytes change.
   event.respondWith(
     cacheFirstWithNetwork(event.request)
   );
@@ -111,6 +138,16 @@ async function networkFirstWithCache(request) {
   } catch (e) {
     const cached = await caches.match(request);
     if (cached) return cached;
+
+    // Offline and nothing cached for this exact URL. For a page navigation,
+    // fall back to the cached app shell — the router runs client-side, so it
+    // can still render the requested route. Returning the JSON below instead
+    // would make the browser display raw JSON in place of the app.
+    if (request.mode === 'navigate') {
+      const shell = await caches.match('/index.html') || await caches.match('/');
+      if (shell) return shell;
+    }
+
     return new Response(JSON.stringify({ error: 'Offline' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' }

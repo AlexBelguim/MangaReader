@@ -5,14 +5,21 @@
 
 import { api } from '../api.js';
 import { showToast } from './toast.js';
+import { icon } from '../icons.js';
+
+/** Label markup for the scan buttons, idle and busy. */
+const SCAN_IDLE = `${icon('folder')} Scan Folder`;
+const SCAN_BUSY = `${icon('loader', { spin: true })} Scanning...`;
 
 /**
  * Scan library and show import popup if new manga found
  */
 export async function handleScan(btn, mobileBtn, onComplete) {
     try {
-        if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
-        if (mobileBtn) mobileBtn.textContent = 'Scanning...';
+        // innerHTML, not textContent — these labels carry an inline SVG icon,
+        // which textContent would render as literal markup.
+        if (btn) { btn.disabled = true; btn.innerHTML = SCAN_BUSY; }
+        if (mobileBtn) mobileBtn.innerHTML = SCAN_BUSY;
         showToast('Scanning downloads folder...', 'info');
 
         const result = await api.scanLibrary();
@@ -30,8 +37,8 @@ export async function handleScan(btn, mobileBtn, onComplete) {
     } catch (e) {
         showToast('Scan failed: ' + e.message, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '📁 Scan Folder'; }
-        if (mobileBtn) mobileBtn.textContent = '📁 Scan Folder';
+        if (btn) { btn.disabled = false; btn.innerHTML = SCAN_IDLE; }
+        if (mobileBtn) mobileBtn.innerHTML = SCAN_IDLE;
     }
 }
 

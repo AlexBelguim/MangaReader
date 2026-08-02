@@ -8,6 +8,7 @@ import { store } from '../store.js';
 import { router } from '../router.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
+import { icon, placeholder, coverImg } from '../icons.js';
 
 // View state
 let state = {
@@ -55,8 +56,8 @@ function renderGalleryCard(listName, items) {
     <div class="manga-card gallery-card" data-gallery="${listName}">
       <div class="manga-card-cover">
         ${coverUrl
-      ? `<img src="${coverUrl}" alt="${listName}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'>📁</div>'">`
-      : `<div class="placeholder">📁</div>`}
+      ? coverImg(coverUrl, listName, { kind: 'folder' })
+      : placeholder('folder')}
         <div class="manga-card-badges">
             <span class="badge badge-series">${totalPages} pages</span>
         </div>
@@ -98,9 +99,9 @@ function renderTrophyCard(id, displayName, totalTrophies, isSeries = false) {
   return `
     <div class="manga-card trophy-gallery-card" data-trophy-id="${id}" data-is-series="${isSeries}">
       <div class="manga-card-cover">
-        <div class="placeholder trophy-placeholder">🏆</div>
+        <div class="placeholder trophy-placeholder" data-icon="trophy"></div>
         <div class="manga-card-badges">
-            <span class="badge badge-trophy">🏆 ${totalTrophies}</span>
+            <span class="badge badge-trophy">${icon('trophy')} ${totalTrophies}</span>
             ${isSeries ? '<span class="badge badge-series">Series</span>' : ''}
         </div>
       </div>
@@ -179,10 +180,10 @@ export function render() {
   const tabBar = `
     <div class="favorites-tabs">
       <button class="tab-btn ${state.activeTab === 'galleries' ? 'active' : ''}" data-tab="galleries">
-        📁 Galleries
+        ${icon('folder')} Galleries
       </button>
       <button class="tab-btn ${state.activeTab === 'trophies' ? 'active' : ''}" data-tab="trophies">
-        🏆 Trophies
+        ${icon('trophy')} Trophies
       </button>
     </div>
   `;
@@ -277,6 +278,8 @@ export function setupListeners() {
       const id = card.dataset.trophyId;
       const isSeries = card.dataset.isSeries === 'true';
 
+      // The trailing segment is a route literal the reader matches on, not an
+      // icon — leave it as-is. Changing it breaks the trophy viewer route.
       if (isSeries) {
         router.go(`/read/trophies/series-${id}/🏆`);
       } else {

@@ -190,6 +190,34 @@ async function deleteOfflineChapter(mangaId, chapterNum) {
 }
 
 /**
+ * Re-download a chapter's offline copy, but only if one already exists.
+ *
+ * Needed after any edit that changes image BYTES without changing their URL —
+ * swap, rotate, split, delete. The service worker serves chapter images from
+ * IndexedDB keyed by URL, so a stale blob would otherwise win forever and the
+ * edit would appear to revert the next time the chapter is opened.
+ *
+ * @param {string} mangaId
+ * @param {number} chapterNum
+ * @returns {Promise<boolean>} true if an offline copy was refreshed
+ */
+async function refreshOfflineChapter(mangaId, chapterNum) {
+    const metadata = await dbGet(CHAPTER_STORE, chapterKey(mangaId, chapterNum));
+    if (!metadata) return false; // not saved offline — nothing stale to fix
+
+    await deleteOfflineChapter(mangaId, chapterNum);
+    try {
+        await saveChapterOffline(mangaId, chapterNum);
+        return true;
+    } catch (e) {
+        // The copy is gone rather than stale, which is the safe failure:
+        // the reader falls back to the network.
+        console.warn('[Offline] Could not re-save chapter after edit:', e);
+        return false;
+    }
+}
+
+/**
  * Check if a chapter is available offline.
  * @param {string} mangaId
  * @param {number} chapterNum
@@ -358,6 +386,7 @@ export const offlineManager = {
     saveChapterOffline,
     getOfflineChapter,
     deleteOfflineChapter,
+    refreshOfflineChapter,
     isChapterOffline,
     getOfflineChapters,
     getOfflineChaptersForManga,

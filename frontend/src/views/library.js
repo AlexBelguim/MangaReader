@@ -10,6 +10,7 @@ import { store } from '../store.js';
 import { router } from '../router.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
+import { icon, placeholder, coverImg } from '../icons.js';
 
 // View state
 let state = {
@@ -121,16 +122,16 @@ function renderMangaCard(manga) {
     <div class="manga-card" data-id="${manga.id}">
       <div class="manga-card-cover">
         ${coverUrl
-      ? `<img src="${coverUrl}" alt="${displayName}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'>📚</div>'">`
-      : `<div class="placeholder">${isLocal ? '💾' : '📚'}</div>`
+      ? coverImg(coverUrl, displayName, { kind: isLocal ? 'local' : 'book' })
+      : placeholder(isLocal ? 'local' : 'book')
     }
         <div class="manga-card-badges">
           ${readCount > 0 ? `<span class="badge badge-read" title="Read">${readCount}</span>` : ''}
           <span class="badge badge-chapters" title="Total">${totalCount}</span>
           ${downloadedCount > 0 ? `<span class="badge badge-downloaded" title="Downloaded">${downloadedCount}</span>` : ''}
           ${hasUpdates ? `<span class="badge badge-warning" title="Updates available">!</span>` : ''}
-          ${manga.autoCheck ? `<span class="badge badge-monitored" title="Auto-check enabled">⏰</span>` : ''}
-          ${state.activeCategory === 'Favorites' ? `<span class="badge badge-play" title="Click to Read">▶</span>` : ''}
+          ${manga.autoCheck ? `<span class="badge badge-monitored" title="Auto-check enabled">${icon('alarm-clock', { title: 'Auto-check enabled' })}</span>` : ''}
+          ${state.activeCategory === 'Favorites' ? `<span class="badge badge-play" title="Click to Read">${icon('play', { title: 'Click to Read' })}</span>` : ''}
         </div>
       </div>
       <div class="manga-card-title">${displayName}</div>
@@ -170,8 +171,8 @@ function renderSeriesCard(series) {
     <div class="manga-card series-card" data-series-id="${series.id}">
       <div class="manga-card-cover">
         ${coverUrl
-      ? `<img src="${coverUrl}" alt="${displayName}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'>📖</div>'">`
-      : `<div class="placeholder">📖</div>`
+      ? coverImg(coverUrl, displayName, { kind: 'series' })
+      : placeholder('series')
     }
         <div class="manga-card-badges">
           <span class="badge badge-series">Series</span>
@@ -204,8 +205,8 @@ function renderGalleryCard(listName, items) {
     <div class="manga-card gallery-card" data-gallery="${listName}">
       <div class="manga-card-cover">
         ${coverUrl
-      ? `<img src="${coverUrl}" alt="${listName}" loading="lazy">`
-      : `<div class="placeholder">📁</div>`}
+      ? coverImg(coverUrl, listName, { kind: 'folder' })
+      : placeholder('folder')}
         <div class="manga-card-badges">
             <span class="badge badge-series">${count} items</span>
         </div>
@@ -265,7 +266,7 @@ export function render() {
     content = `
       <div class="library-controls">
         <div class="search-bar">
-          <span class="search-icon">🔍</span>
+          <span class="search-icon">${icon('search')}</span>
           <input type="text" id="library-search" placeholder="Search manga or author..." value="${state.searchQuery}" autocomplete="off">
           ${state.searchQuery ? '<button class="search-clear" id="search-clear">×</button>' : ''}
         </div>
@@ -279,7 +280,7 @@ export function render() {
       </div>
       ${state.artistFilter ? `
         <div class="artist-filter-badge" id="artist-filter-badge">
-          <span class="artist-filter-icon">🎨</span>
+          <span class="artist-filter-icon">${icon('palette')}</span>
           <span class="artist-filter-name">${state.artistFilter}</span>
           <span class="artist-filter-clear">×</span>
         </div>
@@ -318,19 +319,19 @@ function renderCategoryFab() {
   return `
       <div class="category-fab" id="category-fab">
       <button class="category-fab-btn ${activeCategory ? 'has-filter' : ''}" id="category-fab-btn">
-        ${activeCategory === '__nsfw__' ? '🔞' : activeCategory || '🏷️'}
+        ${activeCategory === '__nsfw__' ? icon('shield-alert', { title: '18+' }) : activeCategory || icon('tag', { title: 'Filter by category' })}
       </button>
       <div class="category-fab-menu hidden" id="category-fab-menu">
         <div class="category-fab-menu-header">
           <span>Filter by Category</span>
-          <button class="btn-icon small" id="manage-categories-btn">⚙️</button>
+          <button class="btn-icon small" id="manage-categories-btn" title="Manage categories">${icon('settings', { title: 'Manage categories' })}</button>
         </div>
         <div class="category-fab-menu-items">
           <button class="category-menu-item ${!activeCategory ? 'active' : ''}" data-category="">All</button>
-          ${hasNsfwCategories ? `<button class="category-menu-item ${activeCategory === '__nsfw__' ? 'active' : ''}" data-category="__nsfw__" style="color: #f44336;">🔞 All 18+</button>` : ''}
+          ${hasNsfwCategories ? `<button class="category-menu-item ${activeCategory === '__nsfw__' ? 'active' : ''}" data-category="__nsfw__" style="color: var(--error);">${icon('shield-alert')} All 18+</button>` : ''}
           ${categories.map(cat => `
             <button class="category-menu-item ${activeCategory === cat.name ? 'active' : ''}" data-category="${cat.name}">
-              ${cat.name}${cat.isNsfw ? ' <span style="color:#f44336;font-size:0.75em;">18+</span>' : ''}
+              ${cat.name}${cat.isNsfw ? ' <span style="color:var(--error);font-size:0.75em;">18+</span>' : ''}
             </button>
           `).join('')}
         </div>
@@ -349,7 +350,7 @@ function renderManageCategoriesModal() {
       <div class="modal-overlay"></div>
       <div class="modal-content" style="max-width: 450px;">
         <div class="modal-header">
-          <h2>⚙️ Manage Categories</h2>
+          <h2>${icon('settings')} Manage Categories</h2>
           <button class="modal-close">×</button>
         </div>
         <div class="modal-body">
@@ -360,14 +361,14 @@ function renderManageCategoriesModal() {
           <div id="categories-list" style="max-height: 300px; overflow-y: auto;">
             ${categories.length === 0 ? '<p class="text-muted">No categories yet</p>' : ''}
             ${categories.map(cat => `
-              <div class="category-manage-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid var(--border-color, #333);">
+              <div class="category-manage-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid var(--border-color);">
                 <span style="flex: 1;">${cat.name}</span>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                  <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.85em; color: ${cat.isNsfw ? '#f44336' : 'var(--text-secondary)'}">
+                  <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.85em; color: ${cat.isNsfw ? 'var(--error)' : 'var(--text-secondary)'}">
                     <input type="checkbox" class="nsfw-toggle" data-category="${cat.name}" ${cat.isNsfw ? 'checked' : ''} style="width: 16px; height: 16px;">
                     18+
                   </label>
-                  <button class="btn-icon small danger delete-category-btn" data-category="${cat.name}" title="Delete">🗑️</button>
+                  <button class="btn-icon small danger delete-category-btn" data-category="${cat.name}" title="Delete">${icon('trash-2', { title: 'Delete' })}</button>
                 </div>
               </div>
             `).join('')}

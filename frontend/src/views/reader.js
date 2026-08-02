@@ -7,6 +7,8 @@
 import { api } from '../api.js';
 import { router } from '../router.js';
 import { showToast } from '../utils/toast.js';
+import { icon } from '../icons.js';
+import { offlineManager } from '../offline-manager.js';
 
 // View state
 let state = {
@@ -160,30 +162,30 @@ export function render() {
         ${state.isCollectionMode ? '' : `
         <div class="reader-bar-tools" id="reader-toolbar">
           ${state.isStreamingMode ? `
-          <button class="reader-bar-btn" id="stream-add-lib-btn" title="Add to Library">📥</button>
+          <button class="reader-bar-btn" id="stream-add-lib-btn" title="Add to Library">${icon('download', { title: 'Add to Library' })}</button>
           <span class="reader-bar-divider"></span>
           ` : `
-          <button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">⭐</button>
-          
-          <button class="reader-bar-btn" id="rotate-btn" title="Rotate 90° CW">🔄</button>
+          <button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">${icon('star', { title: 'Add to favorites' })}</button>
+
+          <button class="reader-bar-btn" id="rotate-btn" title="Rotate 90° CW">${icon('rotate-cw', { title: 'Rotate 90 degrees clockwise' })}</button>
           ${state.mode === 'manga' && !state.singlePageMode ? `
-            <button class="reader-bar-btn" id="swap-btn" title="Swap pages in spread">⇄</button>
+            <button class="reader-bar-btn" id="swap-btn" title="Swap pages in spread">${icon('arrow-left-right', { title: 'Swap pages in spread' })}</button>
           ` : ''}
           ${state.singlePageMode || state.mode === 'webtoon' ? `
-            <button class="reader-bar-btn" id="split-btn" title="Split wide image into halves">✂️</button>
+            <button class="reader-bar-btn" id="split-btn" title="Split wide image into halves">${icon('scissors', { title: 'Split wide image into halves' })}</button>
           ` : ''}
           <span class="reader-bar-divider"></span>
           `}
           ${state.mode === 'manga' ? `
             <button class="reader-bar-btn ${state.singlePageMode ? 'active' : ''}" id="single-page-btn" title="${state.singlePageMode ? 'Switch to double page' : 'Switch to single page'}">
-              ${state.singlePageMode ? '1️⃣' : '2️⃣'}
+              ${state.singlePageMode ? icon('rectangle-vertical') : icon('columns-2')}
             </button>
             ${state.isStreamingMode ? '' : `
-            <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">🏆</button>
+            <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">${icon('trophy')}</button>
             `}
           ` : ''}
-          <button class="reader-bar-btn" id="fullscreen-btn" title="Toggle fullscreen">⛶</button>
-          <button class="reader-bar-btn" id="reader-settings-btn" title="Settings">⚙️</button>
+          <button class="reader-bar-btn" id="fullscreen-btn" title="Toggle fullscreen">${icon('maximize', { title: 'Toggle fullscreen' })}</button>
+          <button class="reader-bar-btn" id="reader-settings-btn" title="Settings">${icon('settings', { title: 'Settings' })}</button>
         </div>
         `}
       </div>
@@ -330,7 +332,7 @@ function renderWebtoonContent() {
         const isTrophy = state.trophyPages[idx];
         return `
         <div class="webtoon-page ${isTrophy ? 'trophy-page' : ''}" data-page="${idx}">
-          ${isTrophy ? '<div class="trophy-indicator">🏆</div>' : ''}
+          ${isTrophy ? `<div class="trophy-indicator">${icon('trophy')}</div>` : ''}
           <img src="${imgUrl}" alt="Page ${idx + 1}" loading="lazy">
         </div>
       `;
@@ -362,7 +364,7 @@ function renderMangaContent() {
         return `
         <div class="manga-spread ${state.direction}">
           <div class="manga-page ${isTrophy ? 'trophy-page' : ''}">
-            ${isTrophy ? '<div class="trophy-indicator">🏆</div>' : ''}
+            ${isTrophy ? `<div class="trophy-indicator">${icon('trophy')}</div>` : ''}
             <img src="${imgUrl}" alt="Page ${pageIdx + 1}">
           </div>
           <div class="manga-page link-page" id="link-page">
@@ -382,7 +384,7 @@ function renderMangaContent() {
         const isTrophy = state.trophyPages[pageIdx];
         return `
         <div class="manga-page ${isTrophy ? 'trophy-page' : ''}">
-          ${isTrophy ? '<div class="trophy-indicator">🏆</div>' : ''}
+          ${isTrophy ? `<div class="trophy-indicator">${icon('trophy')}</div>` : ''}
           <img src="${imgUrl}" alt="Page ${pageIdx + 1}">
         </div>
       `;
@@ -409,8 +411,8 @@ function renderSinglePageContent() {
         if (url1 && url2) {
             return `
             <div class="manga-spread ${state.direction}">
-              <div class="manga-page trophy-page"><div class="trophy-indicator">🏆</div><img src="${url1}" alt="Page ${p1 + 1}"></div>
-              <div class="manga-page trophy-page"><div class="trophy-indicator">🏆</div><img src="${url2}" alt="Page ${p2 + 1}"></div>
+              <div class="manga-page trophy-page"><div class="trophy-indicator">${icon('trophy')}</div><img src="${url1}" alt="Page ${p1 + 1}"></div>
+              <div class="manga-page trophy-page"><div class="trophy-indicator">${icon('trophy')}</div><img src="${url2}" alt="Page ${p2 + 1}"></div>
             </div>
             `;
         }
@@ -425,7 +427,7 @@ function renderSinglePageContent() {
     return `
     <div class="manga-spread single ${state.direction}">
       <div class="manga-page ${isTrophy ? 'trophy-page' : ''}">
-        ${isTrophy ? '<div class="trophy-indicator">🏆</div>' : ''}
+        ${isTrophy ? `<div class="trophy-indicator">${icon('trophy')}</div>` : ''}
         <img src="${imgUrl}" alt="Page ${pageIdx + 1}">
       </div>
     </div>
@@ -579,7 +581,7 @@ async function toggleCurrentPageTrophy() {
         let isSingle = state.singlePageMode || visiblePages.length === 1;
 
         if (!state.singlePageMode && visiblePages.length === 2) {
-            const choice = await showPagePicker(visiblePages, 'Mark as trophy 🏆');
+            const choice = await showPagePicker(visiblePages, 'Mark as trophy');
             if (!choice) return; // cancelled
             selectedPages = choice.pages;
             isSingle = choice.pages.length === 1;
@@ -589,7 +591,7 @@ async function toggleCurrentPageTrophy() {
             state.trophyPages[p] = { isSingle, pages: [...selectedPages] };
         });
         const modeText = isSingle ? 'single' : 'double';
-        showToast(`Page${selectedPages.length > 1 ? 's' : ''} marked as trophy (${modeText}) 🏆`, 'success');
+        showToast(`Page${selectedPages.length > 1 ? 's' : ''} marked as trophy (${modeText})`, 'success');
     }
 
     // Save to server
@@ -736,6 +738,10 @@ export function setupListeners() {
             state.singlePageMode = true;
             state.currentPage = spread ? spread[0] : 0;
         }
+        // Persist both globally (the default for a fresh chapter) and per
+        // chapter (so the next chapter inherits it via applyChapterSettings).
+        localStorage.setItem('reader_single_page', state.singlePageMode ? '1' : '0');
+        if (state.manga?.id && state.chapter?.number) saveSettings();
         fullReRender();
     });
 
@@ -1043,7 +1049,7 @@ export function setupListeners() {
         }
 
         if (pagesToFavorite.length > 1) {
-            const choice = await showPagePicker(pagesToFavorite, 'Select Page for Favorites ⭐');
+            const choice = await showPagePicker(pagesToFavorite, 'Select Page for Favorites');
             if (!choice) return; // User cancelled
             pagesToFavorite = choice.pages;
         }
@@ -1071,8 +1077,10 @@ export function setupListeners() {
             return;
         }
         
-        const originalText = btn.textContent;
-        btn.textContent = '⏳';
+        // innerHTML, not textContent: this button's label is an inline SVG
+        // icon, so textContent would capture '' and restore a blank button.
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = icon('loader', { spin: true });
         btn.disabled = true;
         
         try {
@@ -1091,7 +1099,7 @@ export function setupListeners() {
                             clearInterval(checkInterval);
                             if (job.result?.bookmark) {
                                 showToast('Added to library!', 'success');
-                                btn.textContent = '✅';
+                                btn.innerHTML = icon('check');
                                 btn.title = 'Added! Click to view';
                                 btn.disabled = false;
                                 // Replace click handler to navigate to manga page
@@ -1102,7 +1110,7 @@ export function setupListeners() {
                         } else if (job.status === 'failed') {
                             clearInterval(checkInterval);
                             showToast('Failed to add: ' + (job.error || 'Unknown error'), 'error');
-                            btn.textContent = originalText;
+                            btn.innerHTML = originalHtml;
                             btn.disabled = false;
                         }
                     }
@@ -1110,7 +1118,7 @@ export function setupListeners() {
             }, 1500);
         } catch (e) {
             showToast('Failed to add: ' + e.message, 'error');
-            btn.textContent = originalText;
+            btn.innerHTML = originalHtml;
             btn.disabled = false;
         }
     });
@@ -1147,6 +1155,20 @@ function getCurrentPageFilename() {
  * Reload images from server response and update display
  */
 async function reloadImages(newImages) {
+    // If this chapter is saved offline, its IndexedDB blobs are now stale:
+    // swap/rotate/split change the bytes but not the URL, and the service
+    // worker serves chapter images from IndexedDB by URL. The cache-bust below
+    // only hides that for the current session — reopening the chapter would
+    // serve the pre-edit images again. Refresh the stored copy so the edit
+    // actually sticks.
+    if (state.manga?.id && state.chapter?.number && !state.isStreamingMode) {
+        offlineManager.refreshOfflineChapter(state.manga.id, state.chapter.number)
+            .then(refreshed => {
+                if (refreshed) console.log('[Reader] Refreshed offline copy after page edit');
+            })
+            .catch(e => console.warn('[Reader] Offline refresh failed:', e));
+    }
+
     // Add cache bust to force reload of rotated/modified images.
     // Accepts both raw URL strings and { url, ... } objects so the format
     // matches whatever the loader endpoint returns.
@@ -1187,7 +1209,7 @@ async function addToFavoriteList(listName) {
 
     // In spread mode with 2 pages, ask which page(s) to save
     if (!state.singlePageMode && pages.length === 2) {
-        const choice = await showPagePicker(pages, `Add to "${listName}" ⭐`);
+        const choice = await showPagePicker(pages, `Add to "${listName}"`);
         if (!choice) return; // cancelled
         pages = choice.pages;
     }
@@ -1211,7 +1233,7 @@ async function addToFavoriteList(listName) {
 
     try {
         await api.addFavoriteItem(listName, favoriteItem);
-        showToast(`Added to "${listName}" ⭐`, 'success');
+        showToast(`Added to "${listName}"`, 'success');
     } catch (e) {
         showToast('Failed to add favorite: ' + e.message, 'error');
     }
@@ -1394,7 +1416,7 @@ function showListPicker(pages) {
             listsHtml += `
                 <button class="page-picker-option list-option ${isExisting ? 'active-list' : ''}" data-list="${listName}" style="width: 100%; text-align: left; padding: 12px 15px; display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 1.1em; font-weight: bold;">${listName}</span>
-                    <span style="font-size: 1.2em;">${isExisting ? '✅' : '➕'}</span>
+                    <span style="font-size: 1.2em;">${isExisting ? icon('check') : icon('plus')}</span>
                 </button>
             `;
         });
@@ -1403,7 +1425,7 @@ function showListPicker(pages) {
 
     overlay.innerHTML = `
         <div class="page-picker-modal" style="width: 90%; max-width: 400px;">
-            <h3>Favorites ⭐</h3>
+            <h3>${icon('star')} Favorites</h3>
             <p class="page-picker-subtitle" style="margin-bottom: 20px;">Manage favorite lists</p>
             ${listsHtml}
             <div style="display: flex; gap: 10px;">
@@ -1463,7 +1485,7 @@ function showListPicker(pages) {
 
                     // Update button UI
                     btn.classList.remove('active-list');
-                    btn.querySelector('span:last-child').textContent = '➕';
+                    btn.querySelector('span:last-child').innerHTML = icon('plus');
                 } else {
                     // Add it
                     const displayMode = pages.length > 1 ? 'double' : 'single';
@@ -1483,7 +1505,7 @@ function showListPicker(pages) {
 
                     // Update button UI
                     btn.classList.add('active-list');
-                    btn.querySelector('span:last-child').textContent = '✅';
+                    btn.querySelector('span:last-child').innerHTML = icon('check');
                 }
             } catch (e) {
                 console.error(e);
@@ -1534,7 +1556,7 @@ function showPagePicker(visiblePages, actionTitle) {
                     </button>
                 </div>
                 <button class="page-picker-option spread-option" data-choice="both">
-                    📖 Full Spread (both pages)
+                    ${icon('columns-2')} Full Spread (both pages)
                 </button>
                 <button class="page-picker-cancel">Cancel</button>
             </div>
@@ -1768,6 +1790,9 @@ async function loadData(mangaId, chapterNum, versionUrl) {
         // Load settings from localStorage
         state.mode = localStorage.getItem('reader_mode') || 'webtoon';
         state.direction = localStorage.getItem('reader_direction') || 'rtl';
+        // Single-page is a global preference; per-chapter settings below can
+        // still override it, and browse/stream mode forces it on (see below).
+        state.singlePageMode = localStorage.getItem('reader_single_page') === '1';
 
         // Special handling for Favorite Galleries
         if (mangaId === 'gallery') {
@@ -1888,7 +1913,11 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             state.isStreamingMode = true;
             state.isCollectionMode = false;
             state.isGalleryMode = false;
-            
+            // Browse/preview streams pages in as they arrive, so pairing them
+            // into spreads guesses at a page count that isn't known yet and
+            // reflows as more load. Single page is the only stable default here.
+            state.singlePageMode = true;
+
             const url = sessionStorage.getItem('streamPreviewUrl');
             const scraperName = sessionStorage.getItem('streamPreviewScraper');
             const title = sessionStorage.getItem('streamPreviewTitle') || 'Preview';
@@ -1928,33 +1957,37 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             // Fetch chapter settings (with inheritance from previous chapter)
             try {
                 const settings = await api.getChapterSettings(mangaId, chapterNum);
-                const hasSettings = settings && (settings.mode || settings.direction || settings.firstPageSingle !== undefined || settings.lastPageSingle !== undefined);
-                
-                if (hasSettings) {
-                    if (settings.mode) state.mode = settings.mode;
-                    if (settings.direction) state.direction = settings.direction;
-                    if (settings.firstPageSingle !== undefined) state.firstPageSingle = settings.firstPageSingle;
-                    if (settings.lastPageSingle !== undefined) state.lastPageSingle = settings.lastPageSingle;
+
+                if (hasChapterSettings(settings)) {
+                    applyChapterSettings(settings);
                 } else {
-                    // No saved settings for this chapter — inherit from nearest chapter
+                    // No saved settings for this chapter — inherit from the
+                    // nearest chapter that has any.
                     try {
                         const downloadedChapters = state.manga.downloadedChapters || [];
                         const sorted = [...downloadedChapters].sort((a, b) => a - b);
                         const currentNum = parseFloat(chapterNum);
                         const currentIdx = sorted.indexOf(currentNum);
-                        
-                        // Try previous chapter first, then next
+
+                        // Walk outward from the current chapter: earlier
+                        // chapters first (you almost always read forward, so
+                        // the chapter before is the one you just configured),
+                        // then later ones. Previously this checked only the
+                        // single adjacent chapter each way and gave up, so one
+                        // unconfigured chapter broke the whole chain.
                         const tryOrder = [];
-                        if (currentIdx > 0) tryOrder.push(sorted[currentIdx - 1]);
-                        if (currentIdx < sorted.length - 1) tryOrder.push(sorted[currentIdx + 1]);
-                        
-                        for (const neighborNum of tryOrder) {
+                        if (currentIdx !== -1) {
+                            for (let i = currentIdx - 1; i >= 0; i--) tryOrder.push(sorted[i]);
+                            for (let i = currentIdx + 1; i < sorted.length; i++) tryOrder.push(sorted[i]);
+                        }
+
+                        // Bounded so a long unconfigured series can't fire
+                        // hundreds of requests on open.
+                        const MAX_LOOKBACK = 12;
+                        for (const neighborNum of tryOrder.slice(0, MAX_LOOKBACK)) {
                             const neighborSettings = await api.getChapterSettings(mangaId, neighborNum);
-                            if (neighborSettings && (neighborSettings.mode || neighborSettings.direction || neighborSettings.firstPageSingle !== undefined || neighborSettings.lastPageSingle !== undefined)) {
-                                if (neighborSettings.mode) state.mode = neighborSettings.mode;
-                                if (neighborSettings.direction) state.direction = neighborSettings.direction;
-                                if (neighborSettings.firstPageSingle !== undefined) state.firstPageSingle = neighborSettings.firstPageSingle;
-                                if (neighborSettings.lastPageSingle !== undefined) state.lastPageSingle = neighborSettings.lastPageSingle;
+                            if (hasChapterSettings(neighborSettings)) {
+                                applyChapterSettings(neighborSettings);
                                 console.log('[Reader] Inherited settings from chapter', neighborNum);
                                 break;
                             }
@@ -2323,6 +2356,27 @@ export async function unmount() {
 /**
  * Save settings to DB
  */
+/** Does this settings payload carry anything worth inheriting? */
+function hasChapterSettings(s) {
+    return !!s && (
+        s.mode !== undefined ||
+        s.direction !== undefined ||
+        s.firstPageSingle !== undefined ||
+        s.lastPageSingle !== undefined ||
+        s.singlePageMode !== undefined
+    );
+}
+
+/** Apply a saved/inherited settings payload onto reader state. */
+function applyChapterSettings(s) {
+    if (!s) return;
+    if (s.mode) state.mode = s.mode;
+    if (s.direction) state.direction = s.direction;
+    if (s.firstPageSingle !== undefined) state.firstPageSingle = s.firstPageSingle;
+    if (s.lastPageSingle !== undefined) state.lastPageSingle = s.lastPageSingle;
+    if (s.singlePageMode !== undefined) state.singlePageMode = s.singlePageMode;
+}
+
 async function saveSettings() {
     if (!state.manga || !state.chapter || state.manga.id === 'gallery' || state.isStreamingMode) return;
 
@@ -2331,7 +2385,11 @@ async function saveSettings() {
             mode: state.mode,
             direction: state.direction,
             firstPageSingle: state.firstPageSingle,
-            lastPageSingle: state.lastPageSingle
+            lastPageSingle: state.lastPageSingle,
+            // Included so the single/double choice carries to the next chapter
+            // like every other reader setting. Without this it was the one
+            // control that reset on every chapter change.
+            singlePageMode: state.singlePageMode
         });
     } catch (e) {
         console.error('Failed to save settings:', e);
