@@ -3,10 +3,10 @@
  * Handles: app shell caching, offline chapter images from IndexedDB, push notifications
  */
 
-// Bumped for multi-user + demo page. This MUST change whenever the
-// shell assets below change, otherwise installed clients keep serving the old
-// cached index.html and icons and never see the new theme.
-const CACHE_NAME = 'manga-reader-v3-multiuser';
+// Bumped for the unhashed-asset caching fix (icons/manifest were stuck
+// cache-first). This MUST change whenever the shell assets below change,
+// otherwise installed clients keep serving the old cached files.
+const CACHE_NAME = 'manga-reader-v4-unhashed-fix';
 
 // Only the navigation entry points are precached.
 //
@@ -92,10 +92,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Hashed static assets: cache-first is safe here, because a content hash
-  // means the URL itself changes whenever the bytes change.
+  // Content-hashed assets (/assets/main-<hash>.js etc.): cache-first is safe,
+  // the URL itself changes when the bytes change.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      cacheFirstWithNetwork(event.request)
+    );
+    return;
+  }
+
+  // Everything else — /icon-192.png, /manifest.json, /favicon.svg, /fonts/* —
+  // is UNHASHED: the URL stays the same when the bytes change. Cache-first
+  // here is what kept installed PWAs showing the old icon after the rebrand.
+  // Network-first so rebrands/deploys actually reach clients.
   event.respondWith(
-    cacheFirstWithNetwork(event.request)
+    networkFirstWithCache(event.request)
   );
 });
 
