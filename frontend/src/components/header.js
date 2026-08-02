@@ -29,7 +29,7 @@ export function renderHeader(viewMode = 'manga') {
             <button class="view-toggle-btn ${viewMode === 'series' ? 'active' : ''}" data-view="series" title="Series view">${icon('book-open', { title: 'Series view' })}</button>
           </div>
           <span class="demo-badge">Demo</span>
-          <a href="/login.html" class="btn btn-secondary" title="Exit the demo">${icon('log-out', { title: 'Exit the demo' })} Exit</a>
+          <a href="/login.html" class="btn btn-secondary" id="demo-exit-btn" title="Exit the demo">${icon('log-out', { title: 'Exit the demo' })} Exit</a>
         </div>
       </div>
     </header>
@@ -128,6 +128,18 @@ export function setupHeaderListeners() {
 
   if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
   if (mobileLogoutBtn) mobileLogoutBtn.addEventListener('click', handleLogout);
+
+  // Demo exit — plain /login.html would bounce straight back into the app,
+  // because the demo token still sits in localStorage and login.js treats
+  // any token as "already authenticated". Clear it first.
+  const demoExitBtn = document.getElementById('demo-exit-btn');
+  if (demoExitBtn) {
+    demoExitBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem('manga_auth_token');
+      window.location.href = '/login.html';
+    });
+  }
 
   // View toggle buttons - switch between manga and series views
   document.querySelectorAll('[data-view]').forEach(btn => {
