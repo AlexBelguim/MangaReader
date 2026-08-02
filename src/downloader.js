@@ -224,21 +224,34 @@ class Downloader {
         const aspect = metadata.width / metadata.height;
 
         if (aspect > 1.2) {
-          // It's a double spread, split it
+          // It's a double spread, split it.
+          //
+          // Page ORDER depends on reading direction. Manga is read
+          // right-to-left, so the RIGHT half is the earlier page; western
+          // comics are the opposite. Always writing left-first (the previous
+          // behaviour) makes every scraped spread read back-to-front in an
+          // RTL reader. See CONFIG.readingDirection.
           const halfWidth = Math.floor(metadata.width / 2);
+          const rtl = CONFIG.readingDirection === 'rtl';
 
-          const leftPath = path.join(chapterDir, `${String(fileIndex).padStart(3, '0')}${ext}`);
-          const rightPath = path.join(chapterDir, `${String(fileIndex + 1).padStart(3, '0')}${ext}`);
+          const firstPath = path.join(chapterDir, `${String(fileIndex).padStart(3, '0')}${ext}`);
+          const secondPath = path.join(chapterDir, `${String(fileIndex + 1).padStart(3, '0')}${ext}`);
 
-          // Left half (Page 1)
+          const leftRegion = { left: 0, top: 0, width: halfWidth, height: metadata.height };
+          const rightRegion = { left: halfWidth, top: 0, width: metadata.width - halfWidth, height: metadata.height };
+
+          // Earlier page
           await sharp(fileBuffer)
-            .extract({ left: 0, top: 0, width: halfWidth, height: metadata.height })
-            .toFile(leftPath);
+            .extract(rtl ? rightRegion : leftRegion)
+            .toFile(firstPath);
 
-          // Right half (Page 2)
+          // Later page
           await sharp(fileBuffer)
-            .extract({ left: halfWidth, top: 0, width: metadata.width - halfWidth, height: metadata.height })
-            .toFile(rightPath);
+            .extract(rtl ? leftRegion : rightRegion)
+            .toFile(secondPath);
+
+          const leftPath = rtl ? secondPath : firstPath;
+          const rightPath = rtl ? firstPath : secondPath;
 
           // Cleanup raw
           await fs.unlink(rawFilePath);

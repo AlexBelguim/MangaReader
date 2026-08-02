@@ -56,7 +56,19 @@ export const CONFIG = {
   retries: {
     maxAttempts: 3,
     delayBetweenRetries: 2000
-  }
+  },
+
+  // Reading direction, used when a downloaded double-page spread is split
+  // into two single pages.
+  //
+  // 'rtl' (manga): the RIGHT half is the earlier page.
+  // 'ltr' (western comics): the LEFT half is the earlier page.
+  //
+  // This must match how the reader pairs pages back into spreads, otherwise
+  // every scraped spread reads back-to-front. The reader defaults to RTL, so
+  // this does too. Only affects NEW downloads — chapters already on disk keep
+  // whatever order they were split with.
+  readingDirection: (process.env.READING_DIRECTION || 'rtl').toLowerCase() === 'ltr' ? 'ltr' : 'rtl'
 };
 
 // Ensure directories exist
