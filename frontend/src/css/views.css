@@ -2189,3 +2189,217 @@ body.reader-active .category-fab {
         width: 100%;
     }
 }
+/* ==================== Admin View ==================== */
+
+.admin-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--space-md);
+}
+
+.admin-header h1 {
+  margin-bottom: var(--space-sm);
+}
+
+.admin-tabs {
+  display: flex;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-md);
+}
+
+.admin-tab {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  font: inherit;
+  border-bottom: 2px solid transparent;
+}
+
+.admin-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.admin-section h2 {
+  margin: var(--space-md) 0 var(--space-sm);
+}
+
+.admin-section h3 {
+  margin: var(--space-md) 0 var(--space-sm);
+}
+
+.admin-users-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-users-table th,
+.admin-users-table td {
+  text-align: left;
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-user-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.admin-user-actions .danger {
+  color: var(--error);
+}
+
+.admin-add-user {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.admin-add-user input,
+.admin-add-user select,
+.admin-users-table select {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font: inherit;
+}
+
+.admin-add-user label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.admin-demo-warning {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--warning);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+}
+
+.admin-demo-filter {
+  width: 100%;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font: inherit;
+  margin-bottom: var(--space-sm);
+}
+
+.admin-demo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.admin-demo-list li label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.admin-demo-list li label span:first-of-type {
+  flex: 1;
+}
+
+/* ==================== Demo Mode ==================== */
+
+.age-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  padding: var(--space-md);
+}
+
+.age-gate-card {
+  max-width: 420px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  text-align: center;
+}
+
+.age-gate-card h1 {
+  margin-bottom: var(--space-sm);
+}
+
+.age-gate-card p {
+  color: var(--text-secondary);
+  margin-bottom: var(--space-md);
+}
+
+.age-gate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.demo-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1500;
+  text-align: center;
+  padding: 6px 12px;
+  background: var(--accent-primary);
+  color: var(--on-fill, #fff);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.demo-badge {
+  background: var(--accent-primary);
+  color: var(--on-fill, #fff);
+  border-radius: var(--radius-md);
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Mutating controls hidden from demo visitors. The API rejects these anyway
+   (403), this just keeps the UI honest. */
+body.demo-mode #schedule-btn,
+body.demo-mode #manage-chapters-btn,
+body.demo-mode #edit-vol-btn,
+body.demo-mode #download-all-btn,
+body.demo-mode #refresh-btn,
+body.demo-mode #quick-check-btn,
+body.demo-mode #scan-folder-btn,
+body.demo-mode #auto-offline-btn,
+body.demo-mode #edit-btn,
+body.demo-mode #add-volume-btn,
+body.demo-mode #stream-add-lib-btn,
+body.demo-mode #favorites-btn,
+body.demo-mode #rotate-btn,
+body.demo-mode #swap-btn,
+body.demo-mode #split-btn,
+body.demo-mode #trophy-btn,
+body.demo-mode .chapter-actions {
+  display: none !important;
+}
+
+/* Leave room for the demo banner */
+body.demo-mode #app {
+  padding-bottom: 28px;
+}

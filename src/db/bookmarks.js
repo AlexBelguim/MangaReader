@@ -113,6 +113,7 @@ export const bookmarkDb = {
             checkDay: b.check_day || null,
             checkTime: b.check_time || null,
             nextCheck: b.next_check || null,
+            isDemo: !!b.is_demo,
             // Counts instead of full arrays
             downloadedCount: downloadedCounts.get(b.id) || 0,
             readCount: readCounts.get(b.id) || 0,

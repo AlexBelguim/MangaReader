@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#14110F">
+
+  <title>Demo - Manga Reader</title>
+
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon-BIRlMyBk.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32-DBTr4K2W.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16-Dn_t_nRS.png">
+
+  <script type="module" crossorigin src="/assets/demo-B7gDQ0_A.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/api-BzEASrxS.js">
+  <link rel="modulepreload" crossorigin href="/assets/router-Bn-1_dtD.js">
+  <link rel="stylesheet" crossorigin href="/assets/api-BaNuoHTP.css">
+  <link rel="stylesheet" crossorigin href="/assets/router-sPqRdNxG.css">
+</head>
+
+<body class="demo-mode">
+  <!-- Age gate: the demo library contains adult content. demo.js wires these
+       buttons and remembers the choice in sessionStorage. -->
+  <div class="age-gate" id="age-gate">
+    <div class="age-gate-card">
+      <h1>Manga Reader — Demo</h1>
+      <p>This demo contains adult content (18+). By entering you confirm that
+        you are of legal age in your jurisdiction.</p>
+      <div class="age-gate-actions">
+        <button class="btn btn-primary" id="age-gate-enter">I am 18 or older — Enter</button>
+        <a class="btn btn-secondary" href="/login.html">Leave</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <div class="loading-screen">
+      <div class="spinner"></div>
+      <p>Loading demo...</p>
+    </div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .catch(err => console.warn('[Demo] SW registration failed:', err));
+      });
+    }
+  </script>
+</body>
+
+</html>

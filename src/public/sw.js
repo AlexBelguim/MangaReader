@@ -3,10 +3,10 @@
  * Handles: app shell caching, offline chapter images from IndexedDB, push notifications
  */
 
-// Bumped for the Ink & Vermillion identity. This MUST change whenever the
+// Bumped for multi-user + demo page. This MUST change whenever the
 // shell assets below change, otherwise installed clients keep serving the old
 // cached index.html and icons and never see the new theme.
-const CACHE_NAME = 'manga-reader-v2-ink';
+const CACHE_NAME = 'manga-reader-v3-multiuser';
 
 // Only the navigation entry points are precached.
 //
@@ -19,7 +19,8 @@ const CACHE_NAME = 'manga-reader-v2-ink';
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/login.html'
+  '/login.html',
+  '/demo.html'
 ];
 
 // ==================== INSTALL ====================

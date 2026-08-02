@@ -6,6 +6,7 @@
 import { api } from './api.js';
 import { socket, SocketEvents } from './socket.js';
 import { router } from './router.js';
+import { setSessionUser } from './session.js';
 
 class App {
     constructor() {
@@ -21,6 +22,17 @@ class App {
 
         // Check authentication
         if (!api.isAuthenticated()) {
+            window.location.href = '/login.html';
+            return;
+        }
+
+        // Load the current user (role + permissions) for role-aware UI.
+        // If the account was deleted or the token is stale, start over.
+        try {
+            const { user } = await api.me();
+            setSessionUser(user);
+        } catch (e) {
+            api.clearToken();
             window.location.href = '/login.html';
             return;
         }

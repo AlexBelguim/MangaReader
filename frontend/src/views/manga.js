@@ -12,6 +12,7 @@ import { showToast } from '../utils/toast.js';
 import { continueReading } from './reader.js';
 import { offlineManager } from '../offline-manager.js';
 import { icon, placeholder, coverImg } from '../icons.js';
+import { session } from '../session.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -1860,9 +1861,10 @@ async function unhideChapter(chapterNum, url) {
  */
 async function loadData(mangaId) {
   try {
+    // Demo visitors get 403 on /api/categories — bookmarks only
     const [manga, categories] = await Promise.all([
       api.getBookmark(mangaId),
-      store.loadCategories()
+      session.isDemo ? Promise.resolve([]) : store.loadCategories()
     ]);
 
     state.manga = manga;

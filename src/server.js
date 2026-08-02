@@ -33,11 +33,13 @@ import readerRouter from './routes/reader.js';
 import downloadsRouter, { queueBackgroundDownload } from './routes/downloads.js';
 import dataRouter from './routes/data.js';
 import scrapersRouter from './routes/scrapers.js';
+import usersRouter from './routes/users.js';
 
 import { queue } from './queue.js';
-import { auth } from './middleware/auth.js';
-import { login } from './controllers/auth_controller.js';
+import { auth, guardPermissions } from './middleware/auth.js';
+import { login, me, demoLogin } from './controllers/auth_controller.js';
 import { runMigrations } from './db/migrations.js';
+import { usersDb } from './db/users.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -285,14 +287,19 @@ queue.registerProcessor('scrape', async (jobData, jobId) => {
 
 // ==================== AUTH & ROUTE MOUNTING ====================
 
-// Public auth endpoint
+// Public auth endpoints
 app.post('/api/auth/login', login);
+app.post('/api/auth/demo', demoLogin);
 
 // Protected routes middleware
 app.use('/api', auth);
+app.use('/api', guardPermissions);
+
+app.get('/api/auth/me', me);
 
 // Mount modular routes
 app.use('/api/admin', adminRouter);
+app.use('/api/users', usersRouter);
 app.use('/api/chapters', chaptersRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/bookmarks', bookmarksRouter);
@@ -583,6 +590,7 @@ async function start() {
   queue.recover();
   await migrateFromJson();
   await runMigrations();
+  usersDb.seedAdminFromEnv();
   await scraperFactory.init();
 
   scheduleAutoCheck();

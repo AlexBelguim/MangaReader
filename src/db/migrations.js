@@ -135,6 +135,39 @@ async function runInCodeMigrations(db, applied) {
           );
         `);
             }
+        },
+        {
+            name: '004_multiuser',
+            run: () => {
+                // Multi-user support: role + per-user permission flags.
+                // role: 'admin' (everything) or 'user' (read + toggles below).
+                try {
+                    db.prepare("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'").run();
+                    console.log('  ✓ Added role column to users');
+                } catch (e) {
+                    // Column likely exists
+                }
+                try {
+                    db.prepare('ALTER TABLE users ADD COLUMN can_download INTEGER DEFAULT 1').run();
+                    console.log('  ✓ Added can_download column to users');
+                } catch (e) {
+                    // Column likely exists
+                }
+                try {
+                    db.prepare('ALTER TABLE users ADD COLUMN can_edit INTEGER DEFAULT 1').run();
+                    console.log('  ✓ Added can_edit column to users');
+                } catch (e) {
+                    // Column likely exists
+                }
+
+                // Marks bookmarks shown on the public read-only demo page
+                try {
+                    db.prepare('ALTER TABLE bookmarks ADD COLUMN is_demo INTEGER DEFAULT 0').run();
+                    console.log('  ✓ Added is_demo column to bookmarks');
+                } catch (e) {
+                    // Column likely exists
+                }
+            }
         }
     ];
 

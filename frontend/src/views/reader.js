@@ -9,6 +9,7 @@ import { router } from '../router.js';
 import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
 import { offlineManager } from '../offline-manager.js';
+import { session } from '../session.js';
 
 // View state
 let state = {
@@ -669,6 +670,8 @@ async function saveCurrentProgress() {
     }
 
     try {
+        // Demo visitors: progress lives only for the session, never saved
+        if (session.isDemo) return;
         await api.updateReadingProgress(
             state.manga.id,
             state.chapter.number,
@@ -2379,6 +2382,9 @@ function applyChapterSettings(s) {
 
 async function saveSettings() {
     if (!state.manga || !state.chapter || state.manga.id === 'gallery' || state.isStreamingMode) return;
+    // Demo visitors can change reader settings for their session (state is
+    // already updated locally by the callers) but nothing is persisted.
+    if (session.isDemo) return;
 
     try {
         await api.updateChapterSettings(state.manga.id, state.chapter.number, {

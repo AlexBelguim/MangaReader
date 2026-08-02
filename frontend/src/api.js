@@ -8,6 +8,13 @@ const TOKEN_KEY = 'manga_auth_token';
 class ApiClient {
     constructor() {
         this.baseUrl = '/api';
+        // What to do when the server says 401. Default: drop the token and go
+        // to the login page. The demo page overrides this to silently re-fetch
+        // a demo token instead.
+        this.onUnauthorized = () => {
+            this.clearToken();
+            window.location.href = '/login.html';
+        };
     }
 
     /**
@@ -68,8 +75,7 @@ class ApiClient {
 
             // Handle auth errors
             if (response.status === 401) {
-                this.clearToken();
-                window.location.href = '/login.html';
+                this.onUnauthorized();
                 throw new Error('Authentication required');
             }
 
@@ -164,6 +170,48 @@ class ApiClient {
     logout() {
         this.clearToken();
         window.location.href = '/login.html';
+    }
+
+    /** Current user info (role + permission flags). */
+    me() {
+        return this.get('/auth/me');
+    }
+
+    /**
+     * Public demo login — no credentials, returns a short-lived read-only
+     * token. Used by demo.html.
+     */
+    async demoLogin() {
+        const response = await fetch('/api/auth/demo', { method: 'POST' });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.token) {
+            throw new Error(data?.error || `Demo unavailable (HTTP ${response.status})`);
+        }
+        this.setToken(data.token);
+        return true;
+    }
+
+    // ==================== USER MANAGEMENT (admin) ====================
+
+    listUsers() {
+        return this.get('/users');
+    }
+
+    createUser({ username, password, role, canDownload, canEdit }) {
+        return this.post('/users', { username, password, role, canDownload, canEdit });
+    }
+
+    updateUser(id, updates) {
+        return this.patch(`/users/${id}`, updates);
+    }
+
+    deleteUser(id) {
+        return this.delete(`/users/${id}`);
+    }
+
+    /** Flag/unflag a bookmark as visible on the public demo page (admin). */
+    toggleDemo(bookmarkId, isDemo) {
+        return this.post(`/bookmarks/${bookmarkId}/demo`, { isDemo });
     }
 
     // ==================== BOOKMARKS ====================

@@ -16,18 +16,54 @@ import {
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
 import { validate, schemas } from '../middleware/validation.js';
+import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../queue.js';
 import { scraperFactory } from '../scrapers/index.js';
 
 const router = express.Router();
+
+/** IDs of bookmarks flagged for the public demo page. */
+const getDemoBookmarkIds = () =>
+    new Set(getDb().prepare('SELECT id FROM bookmarks WHERE is_demo = 1').all().map(r => r.id));
+
+// Demo visitors only ever see flagged bookmarks — block everything else early.
+router.use((req, res, next) => {
+    if (req.user?.role !== 'demo') return next();
+    const match = req.path.match(/^\/([^/]+)/);
+    // Static collection routes ('/', '/artists/all', ...) carry no bookmark id
+    if (!match || match[1] === 'artists' || match[1] === 'categories') return next();
+    if (!getDemoBookmarkIds().has(match[1])) {
+        return res.status(403).json({ error: 'Not available in the demo', demo: true });
+    }
+    next();
+});
 
 // ==================== BOOKMARK CRUD ====================
 
 // Get all bookmarks (lightweight summary for library grid)
 router.get('/', async (req, res) => {
     try {
-        const bookmarks = bookmarkDb.getAllSummary();
+        let bookmarks = bookmarkDb.getAllSummary();
+        if (req.user?.role === 'demo') {
+            const demoIds = getDemoBookmarkIds();
+            bookmarks = bookmarks.filter(b => demoIds.has(b.id));
+        }
         res.json(bookmarks);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Flag/unflag a bookmark as visible on the public demo page (admin only)
+router.post('/:id/demo', requireAdmin, (req, res) => {
+    try {
+        const db = getDb();
+        const result = db.prepare('UPDATE bookmarks SET is_demo = ? WHERE id = ?')
+            .run(req.body?.isDemo ? 1 : 0, req.params.id);
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
+        res.json({ success: true, isDemo: !!req.body?.isDemo });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

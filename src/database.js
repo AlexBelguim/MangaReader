@@ -9,6 +9,7 @@ export { favoritesDb } from './db/favorites.js';
 export { readerSettingsDb } from './db/reader-settings.js';
 export { artistDb } from './db/artists.js';
 export { seriesDb } from './db/series.js';
+export { usersDb } from './db/users.js';
 
 // Default export for backward compatibility
 import { initDatabase, getDb, closeDatabase } from './db/connection.js';
@@ -21,6 +22,7 @@ import { favoritesDb } from './db/favorites.js';
 import { readerSettingsDb } from './db/reader-settings.js';
 import { artistDb } from './db/artists.js';
 import { seriesDb } from './db/series.js';
+import { usersDb } from './db/users.js';
 
 export default {
   initDatabase,
@@ -34,5 +36,6 @@ export default {
   favoritesDb,
   readerSettingsDb,
   artistDb,
-  seriesDb
+  seriesDb,
+  usersDb
 };

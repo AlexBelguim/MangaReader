@@ -7,11 +7,54 @@ import { store } from '../store.js';
 import { handleScan } from '../utils/scan.js';
 import { icon } from '../icons.js';
 import { logoLockup } from '../brand.js';
+import { session } from '../session.js';
 
 /**
  * Render the header
+ *
+ * Nav is role-aware:
+ *  - demo:  logo + DEMO badge + exit link only (no scrapers/queue/add/scan)
+ *  - user:  everything except Admin; Scan needs canDownload, Add needs canEdit
+ *  - admin: everything + Admin
  */
 export function renderHeader(viewMode = 'manga') {
+  if (session.isDemo) {
+    return `
+    <header>
+      <div class="header-content">
+        <a href="#/" class="logo">${logoLockup()}</a>
+        <div class="header-actions">
+          <span class="demo-badge">Demo</span>
+          <a href="/login.html" class="btn btn-secondary" title="Exit the demo">${icon('log-out', { title: 'Exit the demo' })} Exit</a>
+        </div>
+      </div>
+    </header>
+  `;
+  }
+
+  const adminLink = session.isAdmin
+    ? `<a href="#/admin" class="btn btn-secondary" title="Admin">${icon('wrench', { title: 'Admin' })}</a>`
+    : '';
+  const adminLinkMobile = session.isAdmin
+    ? `<a href="#/admin" class="mobile-menu-item">${icon('wrench')} Admin</a>`
+    : '';
+  const scanBtn = session.canDownload
+    ? `<button class="btn btn-secondary" id="scan-btn">${icon('folder')} Scan Folder</button>`
+    : '';
+  const scanBtnMobile = session.canDownload
+    ? `<button class="mobile-menu-item" id="mobile-scan-btn">${icon('folder')} Scan Folder</button>`
+    : '';
+  const addBtn = session.canEdit
+    ? (viewMode === 'series'
+      ? `<button class="btn btn-primary" id="add-series-btn">${icon('plus')} Add Series</button>`
+      : `<button class="btn btn-primary" id="add-manga-btn">${icon('plus')} Add Manga</button>`)
+    : '';
+  const addBtnMobile = session.canEdit
+    ? (viewMode === 'series'
+      ? `<button class="mobile-menu-item primary" id="mobile-add-series-btn">${icon('plus')} Add Series</button>`
+      : `<button class="mobile-menu-item primary" id="mobile-add-btn">${icon('plus')} Add Manga</button>`)
+    : '';
+
   return `
     <header>
       <div class="header-content">
@@ -23,14 +66,11 @@ export function renderHeader(viewMode = 'manga') {
           </div>
           <button class="btn btn-secondary" id="favorites-btn">${icon('star')} Favorites</button>
           <a href="#/queue" class="btn btn-secondary" id="queue-nav-btn" title="Task Queue">${icon('list-checks')} Queue</a>
-          <button class="btn btn-secondary" id="scan-btn">${icon('folder')} Scan Folder</button>
-          ${viewMode === 'series'
-      ? `<button class="btn btn-primary" id="add-series-btn">${icon('plus')} Add Series</button>`
-      : `<button class="btn btn-primary" id="add-manga-btn">${icon('plus')} Add Manga</button>`
-    }
+          ${scanBtn}
+          ${addBtn}
           <button class="btn btn-secondary" id="logout-btn" title="Log out">${icon('log-out', { title: 'Log out' })}</button>
           <a href="#/scrapers" class="btn btn-secondary" title="Search Scrapers">${icon('search', { title: 'Search Scrapers' })}</a>
-          <!-- <a href="#/admin" class="btn btn-secondary" title="Admin">${icon('wrench')}</a> -->
+          ${adminLink}
           <!-- <a href="#/settings" class="btn btn-secondary" title="Settings">${icon('settings')}</a> -->
         </div>
         <button class="hamburger-btn mobile-only" id="hamburger-btn">
@@ -44,14 +84,11 @@ export function renderHeader(viewMode = 'manga') {
         </div>
         <button class="mobile-menu-item" id="mobile-favorites-btn">${icon('star')} Favorites</button>
         <a href="#/queue" class="mobile-menu-item">${icon('list-checks')} Task Queue</a>
-        <button class="mobile-menu-item" id="mobile-scan-btn">${icon('folder')} Scan Folder</button>
-        ${viewMode === 'series'
-      ? `<button class="mobile-menu-item primary" id="mobile-add-series-btn">${icon('plus')} Add Series</button>`
-      : `<button class="mobile-menu-item primary" id="mobile-add-btn">${icon('plus')} Add Manga</button>`
-    }
+        ${scanBtnMobile}
+        ${addBtnMobile}
         <button class="mobile-menu-item" id="mobile-logout-btn">${icon('log-out')} Logout</button>
         <a href="#/scrapers" class="mobile-menu-item">${icon('search')} Scrapers</a>
-        <!-- <a href="#/admin" class="mobile-menu-item">${icon('wrench')} Admin</a> -->
+        ${adminLinkMobile}
         <!-- <a href="#/settings" class="mobile-menu-item">${icon('settings')} Settings</a> -->
       </div>
     </header>

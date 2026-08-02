@@ -11,6 +11,7 @@ import { router } from '../router.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { icon, placeholder, coverImg } from '../icons.js';
+import { session } from '../session.js';
 
 // View state
 let state = {
@@ -871,6 +872,17 @@ function filterByCategory(category) {
  */
 async function loadData(force = false) {
   try {
+    // Demo visitors can only read the bookmark list — categories, series and
+    // favorites are 403 for the demo role, so don't ask for them.
+    if (session.isDemo) {
+      state.bookmarks = await store.loadBookmarks(force);
+      state.categories = [];
+      state.series = [];
+      state.favorites = { favorites: {}, listOrder: [] };
+      state.loading = false;
+      return;
+    }
+
     const [bookmarks, categories, series, favorites] = await Promise.all([
       store.loadBookmarks(force),
       store.loadCategories(force),

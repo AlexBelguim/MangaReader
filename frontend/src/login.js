@@ -17,11 +17,11 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
 
+        const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value;
 
         try {
-            // Username defaults to 'admin' - single user system
-            await api.login('admin', password);
+            await api.login(username, password);
             window.location.href = '/';
         } catch (error) {
             errorMsg.textContent = error.message;
