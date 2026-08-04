@@ -1,5 +1,5 @@
 // Re-export barrel — all consumers continue importing from here unchanged.
-export { initDatabase, getDb, generateId, closeDatabase } from './db/connection.js';
+export { initDatabase, getDb, generateId, closeDatabase, getPrimaryAdminId } from './db/connection.js';
 export { migrateFromJson } from './db/migrate-json.js';
 export { bookmarkDb } from './db/bookmarks.js';
 export { categoryDb } from './db/categories.js';

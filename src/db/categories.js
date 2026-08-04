@@ -14,9 +14,25 @@ export const categoryDb = {
         }
     },
 
-    getAll() {
+    getAll(userId = null) {
         const db = getDb();
         this._ensureNsfwColumn();
+        // Scoped: categories linked to the caller's bookmarks, plus unused
+        // ones (they carry no association and are safe to show/manage).
+        if (userId !== null && userId !== undefined) {
+            return db.prepare(`
+                SELECT name, COALESCE(is_nsfw, 0) as is_nsfw FROM categories c
+                WHERE EXISTS (
+                    SELECT 1 FROM bookmark_categories bc
+                    JOIN bookmarks b ON b.id = bc.bookmark_id
+                    WHERE bc.category_id = c.id AND b.user_id = ?
+                ) OR NOT EXISTS (
+                    SELECT 1 FROM bookmark_categories bc2 WHERE bc2.category_id = c.id
+                )
+                ORDER BY name
+            `).all(userId)
+                .map(r => ({ name: r.name, isNsfw: !!r.is_nsfw }));
+        }
         return db.prepare('SELECT name, COALESCE(is_nsfw, 0) as is_nsfw FROM categories ORDER BY name').all()
             .map(r => ({ name: r.name, isNsfw: !!r.is_nsfw }));
     },

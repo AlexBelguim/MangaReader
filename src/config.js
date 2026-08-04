@@ -33,6 +33,14 @@ export const CONFIG = {
   // FlareSolverr - Cloudflare bypass proxy
   flareSolverrUrl: process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1',
 
+  // AniList OAuth2 (reading-progress sync). Register a client at
+  // https://anilist.co/settings/developer with redirect URI
+  // http://<host>:<port>/api/anilist/callback
+  anilist: {
+    clientId: process.env.ANILIST_CLIENT_ID || '',
+    clientSecret: process.env.ANILIST_CLIENT_SECRET || ''
+  },
+
   puppeteer: {
     headless: true, // Always headless in production typically
     executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,

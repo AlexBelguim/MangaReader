@@ -15,12 +15,13 @@ class PersistentQueue {
     }
 
     // Add a job to the queue
-    add(type, data) {
+    // userId: owning user for per-user visibility (null = system job, admins only)
+    add(type, data, userId = null) {
         const db = getDb();
         const result = db.prepare(`
-      INSERT INTO job_queue (type, data, status, created_at)
-      VALUES (?, ?, 'pending', ?)
-    `).run(type, JSON.stringify(data), new Date().toISOString());
+      INSERT INTO job_queue (type, data, status, created_at, user_id)
+      VALUES (?, ?, 'pending', ?, ?)
+    `).run(type, JSON.stringify(data), new Date().toISOString(), userId);
 
         logger.info(`[Queue] Added job ${result.lastInsertRowid} (${type})`);
 
@@ -37,15 +38,15 @@ class PersistentQueue {
     // This is for operations that need immediate results
     // Uses a lock to ensure only one task runs at a time
     async addAndWait(task) {
-        const { type, description, execute, mangaId, mangaTitle } = task;
+        const { type, description, execute, mangaId, mangaTitle, userId = null } = task;
 
         // Insert into DB as pending initially
         const db = getDb();
         const data = { description, mangaId, mangaTitle };
         const insertResult = db.prepare(`
-            INSERT INTO job_queue (type, data, status, created_at)
-            VALUES (?, ?, 'pending', ?)
-        `).run(type || 'inline', JSON.stringify(data), new Date().toISOString());
+            INSERT INTO job_queue (type, data, status, created_at, user_id)
+            VALUES (?, ?, 'pending', ?, ?)
+        `).run(type || 'inline', JSON.stringify(data), new Date().toISOString(), userId);
 
         const jobId = insertResult.lastInsertRowid;
 
@@ -96,15 +97,15 @@ class PersistentQueue {
     // Add a job to run asynchronously in the background (for downloads)
     // Still serializes with other inline tasks via the same lock
     addAsync(task) {
-        const { type, description, execute, mangaId, mangaTitle } = task;
+        const { type, description, execute, mangaId, mangaTitle, userId = null } = task;
 
         // Insert into DB as pending
         const db = getDb();
         const data = { description, mangaId, mangaTitle };
         const insertResult = db.prepare(`
-            INSERT INTO job_queue (type, data, status, created_at)
-            VALUES (?, ?, 'pending', ?)
-        `).run(type || 'async', JSON.stringify(data), new Date().toISOString());
+            INSERT INTO job_queue (type, data, status, created_at, user_id)
+            VALUES (?, ?, 'pending', ?, ?)
+        `).run(type || 'async', JSON.stringify(data), new Date().toISOString(), userId);
 
         const jobId = insertResult.lastInsertRowid;
 
@@ -161,9 +162,13 @@ class PersistentQueue {
     }
 
     // Get job status
-    getJob(id) {
+    // Non-admin callers only see their own jobs (null = not found/forbidden)
+    getJob(id, userId = null, isAdmin = false) {
         const db = getDb();
         const job = db.prepare('SELECT * FROM job_queue WHERE id = ?').get(id);
+        if (job && !isAdmin && userId !== null && userId !== undefined && job.user_id !== userId) {
+            return null;
+        }
         if (job) {
             job.data = JSON.parse(job.data);
             if (job.result) job.result = JSON.parse(job.result);
@@ -171,14 +176,17 @@ class PersistentQueue {
         return job;
     }
 
-    // Get all active jobs
-    getActiveJobs() {
+    // Get all active jobs. Admins see everything (incl. NULL/system jobs);
+    // non-admins only see their own.
+    getActiveJobs(userId = null, isAdmin = false) {
         const db = getDb();
+        const scoped = !isAdmin && userId !== null && userId !== undefined;
         const jobs = db.prepare(`
       SELECT * FROM job_queue 
-      WHERE status IN ('pending', 'processing') 
+      WHERE status IN ('pending', 'processing')
+      ${scoped ? 'AND user_id = ?' : ''}
       ORDER BY created_at ASC
-    `).all();
+    `).all(...(scoped ? [userId] : []));
 
         return jobs.map(job => ({
             ...job,
@@ -187,15 +195,18 @@ class PersistentQueue {
         }));
     }
 
-    // Get historical jobs
-    getHistory(limit = 100) {
+    // Get historical jobs. Admins see everything (incl. NULL/system jobs);
+    // non-admins only see their own.
+    getHistory(limit = 100, userId = null, isAdmin = false) {
         const db = getDb();
+        const scoped = !isAdmin && userId !== null && userId !== undefined;
         const jobs = db.prepare(`
       SELECT * FROM job_queue 
-      WHERE status IN ('completed', 'failed', 'cancelled') 
+      WHERE status IN ('completed', 'failed', 'cancelled')
+      ${scoped ? 'AND user_id = ?' : ''}
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(limit);
+    `).all(...(scoped ? [userId, limit] : [limit]));
 
         return jobs.map(job => ({
             ...job,
@@ -204,13 +215,15 @@ class PersistentQueue {
         }));
     }
 
-    // Clear historical jobs
-    clearHistory() {
+    // Clear historical jobs. Admins clear everything; non-admins only their own.
+    clearHistory(userId = null, isAdmin = false) {
         const db = getDb();
+        const scoped = !isAdmin && userId !== null && userId !== undefined;
         const result = db.prepare(`
             DELETE FROM job_queue 
             WHERE status IN ('completed', 'failed', 'cancelled')
-        `).run();
+            ${scoped ? 'AND user_id = ?' : ''}
+        `).run(...(scoped ? [userId] : []));
         logger.info(`[Queue] Cleared ${result.changes} historical jobs`);
         return result.changes;
     }

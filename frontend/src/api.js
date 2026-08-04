@@ -548,6 +548,44 @@ class ApiClient {
         return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNumber}/read`, { isRead });
     }
 
+    // ==================== ANILIST ====================
+
+    anilistStatus() {
+        return this.get('/anilist/status');
+    }
+
+    anilistAuthUrl() {
+        return this.get('/anilist/auth');
+    }
+
+    anilistDisconnect() {
+        return this.post('/anilist/disconnect');
+    }
+
+    anilistSearch(query) {
+        return this.get(`/anilist/search?q=${encodeURIComponent(query)}`);
+    }
+
+    anilistGetMapping(bookmarkId) {
+        return this.get(`/anilist/map/${bookmarkId}`);
+    }
+
+    anilistMap(bookmarkId, anilistId) {
+        return this.post('/anilist/map', { bookmarkId, anilistId });
+    }
+
+    anilistSetSyncEnabled(bookmarkId, syncEnabled) {
+        return this.patch(`/anilist/map/${bookmarkId}`, { syncEnabled });
+    }
+
+    anilistUnmap(bookmarkId) {
+        return this.delete(`/anilist/map/${bookmarkId}`);
+    }
+
+    anilistPull() {
+        return this.post('/anilist/pull');
+    }
+
     // ==================== TROPHY PAGES ====================
 
     getTrophyPages(mangaId, chapterNum) {

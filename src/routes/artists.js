@@ -10,7 +10,7 @@ const router = express.Router();
 // Get all artists
 router.get('/', (req, res) => {
     try {
-        const artists = artistDb.getAll();
+        const artists = artistDb.getAll(req.user.id);
         res.json({ artists });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -20,7 +20,7 @@ router.get('/', (req, res) => {
 // Get bookmarks by artist
 router.get('/:id/bookmarks', (req, res) => {
     try {
-        const bookmarks = artistDb.getBookmarksByArtist(parseInt(req.params.id));
+        const bookmarks = artistDb.getBookmarksByArtist(parseInt(req.params.id), req.user.id);
         res.json({ bookmarks });
     } catch (error) {
         res.status(500).json({ error: error.message });

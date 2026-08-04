@@ -3,13 +3,17 @@
  */
 
 import express from 'express';
-import { seriesDb, getDb } from '../database.js';
+import { seriesDb, bookmarkDb, getDb, getPrimaryAdminId } from '../database.js';
 
 const router = express.Router();
 
 /** IDs of bookmarks flagged for the public demo page. */
 const getDemoBookmarkIds = () =>
     new Set(getDb().prepare('SELECT id FROM bookmarks WHERE is_demo = 1').all().map(r => r.id));
+
+// The library owner this request acts on — demo tokens read the primary
+// admin's library (post-filtered to demo-flagged bookmarks below).
+const ownerId = (req) => req.user?.role === 'demo' ? getPrimaryAdminId() : req.user.id;
 
 /**
  * Strip a series (as returned by seriesDb.getById) down to its demo-flagged
@@ -42,12 +46,13 @@ router.get('/', (req, res) => {
         // entry count or cover leaks.
         if (req.user?.role === 'demo') {
             const demoIds = getDemoBookmarkIds();
-            const scoped = seriesDb.getAll()
-                .map(s => scopeSeriesForDemo(seriesDb.getById(s.id), demoIds))
+            const adminId = getPrimaryAdminId();
+            const scoped = seriesDb.getAll(adminId)
+                .map(s => scopeSeriesForDemo(seriesDb.getById(s.id, adminId), demoIds))
                 .filter(Boolean);
             return res.json(scoped);
         }
-        const series = seriesDb.getAll();
+        const series = seriesDb.getAll(req.user.id);
         res.json(series);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -61,7 +66,7 @@ router.get('/available-bookmarks', (req, res) => {
         return res.status(403).json({ error: 'Not available in the demo', demo: true });
     }
     try {
-        const bookmarks = seriesDb.getBookmarksNotInSeries();
+        const bookmarks = seriesDb.getBookmarksNotInSeries(req.user.id);
         res.json(bookmarks);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -85,7 +90,7 @@ router.post('/', (req, res) => {
 // Get a series by ID
 router.get('/:id', (req, res) => {
     try {
-        let series = seriesDb.getById(req.params.id);
+        let series = seriesDb.getById(req.params.id, ownerId(req));
         if (!series) {
             return res.status(404).json({ error: 'Series not found' });
         }
@@ -128,6 +133,11 @@ router.post('/:id/entries', (req, res) => {
         const { bookmarkId, order } = req.body;
         if (!bookmarkId) {
             return res.status(400).json({ error: 'Bookmark ID required' });
+        }
+        // Only the owner's own bookmarks may be linked into a series
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
         }
         const entry = seriesDb.addEntry(req.params.id, bookmarkId, order);
         res.json(entry);

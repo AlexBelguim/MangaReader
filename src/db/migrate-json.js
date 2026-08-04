@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs-extra';
 import { CONFIG } from '../config.js';
-import { getDb } from './connection.js';
+import { getDb, getPrimaryAdminId } from './connection.js';
 
 export async function migrateFromJson() {
     const db = getDb();
@@ -15,6 +15,16 @@ export async function migrateFromJson() {
 
     console.log('📦 Migrating from JSON files...');
 
+    // Bookmarks, read state, favorites and trophy pages are all per-user now;
+    // legacy JSON data is attributed to the primary admin. Without any user
+    // there is nobody to attach it to, so the whole legacy migration is
+    // skipped (the tables require user_id NOT NULL).
+    const readStateUserId = getPrimaryAdminId();
+    if (readStateUserId === null) {
+        console.log('  ⚠ No users exist yet — skipping legacy JSON migration (bookmarks/read state/favorites/trophies are per-user)');
+        return;
+    }
+
     // Migrate bookmarks.json
     const bookmarksFile = CONFIG.bookmarksFile;
     if (await fs.pathExists(bookmarksFile)) {
@@ -26,13 +36,13 @@ export async function migrateFromJson() {
             insertCategory.run(cat);
         }
 
-        // Migrate bookmarks
+        // Migrate bookmarks (attributed to the primary admin)
         const insertBookmark = db.prepare(`
       INSERT OR REPLACE INTO bookmarks 
-      (id, url, title, alias, website, source, cover, local_cover, description, 
+      (id, user_id, url, title, alias, website, source, cover, local_cover, description, 
        total_chapters, unique_chapters, last_checked, last_read_chapter, last_read_at,
        created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
         const insertChapter = db.prepare(`
@@ -45,8 +55,8 @@ export async function migrateFromJson() {
         const insertDownloaded = db.prepare('INSERT OR IGNORE INTO downloaded_chapters (bookmark_id, chapter_number) VALUES (?, ?)');
         const insertDownloadedVersion = db.prepare('INSERT OR IGNORE INTO downloaded_versions (bookmark_id, chapter_number, url) VALUES (?, ?, ?)');
         const insertDeleted = db.prepare('INSERT OR IGNORE INTO deleted_chapter_urls (bookmark_id, url) VALUES (?, ?)');
-        const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number) VALUES (?, ?)');
-        const insertProgress = db.prepare('INSERT OR REPLACE INTO reading_progress (bookmark_id, chapter_number, page, total_pages, last_read) VALUES (?, ?, ?, ?, ?)');
+        const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)');
+        const insertProgress = db.prepare('INSERT OR REPLACE INTO reading_progress (bookmark_id, chapter_number, user_id, page, total_pages, last_read) VALUES (?, ?, ?, ?, ?, ?)');
         const insertNewDup = db.prepare('INSERT OR IGNORE INTO new_duplicates (bookmark_id, chapter_number) VALUES (?, ?)');
         const insertDupChapter = db.prepare('INSERT OR REPLACE INTO duplicate_chapters (bookmark_id, chapter_number, count) VALUES (?, ?, ?)');
         const insertUpdatedChapter = db.prepare('INSERT OR REPLACE INTO updated_chapters (bookmark_id, chapter_number, old_url, new_urls, type, detected_at) VALUES (?, ?, ?, ?, ?, ?)');
@@ -58,6 +68,7 @@ export async function migrateFromJson() {
             // Insert bookmark
             insertBookmark.run(
                 bookmark.id,
+                readStateUserId,
                 bookmark.url,
                 bookmark.title,
                 bookmark.alias,
@@ -110,15 +121,19 @@ export async function migrateFromJson() {
                 insertDeleted.run(bookmark.id, url);
             }
 
-            // Insert read chapters
-            for (const num of (bookmark.readChapters || [])) {
-                insertRead.run(bookmark.id, num);
+            // Insert read chapters (attributed to the primary admin)
+            if (readStateUserId !== null) {
+                for (const num of (bookmark.readChapters || [])) {
+                    insertRead.run(bookmark.id, num, readStateUserId);
+                }
             }
 
-            // Insert reading progress
-            const progress = bookmark.readingProgress || {};
-            for (const [chNum, prog] of Object.entries(progress)) {
-                insertProgress.run(bookmark.id, parseFloat(chNum), prog.page, prog.totalPages, prog.lastRead);
+            // Insert reading progress (attributed to the primary admin)
+            if (readStateUserId !== null) {
+                const progress = bookmark.readingProgress || {};
+                for (const [chNum, prog] of Object.entries(progress)) {
+                    insertProgress.run(bookmark.id, parseFloat(chNum), readStateUserId, prog.page, prog.totalPages, prog.lastRead);
+                }
             }
 
             // Insert new duplicates
@@ -164,26 +179,27 @@ export async function migrateFromJson() {
     if (await fs.pathExists(favoritesFile)) {
         const data = await fs.readJson(favoritesFile);
 
-        const insertList = db.prepare('INSERT OR IGNORE INTO favorite_lists (name, sort_order) VALUES (?, ?)');
-        const getListId = db.prepare('SELECT id FROM favorite_lists WHERE name = ?');
+        const insertList = db.prepare('INSERT OR IGNORE INTO favorite_lists (user_id, name, sort_order) VALUES (?, ?, ?)');
+        const getListId = db.prepare('SELECT id FROM favorite_lists WHERE name = ? AND user_id = ?');
         const insertFavorite = db.prepare(`
       INSERT INTO favorites 
-      (list_id, bookmark_id, manga_title, chapter_number, chapter_url, page_indices, 
+      (list_id, bookmark_id, user_id, manga_title, chapter_number, chapter_url, page_indices, 
        display_mode, display_side, image_paths, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
         const listOrder = data.listOrder || Object.keys(data.favorites || {});
         let sortOrder = 0;
 
         for (const listName of listOrder) {
-            insertList.run(listName, sortOrder++);
-            const list = getListId.get(listName);
+            insertList.run(readStateUserId, listName, sortOrder++);
+            const list = getListId.get(listName, readStateUserId);
 
             for (const fav of (data.favorites?.[listName] || [])) {
                 insertFavorite.run(
                     list.id,
                     fav.mangaId,
+                    readStateUserId,
                     fav.mangaTitle,
                     fav.chapterNum,
                     fav.chapterUrl,
@@ -233,8 +249,8 @@ export async function migrateFromJson() {
 
         const insertTrophy = db.prepare(`
       INSERT OR REPLACE INTO trophy_pages 
-      (bookmark_id, chapter_number, page_index, is_single, pages) 
-      VALUES (?, ?, ?, ?, ?)
+      (bookmark_id, chapter_number, page_index, user_id, is_single, pages) 
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
         let count = 0;
@@ -245,6 +261,7 @@ export async function migrateFromJson() {
                         mangaId,
                         parseFloat(chNum),
                         parseInt(pageIdx),
+                        readStateUserId,
                         info.isSingle ? 1 : 0,
                         JSON.stringify(info.pages || [])
                     );

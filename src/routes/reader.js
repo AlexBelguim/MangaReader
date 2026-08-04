@@ -18,7 +18,7 @@ const router = express.Router();
 router.get('/:id/chapters/:chapterNumber/images', async (req, res) => {
     try {
         const { id, chapterNumber } = req.params;
-        const bookmark = await bookmarkDb.getById(id);
+        const bookmark = await bookmarkDb.getById(id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNumber), bookmark.alias);
@@ -43,7 +43,7 @@ router.get('/:id/chapters/:chapterNumber/images', async (req, res) => {
 router.get('/:id/chapters/:chapterNumber/images/:filename', async (req, res) => {
     try {
         const { id, chapterNumber, filename } = req.params;
-        const bookmark = await bookmarkDb.getById(id);
+        const bookmark = await bookmarkDb.getById(id, req.user.id);
         if (!bookmark) return res.status(404).send('Not Found');
 
         const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNumber), bookmark.alias);
@@ -66,7 +66,7 @@ router.get('/:id/chapters/:chapterNumber/images/:filename', async (req, res) => 
 // Get chapter images for reader
 router.get('/:id/chapters/:num/reader-images', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -94,7 +94,7 @@ router.get('/:id/chapters/:num/reader-images', async (req, res) => {
 // Get version details for a chapter
 router.get('/:id/chapters/:num/versions', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -133,7 +133,7 @@ router.get('/:id/chapters/:num/versions', async (req, res) => {
 // Delete a downloaded chapter
 router.delete('/:id/chapters/:num/download', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -158,7 +158,7 @@ router.delete('/:id/chapters/:num/download', async (req, res) => {
 // Get next chapter's first image (for link mode)
 router.get('/:id/chapters/:num/next-preview', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const currentChapter = parseFloat(req.params.num);

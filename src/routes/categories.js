@@ -10,7 +10,7 @@ const router = express.Router();
 // Get all categories (returns objects with { name, isNsfw })
 router.get('/', (req, res) => {
     try {
-        const categories = categoryDb.getAll();
+        const categories = categoryDb.getAll(req.user.id);
         res.json({ categories });
     } catch (error) {
         res.status(500).json({ error: error.message });

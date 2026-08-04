@@ -33,6 +33,7 @@ import readerRouter from './routes/reader.js';
 import downloadsRouter, { queueBackgroundDownload } from './routes/downloads.js';
 import dataRouter from './routes/data.js';
 import scrapersRouter from './routes/scrapers.js';
+import anilistRouter from './routes/anilist.js';
 import usersRouter from './routes/users.js';
 
 import { queue } from './queue.js';
@@ -45,6 +46,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// Trust the first reverse-proxy hop so req.protocol reflects X-Forwarded-Proto
+// (needed to rebuild the correct https:// AniList OAuth redirect URI).
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
 const io = new SocketServer(httpServer, {
   cors: {
@@ -231,6 +235,12 @@ queue.registerProcessor('delete-manga-folder', async (jobData) => {
   logger.info(`[Queue-Worker] Processing delete-manga-folder for ${title}`);
 
   try {
+    // Folders are shared across users who bookmark the same manga — never
+    // delete while another bookmark still resolves to this directory.
+    if (downloader.isMangaDirShared(title, alias)) {
+      logger.info(`[Queue-Worker] Skipped delete-manga-folder for ${title}: folder still used by another bookmark`);
+      return { success: true, skipped: true };
+    }
     const mangaDir = downloader.getMangaDir(title, alias);
     if (await fs.pathExists(mangaDir)) {
       await fs.remove(mangaDir);
@@ -243,8 +253,12 @@ queue.registerProcessor('delete-manga-folder', async (jobData) => {
 });
 
 queue.registerProcessor('scrape', async (jobData, jobId) => {
-  const { url } = jobData;
+  const { url, userId } = jobData;
   logger.info(`[Queue-Worker] Processing scrape job ${jobId} for ${url}`);
+
+  if (!userId) {
+    throw new Error('Scrape job has no userId — bookmarks are per-user, re-queue the job');
+  }
 
   const scraper = scraperFactory.getScraperForUrl(url);
   if (!scraper) {
@@ -254,7 +268,7 @@ queue.registerProcessor('scrape', async (jobData, jobId) => {
   const mangaInfo = await scraper.getMangaInfo(url);
   logger.info(`[Queue-Worker] Scraped info: ${mangaInfo.title}`);
 
-  const result = await bookmarkDb.add(mangaInfo);
+  const result = await bookmarkDb.add(mangaInfo, userId);
 
   if (result.success && mangaInfo.cover) {
     try {
@@ -271,7 +285,7 @@ queue.registerProcessor('scrape', async (jobData, jobId) => {
         await bookmarkDb.update(result.bookmark.id, {
           localCover: coverResult.path,
           remoteCover: coverUrl
-        });
+        }, userId);
       }
     } catch (err) {
       logger.warn(`[Queue-Worker] Failed to download cover: ${err.message}`);
@@ -312,26 +326,27 @@ app.use('/api/series', seriesRouter);
 app.use('/api', downloadsRouter);             // Mixed prefixes: /api/bookmarks/:id/download, /api/downloads/*, /api/check-all, etc.
 app.use('/api', dataRouter);                  // /api/chapter-settings, /api/trophy-pages, /api/reader-settings, /api/push/*
 app.use('/api/scrapers', scrapersRouter);     // /api/scrapers/search, /api/scrapers/list
+app.use('/api/anilist', anilistRouter);       // /api/anilist/auth, /callback, /search, /map, /pull
 
 // Queue Status
 app.get('/api/queue/status', (req, res) => {
   res.json({
-    active: queue.getActiveJobs().length
+    active: queue.getActiveJobs(req.user.id, req.user.role === 'admin').length
   });
 });
 
 app.get('/api/queue/tasks', (req, res) => {
-  res.json(queue.getActiveJobs());
+  res.json(queue.getActiveJobs(req.user.id, req.user.role === 'admin'));
 });
 
 app.get('/api/queue/history', (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
-  res.json(queue.getHistory(limit));
+  res.json(queue.getHistory(limit, req.user.id, req.user.role === 'admin'));
 });
 
 app.delete('/api/queue/history', (req, res) => {
   try {
-    const deletedCount = queue.clearHistory();
+    const deletedCount = queue.clearHistory(req.user.id, req.user.role === 'admin');
     res.json({ success: true, count: deletedCount });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -342,16 +357,22 @@ app.delete('/api/queue/history', (req, res) => {
 app.get('/api/auto-check/status', (req, res) => {
   try {
     const db = getDb();
-    const enabled = db.prepare('SELECT COUNT(*) as count FROM bookmarks WHERE auto_check = 1').get();
-    const total = db.prepare('SELECT COUNT(*) as count FROM bookmarks').get();
+    // Admins see the global picture; other roles only their own manga.
+    // lastRun/nextRun are scheduler globals and stay unscoped.
+    const isAdmin = req.user.role === 'admin';
+    const scope = isAdmin ? '' : 'AND user_id = ?';
+    const params = isAdmin ? [] : [req.user.id];
+
+    const enabled = db.prepare(`SELECT COUNT(*) as count FROM bookmarks WHERE auto_check = 1 ${scope}`).get(...params);
+    const total = db.prepare(`SELECT COUNT(*) as count FROM bookmarks ${isAdmin ? '' : 'WHERE user_id = ?'}`).get(...params);
 
     // Get per-manga scheduled tasks
     const scheduledManga = db.prepare(`
       SELECT id, title, alias, auto_check, check_schedule, check_day, check_time, next_check
       FROM bookmarks 
-      WHERE auto_check = 1
+      WHERE auto_check = 1 ${scope}
       ORDER BY next_check ASC
-    `).all();
+    `).all(...params);
 
     const schedules = scheduledManga.map(m => ({
       id: m.id,
@@ -375,9 +396,10 @@ app.get('/api/auto-check/status', (req, res) => {
 });
 
 // Manual trigger for auto-check
+// Admins trigger a global run; other roles only check their own manga.
 app.post('/api/auto-check/run', async (req, res) => {
   try {
-    const result = await runAutoCheck(true);
+    const result = await runAutoCheck(true, req.user.role === 'admin' ? null : req.user.id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -410,16 +432,19 @@ async function sendPushNotifications(mangaTitle, chapterCount) {
   }
 }
 
-async function runAutoCheck(forceAll = false) {
+// userId scopes the run to one user's bookmarks (manual non-admin trigger);
+// null = global run (scheduler, admin trigger).
+async function runAutoCheck(forceAll = false, userId = null) {
   console.log('[Auto-Check] Starting scheduled check...');
   global.lastAutoCheckRun = new Date().toISOString();
 
   const db = getDb();
   const autoCheckEnabled = db.prepare(`
-    SELECT id, url, title, alias, website, check_schedule, check_day, check_time, next_check
+    SELECT id, user_id, url, title, alias, website, check_schedule, check_day, check_time, next_check
     FROM bookmarks 
     WHERE auto_check = 1 AND website IS NOT NULL AND website != 'Local'
-  `).all();
+    ${userId !== null ? 'AND user_id = ?' : ''}
+  `).all(...(userId !== null ? [userId] : []));
 
   // Filter to only manga whose next_check is due (or has no schedule set = use default)
   const now = new Date();
@@ -458,7 +483,7 @@ async function runAutoCheck(forceAll = false) {
         continue;
       }
 
-      const bookmark = bookmarkDb.getById(manga.id);
+      const bookmark = bookmarkDb.getById(manga.id, manga.user_id);
       const knownUrls = (bookmark.chapters || []).map(c => c.url);
 
       const updateResult = await scraper.quickCheckUpdates(manga.url, knownUrls);
@@ -510,7 +535,7 @@ async function runAutoCheck(forceAll = false) {
             chapters: mergedChapters,
             totalChapters: mergedChapters.length,
             uniqueChapters: uniqueChapterNumbers.size
-          });
+          }, manga.user_id);
         }
 
         // Only count truly new chapter numbers for notifications
@@ -523,7 +548,7 @@ async function runAutoCheck(forceAll = false) {
         if (bookmark.autoDownload && trulyNewChapters.length > 0) {
           try {
             console.log(`[Auto-Check] Queueing background download for ${trulyNewChapters.length} chapters of ${manga.title}`);
-            const taskId = queueBackgroundDownload(bookmark, trulyNewChapters.map(c => ({ number: c.number, url: c.url })));
+            const taskId = queueBackgroundDownload(bookmark, trulyNewChapters.map(c => ({ number: c.number, url: c.url })), manga.user_id);
             if (taskId) {
               results.downloaded += trulyNewChapters.length;
             }
@@ -539,6 +564,7 @@ async function runAutoCheck(forceAll = false) {
           description: `Auto-check: ${manga.alias || manga.title}`,
           mangaId: manga.id,
           mangaTitle: manga.alias || manga.title,
+          userId: manga.user_id,
           execute: async () => {
             return {
               updated: false,

@@ -17,13 +17,20 @@ const router = express.Router();
 const taskQueue = queue;
 const activeDownloads = new Map();
 
+// Per-user download-task visibility: admins see/control all tasks, other
+// roles only their own. Tasks without a userId stamp (created before this
+// scoping existed — in-memory only, gone on restart) are admin-only.
+function canAccessTask(task, user) {
+    return user.role === 'admin' || task.userId === user.id;
+}
+
 // ==================== DOWNLOAD & CHECK ====================
 
 // Delete downloaded version from disk
 router.post('/bookmarks/:id/delete-download', async (req, res) => {
     try {
         const { chapterNumber, url } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -57,7 +64,7 @@ router.post('/bookmarks/:id/delete-download', async (req, res) => {
                 trophyDb.deleteForChapter(bookmark.id, chapterNumber);
             }
 
-            await bookmarkDb.update(req.params.id, { downloadedChapters, downloadedVersions });
+            await bookmarkDb.update(req.params.id, { downloadedChapters, downloadedVersions }, req.user.id);
             res.json({ success: true, message: 'Downloaded version deleted' });
         } else {
             res.status(400).json({ error: result.message });
@@ -70,7 +77,7 @@ router.post('/bookmarks/:id/delete-download', async (req, res) => {
 // Check for updates on a single manga
 router.post('/bookmarks/:id/check', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const scraper = scraperFactory.getScraperForUrl(bookmark.url);
@@ -81,6 +88,7 @@ router.post('/bookmarks/:id/check', async (req, res) => {
             description: `Checking updates for ${bookmark.alias || bookmark.title}`,
             mangaId: bookmark.id,
             mangaTitle: bookmark.alias || bookmark.title,
+            userId: req.user.id,
             execute: async () => {
                 const mangaInfo = await scraper.getMangaInfo(bookmark.url);
 
@@ -105,16 +113,16 @@ router.post('/bookmarks/:id/check', async (req, res) => {
                     chapters: mangaInfo.chapters,
                     cover: mangaInfo.cover,
                     duplicateChapters: mangaInfo.duplicateChapters
-                });
+                }, req.user.id);
 
                 if (mangaInfo.cover && mangaInfo.cover !== bookmark.remoteCover) {
                     const coverResult = await downloader.downloadCover(bookmark.title, mangaInfo.cover, bookmark.alias);
                     if (coverResult && coverResult.isNew) {
-                        await bookmarkDb.update(bookmark.id, { localCover: coverResult.path, remoteCover: mangaInfo.cover });
+                        await bookmarkDb.update(bookmark.id, { localCover: coverResult.path, remoteCover: mangaInfo.cover }, req.user.id);
                     }
                 }
 
-                const updated = await bookmarkDb.getById(bookmark.id);
+                const updated = await bookmarkDb.getById(bookmark.id, req.user.id);
                 return { ...updated, newChaptersCount: newChapters };
             }
         });
@@ -130,7 +138,7 @@ router.post('/bookmarks/:id/quick-check', async (req, res) => {
     try {
         if (!scraperFactory.browser) await scraperFactory.init();
 
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const scraper = scraperFactory.getScraperForUrl(bookmark.url);
@@ -145,6 +153,7 @@ router.post('/bookmarks/:id/quick-check', async (req, res) => {
             description: `Quick check for ${bookmark.alias || bookmark.title}`,
             mangaId: bookmark.id,
             mangaTitle: bookmark.alias || bookmark.title,
+            userId: req.user.id,
             execute: async () => {
                 const knownChapterUrls = (bookmark.chapters || []).map(c => c.url);
                 const checkResult = await scraper.quickCheckUpdates(bookmark.url, knownChapterUrls);
@@ -185,7 +194,7 @@ router.post('/bookmarks/:id/quick-check', async (req, res) => {
                             chapters: mergedChapters,
                             totalChapters: mergedChapters.length,
                             uniqueChapters: uniqueChapterNumbers.size
-                        });
+                        }, req.user.id);
                     }
                 }
 
@@ -209,12 +218,13 @@ router.post('/bookmarks/:id/quick-check', async (req, res) => {
 // Check all bookmarks for updates
 router.post('/check-all', async (req, res) => {
     try {
-        const bookmarks = bookmarkDb.getAll();
+        const bookmarks = bookmarkDb.getAll(req.user.id);
         const allSettings = chapterSettingsDb.getAll();
 
         const results = await taskQueue.addAndWait({
             type: 'scrape',
             description: `Checking all ${bookmarks.length} manga for updates`,
+            userId: req.user.id,
             execute: async () => {
                 const results = [];
                 for (const bookmark of bookmarks) {
@@ -249,7 +259,7 @@ router.post('/check-all', async (req, res) => {
                             chapters: mangaInfo.chapters,
                             cover: mangaInfo.cover,
                             duplicateChapters: mangaInfo.duplicateChapters
-                        });
+                        }, req.user.id);
 
                         results.push({
                             id: bookmark.id, title: bookmark.alias || bookmark.title,
@@ -278,7 +288,7 @@ router.post('/bookmarks/:id/download', async (req, res) => {
         }
 
         const { chapters, all, versionMode = 'single' } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const deletedUrls = new Set(bookmark.deletedChapterUrls || []);
@@ -378,7 +388,8 @@ router.post('/bookmarks/:id/download', async (req, res) => {
         activeDownloads.set(taskId, {
             bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
             total: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number), // Keep numbers for UI tracking easily
-            completedChapters: [], completed: 0, current: null, status: 'queued', errors: []
+            completedChapters: [], completed: 0, current: null, status: 'queued', errors: [],
+            userId: req.user.id
         });
 
         taskQueue.addAsync({
@@ -386,6 +397,7 @@ router.post('/bookmarks/:id/download', async (req, res) => {
             description: `Download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
             mangaId: bookmark.id,
             mangaTitle: bookmark.alias || bookmark.title,
+            userId: req.user.id,
             execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
         });
 
@@ -399,7 +411,7 @@ router.post('/bookmarks/:id/download', async (req, res) => {
 router.post('/bookmarks/:id/download-version', async (req, res) => {
     try {
         const { chapterNumber, url } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapter = bookmark.chapters.find(c => c.number === chapterNumber && c.url === url);
@@ -412,7 +424,8 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
         activeDownloads.set(taskId, {
             bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
             total: 1, chapters: [chapterNumber], completedChapters: [],
-            completed: 0, current: chapterNumber, status: 'queued', errors: [], versionUrl: url
+            completed: 0, current: chapterNumber, status: 'queued', errors: [], versionUrl: url,
+            userId: req.user.id
         });
 
         taskQueue.addAsync({
@@ -420,6 +433,7 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
             description: `Download chapter ${chapterNumber} (version) for ${bookmark.alias || bookmark.title}`,
             mangaId: bookmark.id,
             mangaTitle: bookmark.alias || bookmark.title,
+            userId: req.user.id,
             execute: async () => {
                 const task = activeDownloads.get(taskId);
                 if (!task) return;
@@ -450,15 +464,17 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
 // Get download progress
 router.get('/downloads/:taskId', (req, res) => {
     const task = activeDownloads.get(req.params.taskId);
-    if (!task) return res.status(404).json({ error: 'Download task not found' });
+    if (!task || !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
     res.json(task);
 });
 
-// Get all active downloads
+// Get all active downloads (per user; admins see all)
 router.get('/downloads', (req, res) => {
     try {
         const downloads = {};
-        activeDownloads.forEach((task, taskId) => { downloads[taskId] = task; });
+        activeDownloads.forEach((task, taskId) => {
+            if (canAccessTask(task, req.user)) downloads[taskId] = task;
+        });
         res.json(downloads);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -468,7 +484,7 @@ router.get('/downloads', (req, res) => {
 // Pause download
 router.post('/downloads/:taskId/pause', (req, res) => {
     const task = activeDownloads.get(req.params.taskId);
-    if (!task) return res.status(404).json({ error: 'Download task not found' });
+    if (!task || !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
     task.status = 'paused';
     res.json({ success: true, status: 'paused' });
 });
@@ -476,7 +492,7 @@ router.post('/downloads/:taskId/pause', (req, res) => {
 // Resume download
 router.post('/downloads/:taskId/resume', (req, res) => {
     const task = activeDownloads.get(req.params.taskId);
-    if (!task) return res.status(404).json({ error: 'Download task not found' });
+    if (!task || !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
     task.status = 'running';
     res.json({ success: true, status: 'running' });
 });
@@ -484,6 +500,7 @@ router.post('/downloads/:taskId/resume', (req, res) => {
 // Cancel download
 router.post('/downloads/:taskId/cancel', (req, res) => {
     const task = activeDownloads.get(req.params.taskId);
+    if (task && !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
     if (task) task.status = 'cancelled';
     activeDownloads.delete(req.params.taskId);
     res.json({ success: true, status: 'cancelled' });
@@ -491,6 +508,8 @@ router.post('/downloads/:taskId/cancel', (req, res) => {
 
 // Cancel download (DELETE)
 router.delete('/downloads/:taskId', (req, res) => {
+    const task = activeDownloads.get(req.params.taskId);
+    if (task && !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
     activeDownloads.delete(req.params.taskId);
     res.json({ message: 'Download cancelled' });
 });
@@ -580,7 +599,7 @@ router.post('/scan-local', async (req, res) => {
         if (!await fs.pathExists(downloadsDir)) return res.json({ found: [] });
 
         const entries = await fs.readdir(downloadsDir, { withFileTypes: true });
-        const bookmarks = await bookmarkDb.getAll();
+        const bookmarks = await bookmarkDb.getAll(req.user.id);
         const newFolders = [];
 
         for (const entry of entries) {
@@ -623,7 +642,7 @@ router.post('/scan-local', async (req, res) => {
 router.get('/local-manga', async (req, res) => {
     try {
         const mangaFolders = await downloader.scanAllMangaFolders();
-        const bookmarks = await bookmarkDb.getAll();
+        const bookmarks = await bookmarkDb.getAll(req.user.id);
 
         const localOnly = mangaFolders.filter(folder => {
             return !bookmarks.some(b =>
@@ -659,7 +678,7 @@ router.post('/local-manga', async (req, res) => {
             url: `local://${folderName}`, title: folderName, alias: null,
             website: 'Local', chapters: chapterList, totalChapters: chapterList.length,
             downloadedChapters: chapters.map(c => c.number), cover: null
-        });
+        }, req.user.id);
 
         res.json({ success: true, bookmark, cbzFiles: cbzFiles.length });
     } catch (error) {
@@ -670,7 +689,7 @@ router.post('/local-manga', async (req, res) => {
 // Scan local downloads to sync with bookmark
 router.post('/bookmarks/:id/scan-local', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         let scanTitle = bookmark.title;
@@ -777,7 +796,7 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
             updateData.uniqueChapters = new Set(chapters.map(c => c.number).filter(n => !excludedSet.has(n))).size;
         }
 
-        await bookmarkDb.update(bookmark.id, updateData);
+        await bookmarkDb.update(bookmark.id, updateData, req.user.id);
 
         res.json({
             success: true, localChapters, count: localNumbers.length,
@@ -795,7 +814,7 @@ router.post('/bookmarks/:id/scan-local', async (req, res) => {
 // Get CBZ files for a manga
 router.get('/bookmarks/:id/cbz', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
         const cbzFiles = await downloader.findCbzFiles(bookmark.title, bookmark.alias);
         res.json(cbzFiles);
@@ -807,7 +826,7 @@ router.get('/bookmarks/:id/cbz', async (req, res) => {
 // Extract a single CBZ file
 router.post('/bookmarks/:id/cbz/extract', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const { cbzPath, chapterNumber, deleteAfter, forceReExtract, renameCbz } = req.body;
@@ -843,7 +862,7 @@ router.post('/bookmarks/:id/cbz/extract', async (req, res) => {
             await bookmarkDb.update(bookmark.id, {
                 downloadedChapters: Array.from(downloadedChapters).sort((a, b) => a - b),
                 chapters, totalChapters: chapters.length
-            });
+            }, req.user.id);
         }
 
         res.json(result);
@@ -855,7 +874,7 @@ router.post('/bookmarks/:id/cbz/extract', async (req, res) => {
 // Extract all CBZ files for a manga
 router.post('/bookmarks/:id/cbz/extract-all', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const { deleteAfter, forceReExtract, renameCbz } = req.body;
@@ -885,7 +904,7 @@ router.post('/bookmarks/:id/cbz/extract-all', async (req, res) => {
         await bookmarkDb.update(bookmark.id, {
             downloadedChapters: Array.from(downloadedChapters).sort((a, b) => a - b),
             chapters, totalChapters: chapters.length
-        });
+        }, req.user.id);
 
         res.json(results);
     } catch (error) {
@@ -896,7 +915,7 @@ router.post('/bookmarks/:id/cbz/extract-all', async (req, res) => {
 // Get images from manga folder for cover selection
 router.get('/bookmarks/:id/folder-images', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -953,14 +972,16 @@ router.get('/bookmarks/:id/folder-images', async (req, res) => {
 export default router;
 
 // Export helper for background auto-downloads
-export function queueBackgroundDownload(bookmark, chaptersToDownload) {
+// userId: bookmark owner, for per-user queue visibility (null = system job)
+export function queueBackgroundDownload(bookmark, chaptersToDownload, userId = null) {
     if (!chaptersToDownload || chaptersToDownload.length === 0) return null;
     
     const taskId = `${bookmark.id}-auto-${Date.now()}`;
     activeDownloads.set(taskId, {
         bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
         total: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number),
-        completedChapters: [], completed: 0, current: null, status: 'queued', errors: []
+        completedChapters: [], completed: 0, current: null, status: 'queued', errors: [],
+        userId
     });
 
     taskQueue.addAsync({
@@ -968,6 +989,7 @@ export function queueBackgroundDownload(bookmark, chaptersToDownload) {
         description: `Auto-download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
         mangaId: bookmark.id,
         mangaTitle: bookmark.alias || bookmark.title,
+        userId,
         execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
     });
 

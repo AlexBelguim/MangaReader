@@ -20,7 +20,7 @@ router.post('/:bookmarkId/:chapterNumber/lock', async (req, res) => {
         const { bookmarkId, chapterNumber } = req.params;
         const chapterNum = parseFloat(chapterNumber);
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -71,7 +71,7 @@ router.post('/:bookmarkId/:chapterNumber/unlock', async (req, res) => {
         const { bookmarkId, chapterNumber } = req.params;
         const chapterNum = parseFloat(chapterNumber);
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -122,6 +122,11 @@ router.get('/:bookmarkId/:chapterNumber/lock-status', (req, res) => {
         const { bookmarkId, chapterNumber } = req.params;
         const chapterNum = parseFloat(chapterNumber);
 
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
+
         const db = getDb();
         const chapter = db.prepare(
             'SELECT locked, in_volume_id FROM chapters WHERE bookmark_id = ? AND number = ?'
@@ -153,7 +158,7 @@ router.post('/:bookmarkId/hide-version', async (req, res) => {
         const { bookmarkId } = req.params;
         const { chapterNumber, url } = req.body;
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -245,7 +250,7 @@ router.post('/:bookmarkId/unhide-version', async (req, res) => {
         const { bookmarkId } = req.params;
         const { chapterNumber, url } = req.body;
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -279,6 +284,11 @@ router.post('/:bookmarkId/unhide-version', async (req, res) => {
 router.get('/:bookmarkId/protected', (req, res) => {
     try {
         const { bookmarkId } = req.params;
+
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
 
         const db = getDb();
 
@@ -318,7 +328,7 @@ router.post('/:bookmarkId/bulk-lock', async (req, res) => {
             return res.status(400).json({ error: 'chapterNumbers array required' });
         }
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -384,7 +394,7 @@ router.post('/:bookmarkId/:chapterNumber/settings', async (req, res) => {
         const settings = req.body;
         const chapterNum = parseFloat(chapterNumber);
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -430,7 +440,7 @@ router.delete('/', async (req, res) => {
             return res.status(400).json({ error: 'Missing required parameters' });
         }
 
-        const bookmark = bookmarkDb.getById(bookmarkId);
+        const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }

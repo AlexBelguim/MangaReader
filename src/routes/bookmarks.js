@@ -11,7 +11,8 @@ import {
     artistDb,
     seriesDb,
     chapterSettingsDb,
-    getDb
+    getDb,
+    getPrimaryAdminId
 } from '../database.js';
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
@@ -19,12 +20,18 @@ import { validate, schemas } from '../middleware/validation.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../queue.js';
 import { scraperFactory } from '../scrapers/index.js';
+import { anilistService } from '../services/anilistService.js';
 
 const router = express.Router();
 
 /** IDs of bookmarks flagged for the public demo page. */
 const getDemoBookmarkIds = () =>
     new Set(getDb().prepare('SELECT id FROM bookmarks WHERE is_demo = 1').all().map(r => r.id));
+
+// The library owner this request acts on. Demo tokens (id 0, no users row)
+// read the primary admin's library — narrowed to demo-flagged bookmarks by
+// the middleware below — while everyone else acts on their own.
+const ownerId = (req) => req.user?.role === 'demo' ? getPrimaryAdminId() : req.user.id;
 
 // Demo visitors only ever see flagged bookmarks — block everything else early.
 router.use((req, res, next) => {
@@ -43,7 +50,7 @@ router.use((req, res, next) => {
 // Get all bookmarks (lightweight summary for library grid)
 router.get('/', async (req, res) => {
     try {
-        let bookmarks = bookmarkDb.getAllSummary();
+        let bookmarks = bookmarkDb.getAllSummary(ownerId(req));
         if (req.user?.role === 'demo') {
             const demoIds = getDemoBookmarkIds();
             bookmarks = bookmarks.filter(b => demoIds.has(b.id));
@@ -58,8 +65,8 @@ router.get('/', async (req, res) => {
 router.post('/:id/demo', requireAdmin, (req, res) => {
     try {
         const db = getDb();
-        const result = db.prepare('UPDATE bookmarks SET is_demo = ? WHERE id = ?')
-            .run(req.body?.isDemo ? 1 : 0, req.params.id);
+        const result = db.prepare('UPDATE bookmarks SET is_demo = ? WHERE id = ? AND user_id = ?')
+            .run(req.body?.isDemo ? 1 : 0, req.params.id, req.user.id);
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -69,22 +76,34 @@ router.post('/:id/demo', requireAdmin, (req, res) => {
     }
 });
 
-// Get all unique artists
+// Get all unique artists (only those linked to the caller's bookmarks)
 router.get('/artists/all', (req, res) => {
     try {
         const db = getDb();
-        const artists = db.prepare('SELECT DISTINCT name FROM artists ORDER BY name').all();
+        const artists = db.prepare(`
+            SELECT DISTINCT a.name FROM artists a
+            JOIN bookmark_artists ba ON ba.artist_id = a.id
+            JOIN bookmarks b ON b.id = ba.bookmark_id
+            WHERE b.user_id = ?
+            ORDER BY a.name
+        `).all(ownerId(req));
         res.json(artists.map(a => a.name));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Get all unique categories
+// Get all unique categories (only those linked to the caller's bookmarks)
 router.get('/categories/all', (req, res) => {
     try {
         const db = getDb();
-        const categories = db.prepare('SELECT DISTINCT name FROM categories ORDER BY name').all();
+        const categories = db.prepare(`
+            SELECT DISTINCT c.name FROM categories c
+            JOIN bookmark_categories bc ON bc.category_id = c.id
+            JOIN bookmarks b ON b.id = bc.bookmark_id
+            WHERE b.user_id = ?
+            ORDER BY c.name
+        `).all(ownerId(req));
         res.json(categories.map(c => c.name));
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -95,7 +114,7 @@ router.get('/categories/all', (req, res) => {
 // Get single bookmark
 router.get('/:id', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -128,7 +147,7 @@ router.get('/:id', async (req, res) => {
 // Get paginated chapters for a bookmark
 router.get('/:id/chapters', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -196,7 +215,7 @@ router.post('/', validate(schemas.addBookmark), async (req, res) => {
             });
         }
 
-        const job = queue.add('scrape', { url });
+        const job = queue.add('scrape', { url, userId: req.user.id }, req.user.id);
 
         res.json({
             success: true,
@@ -217,7 +236,7 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
         const { alias: rawAlias, readChapters, tags, localCover } = req.body;
         const bookmarkId = req.params.id;
 
-        const currentBookmark = bookmarkDb.getById(bookmarkId);
+        const currentBookmark = bookmarkDb.getById(bookmarkId, req.user.id);
         if (!currentBookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -225,16 +244,16 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
         // Handle tags update
         if (tags !== undefined) {
             const tagsJson = tags ? JSON.stringify(tags) : null;
-            bookmarkDb.update(bookmarkId, { tags: tagsJson });
+            bookmarkDb.update(bookmarkId, { tags: tagsJson }, req.user.id);
         }
 
         // Handle localCover update (don't affect alias)
         if (localCover !== undefined) {
-            bookmarkDb.update(bookmarkId, { localCover });
+            bookmarkDb.update(bookmarkId, { localCover }, req.user.id);
         }
 
         if (readChapters !== undefined && rawAlias === undefined && tags === undefined && localCover === undefined) {
-            const result = bookmarkDb.update(bookmarkId, { readChapters });
+            const result = bookmarkDb.update(bookmarkId, { readChapters }, req.user.id);
             return res.json(result);
         }
 
@@ -253,7 +272,7 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
         const newAlias = alias;
 
         // Always update alias even if it hasn't changed (to ensure it's saved)
-        const result = bookmarkDb.update(bookmarkId, { alias });
+        const result = bookmarkDb.update(bookmarkId, { alias }, req.user.id);
 
         if (oldAlias !== newAlias) {
             console.log(`[Alias] Alias changed, attempting folder rename...`);
@@ -278,7 +297,7 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
                     newFolderName
                 );
                 console.log(`[Rename] Updating localCover: ${currentBookmark.localCover} -> ${newLocalCover}`);
-                bookmarkDb.update(bookmarkId, { localCover: newLocalCover });
+                bookmarkDb.update(bookmarkId, { localCover: newLocalCover }, req.user.id);
                 return res.json({ ...result, folderRenamed: true });
             }
         }
@@ -293,7 +312,7 @@ router.patch('/:id', validate(schemas.renameBookmark), async (req, res) => {
 // Hide all non-downloaded versions
 router.post('/:id/hide-undownloaded-versions', async (req, res) => {
     try {
-        const bookmark = bookmarkDb.getById(req.params.id);
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -330,21 +349,23 @@ router.post('/:id/hide-undownloaded-versions', async (req, res) => {
 // Delete bookmark
 router.delete('/:id', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
 
         const deleteFolder = req.query.deleteFolder === 'true';
 
-        if (deleteFolder) {
+        // Only delete the on-disk folder when no OTHER bookmark (any user)
+        // resolves to it — folders are shared by design.
+        if (deleteFolder && !downloader.isMangaDirShared(bookmark.title, bookmark.alias, bookmark.id)) {
             queue.add('delete-manga-folder', {
                 title: bookmark.title,
                 alias: bookmark.alias
-            });
+            }, req.user.id);
         }
 
-        const result = bookmarkDb.remove(req.params.id);
+        const result = bookmarkDb.remove(req.params.id, req.user.id);
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -356,7 +377,7 @@ router.post('/:id/migrate-source', async (req, res) => {
         const { newUrl } = req.body;
         if (!newUrl) return res.status(400).json({ error: 'New URL is required' });
 
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const scraper = scraperFactory.getScraperForUrl(newUrl);
@@ -441,7 +462,7 @@ router.post('/:id/migrate-source', async (req, res) => {
         console.log(`[Migrate Source] ${bookmark.alias || bookmark.title}: ${bookmark.url} -> ${newUrl}`);
         console.log(`[Migrate Source] Converted ${migratedCount} downloaded versions to local, removed ${removedStale} stale old-source rows`);
 
-        const updated = await bookmarkDb.getById(bookmark.id);
+        const updated = await bookmarkDb.getById(bookmark.id, req.user.id);
         res.json({ success: true, bookmark: updated, migratedChapters: migratedCount, removedStaleChapters: removedStale });
     } catch (error) {
         console.error('[Migrate Source] Error:', error);
@@ -454,6 +475,10 @@ router.post('/:id/migrate-source', async (req, res) => {
 // Set categories for a bookmark
 router.post('/:id/categories', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { categories } = req.body;
         const result = await bookmarkDb.setBookmarkCategories(req.params.id, categories || []);
         res.json(result);
@@ -467,6 +492,10 @@ router.post('/:id/categories', async (req, res) => {
 // Get artists for a bookmark
 router.get('/:id/artists', (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, ownerId(req));
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const artists = artistDb.getForBookmark(req.params.id);
         res.json({ artists });
     } catch (error) {
@@ -477,6 +506,10 @@ router.get('/:id/artists', (req, res) => {
 // Set artists for a bookmark
 router.post('/:id/artists', (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { artists } = req.body;
         artistDb.setForBookmark(req.params.id, artists || []);
         res.json({ success: true });
@@ -488,6 +521,10 @@ router.post('/:id/artists', (req, res) => {
 // Add artist to bookmark
 router.post('/:id/artists/add', (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { name } = req.body;
         if (!name || !name.trim()) {
             return res.status(400).json({ error: 'Artist name required' });
@@ -502,6 +539,10 @@ router.post('/:id/artists/add', (req, res) => {
 // Remove artist from bookmark
 router.delete('/:id/artists/:artistId', (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         artistDb.removeFromBookmark(req.params.id, parseInt(req.params.artistId));
         res.json({ success: true });
     } catch (error) {
@@ -514,6 +555,10 @@ router.delete('/:id/artists/:artistId', (req, res) => {
 // Get series for a bookmark
 router.get('/:id/series', (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, ownerId(req));
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const series = seriesDb.getSeriesForBookmark(req.params.id);
         res.json(series);
     } catch (error) {
@@ -527,7 +572,7 @@ router.get('/:id/series', (req, res) => {
 router.post('/:id/hide-version', async (req, res) => {
     try {
         const { chapterNumber, url } = req.body;
-        const bookmark = bookmarkDb.getById(req.params.id);
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -572,7 +617,7 @@ router.post('/:id/hide-version', async (req, res) => {
 router.post('/:id/unhide-version', async (req, res) => {
     try {
         const { chapterNumber, url } = req.body;
-        const bookmark = bookmarkDb.getById(req.params.id);
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -592,7 +637,7 @@ router.post('/:id/unhide-version', async (req, res) => {
 // Get hidden versions for a chapter
 router.get('/:id/hidden-versions/:chapterNumber', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         const chapterNum = parseFloat(req.params.chapterNumber);
 
         if (!bookmark) {
@@ -616,7 +661,7 @@ router.get('/:id/hidden-versions/:chapterNumber', async (req, res) => {
 router.post('/:id/remove-chapter-entry', async (req, res) => {
     try {
         const { chapterNumber } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -642,7 +687,7 @@ router.post('/:id/remove-chapter-entry', async (req, res) => {
             readingProgress: updatedProgress,
             deletedChapterUrls: updatedDeletedUrls,
             totalChapters: new Set(updatedChapters.map(c => c.number)).size
-        });
+        }, req.user.id);
 
         res.json({ success: true });
     } catch (error) {
@@ -654,7 +699,7 @@ router.post('/:id/remove-chapter-entry', async (req, res) => {
 router.post('/:id/exclude-chapter', async (req, res) => {
     try {
         const { chapterNumber } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -671,7 +716,7 @@ router.post('/:id/exclude-chapter', async (req, res) => {
         await bookmarkDb.update(bookmark.id, {
             downloadedChapters: updatedDownloaded,
             downloadedVersions: updatedVersions
-        });
+        }, req.user.id);
 
         bookmarkDb.excludeChapter(bookmark.id, chapterNum);
 
@@ -685,7 +730,7 @@ router.post('/:id/exclude-chapter', async (req, res) => {
 router.post('/:id/unexclude-chapter', async (req, res) => {
     try {
         const { chapterNumber } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -703,7 +748,7 @@ router.post('/:id/unexclude-chapter', async (req, res) => {
 // Get excluded chapters
 router.get('/:id/excluded-chapters', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -720,7 +765,7 @@ router.get('/:id/excluded-chapters', async (req, res) => {
 // Manually add a chapter
 router.post('/:id/chapters', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) return res.status(404).send('Not found');
 
         const { number, url, title } = req.body;
@@ -739,7 +784,7 @@ router.post('/:id/chapters', async (req, res) => {
         if (!exists) {
             const chapters = [...bookmark.chapters, newChapter];
             chapters.sort((a, b) => b.number - a.number);
-            await bookmarkDb.update(req.params.id, { chapters });
+            await bookmarkDb.update(req.params.id, { chapters }, req.user.id);
             res.json({ success: true, chapter: newChapter });
         } else {
             res.json({ success: false, message: 'Chapter already exists' });
@@ -753,7 +798,7 @@ router.post('/:id/chapters', async (req, res) => {
 router.delete('/:id/chapters', async (req, res) => {
     try {
         const { chapterNumber, url } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
 
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
@@ -767,7 +812,7 @@ router.delete('/:id/chapters', async (req, res) => {
             chapterNumber: chapterNumber,
             alias: bookmark.alias,
             url: url
-        });
+        }, req.user.id);
 
         const downloadedVersions = { ...(bookmark.downloadedVersions || {}) };
         const numKey = String(chapterNumber);
@@ -810,7 +855,7 @@ router.delete('/:id/chapters', async (req, res) => {
             duplicateChapters: updatedDuplicates,
             downloadedVersions,
             downloadedChapters
-        });
+        }, req.user.id);
 
         res.json({ success: true, message: 'Chapter version removed' });
     } catch (error) {
@@ -823,14 +868,21 @@ router.delete('/:id/chapters', async (req, res) => {
 // Update reading progress
 router.post('/:id/reading-progress', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { chapter, page, totalPages } = req.body;
         const result = await bookmarkDb.updateReadingProgress(
+            req.user.id,
             req.params.id,
             parseFloat(chapter),
             page,
             totalPages
         );
         res.json(result);
+        // Fire-and-forget: mirror progress to AniList if connected/mapped
+        anilistService.pushProgress(req.user.id, req.params.id).catch(() => {});
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -839,13 +891,20 @@ router.post('/:id/reading-progress', async (req, res) => {
 // Mark chapter as read/unread
 router.post('/:id/chapters/:num/read', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { isRead } = req.body;
         const result = await bookmarkDb.markChapterRead(
+            req.user.id,
             req.params.id,
             parseFloat(req.params.num),
             isRead !== false
         );
         res.json(result);
+        // Fire-and-forget: mirror progress to AniList if connected/mapped
+        anilistService.pushProgress(req.user.id, req.params.id).catch(() => {});
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -854,11 +913,18 @@ router.post('/:id/chapters/:num/read', async (req, res) => {
 // Mark all chapters below as read
 router.post('/:id/chapters/:num/read-below', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const result = await bookmarkDb.markChaptersReadBelow(
+            req.user.id,
             req.params.id,
             parseFloat(req.params.num)
         );
         res.json(result);
+        // Fire-and-forget: mirror progress to AniList if connected/mapped
+        anilistService.pushProgress(req.user.id, req.params.id).catch(() => {});
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -869,7 +935,7 @@ router.post('/:id/chapters/:num/read-below', async (req, res) => {
 // Get all covers for a manga
 router.get('/:id/covers', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -896,7 +962,7 @@ router.get('/:id/covers', async (req, res) => {
 // Serve a specific cover image
 router.get('/:id/covers/:filename', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -937,7 +1003,7 @@ router.get('/:id/covers/:filename', async (req, res) => {
 // Set active cover
 router.post('/:id/covers/:filename/activate', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -947,7 +1013,7 @@ router.post('/:id/covers/:filename/activate', async (req, res) => {
 
         const coverDir = downloader.getCoverDir(bookmark.title, bookmark.alias);
         const newCoverPath = path.join(coverDir, filename);
-        await bookmarkDb.update(bookmark.id, { localCover: newCoverPath });
+        await bookmarkDb.update(bookmark.id, { localCover: newCoverPath }, req.user.id);
 
         res.json({ success: true, message: 'Cover activated' });
     } catch (error) {
@@ -958,7 +1024,7 @@ router.post('/:id/covers/:filename/activate', async (req, res) => {
 // Set first image of first chapter as cover
 router.post('/:id/covers/from-chapter', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -992,7 +1058,7 @@ router.post('/:id/covers/from-chapter', async (req, res) => {
         await fs.copy(firstImagePath, coverPath);
 
         await downloader.setActiveCover(bookmark.title, coverFilename, bookmark.alias);
-        await bookmarkDb.update(bookmark.id, { localCover: coverPath });
+        await bookmarkDb.update(bookmark.id, { localCover: coverPath }, req.user.id);
 
         res.json({ success: true, coverPath: `/api/bookmarks/${bookmark.id}/covers/${encodeURIComponent(coverFilename)}` });
     } catch (error) {
@@ -1004,7 +1070,7 @@ router.post('/:id/covers/from-chapter', async (req, res) => {
 router.post('/:id/covers/from-image', async (req, res) => {
     try {
         const { imagePath } = req.body;
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
@@ -1030,7 +1096,7 @@ router.post('/:id/covers/from-image', async (req, res) => {
         await downloader.setActiveCover(bookmark.title, coverFilename, bookmark.alias);
 
         // Save full path to database
-        await bookmarkDb.update(bookmark.id, { localCover: coverPath });
+        await bookmarkDb.update(bookmark.id, { localCover: coverPath }, req.user.id);
 
         res.json({ success: true, coverPath: `/api/bookmarks/${bookmark.id}/covers/${encodeURIComponent(coverFilename)}` });
     } catch (error) {
@@ -1044,6 +1110,10 @@ router.post('/:id/covers/from-image', async (req, res) => {
 // Clear deleted URL tracking for a chapter
 router.post('/:id/clear-deleted/:url', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const url = decodeURIComponent(req.params.url);
         await bookmarkDb.clearDeletedUrl(req.params.id, url);
         res.json({ success: true });
@@ -1055,6 +1125,10 @@ router.post('/:id/clear-deleted/:url', async (req, res) => {
 // Clear updated chapter flag
 router.post('/:id/clear-updated/:num', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const chapterNum = parseFloat(req.params.num);
         await bookmarkDb.clearUpdatedChapter(req.params.id, chapterNum);
         res.json({ success: true });
@@ -1066,6 +1140,10 @@ router.post('/:id/clear-updated/:num', async (req, res) => {
 // Toggle auto-check for a bookmark
 router.post('/:id/auto-check', async (req, res) => {
     try {
+        const bookmark = bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) {
+            return res.status(404).json({ error: 'Bookmark not found' });
+        }
         const { enabled, autoDownload, schedule, day, time } = req.body;
         const updates = {};
 
@@ -1087,10 +1165,9 @@ router.post('/:id/auto-check', async (req, res) => {
 
         // Calculate next check time
         if (updates.autoCheck === 1 || (enabled === undefined && updates.checkSchedule)) {
-            const bookmark = bookmarkDb.getById(req.params.id);
-            const sched = updates.checkSchedule || bookmark?.checkSchedule || 'daily';
-            const checkDay = updates.checkDay || bookmark?.checkDay || 'monday';
-            const checkTime = updates.checkTime || bookmark?.checkTime || '06:00';
+            const sched = updates.checkSchedule || bookmark.checkSchedule || 'daily';
+            const checkDay = updates.checkDay || bookmark.checkDay || 'monday';
+            const checkTime = updates.checkTime || bookmark.checkTime || '06:00';
             updates.nextCheck = calculateNextCheck(sched, checkDay, checkTime);
         }
         if (updates.autoCheck === 0) {
@@ -1100,7 +1177,7 @@ router.post('/:id/auto-check', async (req, res) => {
             updates.checkTime = null;
         }
 
-        const result = bookmarkDb.update(req.params.id, updates);
+        const result = bookmarkDb.update(req.params.id, updates, req.user.id);
         res.json({ success: true, ...result });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1146,8 +1223,8 @@ function calculateNextCheck(schedule, day, time) {
 // ==================== PAGE MANIPULATION ====================
 
 // Helper to get chapter directory for a bookmark
-async function getChapterDir(bookmarkId, chapterNum) {
-    const bookmark = await bookmarkDb.getById(bookmarkId);
+async function getChapterDir(bookmarkId, chapterNum, userId) {
+    const bookmark = await bookmarkDb.getById(bookmarkId, userId);
     if (!bookmark) return null;
 
     const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNum), bookmark.alias);
@@ -1160,8 +1237,8 @@ async function getChapterDir(bookmarkId, chapterNum) {
 // between the initial reader-images load and the post-swap/rotate reload.
 // If the two sorts disagree, indices shift and the operation appears to
 // target a different spread than what's on screen.
-async function getChapterImages(bookmarkId, chapterNum) {
-    const chapterDir = await getChapterDir(bookmarkId, chapterNum);
+async function getChapterImages(bookmarkId, chapterNum, userId) {
+    const chapterDir = await getChapterDir(bookmarkId, chapterNum, userId);
     if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
 
     const files = await fs.readdir(chapterDir);
@@ -1187,7 +1264,7 @@ router.post('/:id/chapters/:chapterNum/pages/rotate', async (req, res) => {
             return res.status(400).json({ error: 'Filename is required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1208,7 +1285,7 @@ router.post('/:id/chapters/:chapterNum/pages/rotate', async (req, res) => {
         await fs.move(filePath + '.tmp', filePath, { overwrite: true });
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum);
+        const images = await getChapterImages(id, chapterNum, req.user.id);
         res.json({ images });
     } catch (error) {
         // Handle EBUSY error - file is locked by another process
@@ -1229,7 +1306,7 @@ router.post('/:id/chapters/:chapterNum/pages/swap', async (req, res) => {
             return res.status(400).json({ error: 'Both filenameA and filenameB are required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1251,7 +1328,7 @@ router.post('/:id/chapters/:chapterNum/pages/swap', async (req, res) => {
         await fs.move(tempPath, filePathB);
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum);
+        const images = await getChapterImages(id, chapterNum, req.user.id);
         res.json({ images });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1268,7 +1345,7 @@ router.post('/:id/chapters/:chapterNum/pages/split', async (req, res) => {
             return res.status(400).json({ error: 'Filename is required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1407,7 +1484,7 @@ router.post('/:id/chapters/:chapterNum/pages/split', async (req, res) => {
         // Handle file locked errors more gracefully
         if (error.code === 'EBUSY' || error.code === 'ENOENT') {
             // Still return success - the split likely worked, just the delete failed
-            const chapterDir = await getChapterDir(id, chapterNum);
+            const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
             if (chapterDir) {
                 const allFiles = await fs.readdir(chapterDir);
                 const imageFiles = allFiles.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
@@ -1430,7 +1507,7 @@ router.delete('/:id/chapters/:chapterNum/pages/:filename', async (req, res) => {
         const { id, chapterNum, filename } = req.params;
         const decodedFilename = decodeURIComponent(filename);
 
-        const chapterDir = await getChapterDir(id, chapterNum);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1444,7 +1521,7 @@ router.delete('/:id/chapters/:chapterNum/pages/:filename', async (req, res) => {
         await fs.remove(filePath);
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum);
+        const images = await getChapterImages(id, chapterNum, req.user.id);
         res.json({ images });
     } catch (error) {
         // Handle EBUSY error - file is locked by another process

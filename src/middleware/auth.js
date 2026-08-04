@@ -11,6 +11,10 @@ export const auth = (req, res, next) => {
     // Allow image proxying without auth since it's used in img tags
     if (req.path === '/scrapers/proxy-cover') return next();
 
+    // AniList OAuth callback arrives as an external browser redirect with no
+    // Authorization header; the route itself verifies the `state` JWT.
+    if (req.path === '/anilist/callback') return next();
+
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader) {

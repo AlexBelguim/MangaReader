@@ -5,6 +5,7 @@ import http from 'http';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
 import { CONFIG } from './config.js';
+import { getDb } from './db/connection.js';
 
 class Downloader {
   constructor() {
@@ -27,6 +28,17 @@ class Downloader {
   getMangaDir(mangaTitle, alias = null) {
     const folderName = this.sanitizeFileName(alias || mangaTitle);
     return path.join(this.downloadsDir, folderName);
+  }
+
+  // True when another bookmark (any user) resolves to the same on-disk
+  // folder. Folders are shared by design — two users tracking the same manga
+  // dedupe onto one directory — so the folder may only be deleted when the
+  // last bookmark pointing at it goes away.
+  isMangaDirShared(mangaTitle, alias = null, excludeBookmarkId = null) {
+    const db = getDb();
+    const dir = this.getMangaDir(mangaTitle, alias);
+    return db.prepare('SELECT id, title, alias FROM bookmarks').all()
+      .some(b => b.id !== excludeBookmarkId && this.getMangaDir(b.title, b.alias) === dir);
   }
 
   getChapterDir(mangaTitle, chapterNumber, alias = null, version = null) {

@@ -10,7 +10,7 @@ const router = express.Router();
 // Get all favorites
 router.get('/', (req, res) => {
     try {
-        const data = favoritesDb.getAll();
+        const data = favoritesDb.getAll(req.user.id);
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -21,7 +21,7 @@ router.get('/', (req, res) => {
 router.put('/', async (req, res) => {
     try {
         const { favorites, listOrder } = req.body;
-        favoritesDb.saveAll({ favorites: favorites || {}, listOrder: listOrder || [] });
+        favoritesDb.saveAll(req.user.id, { favorites: favorites || {}, listOrder: listOrder || [] });
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -35,7 +35,7 @@ router.post('/lists', (req, res) => {
         if (!name) {
             return res.status(400).json({ error: 'List name required' });
         }
-        const result = favoritesDb.createList(name);
+        const result = favoritesDb.createList(req.user.id, name);
         if (!result.success) return res.status(400).json({ error: result.error });
         res.json({ success: true });
     } catch (error) {
@@ -47,7 +47,7 @@ router.post('/lists', (req, res) => {
 router.delete('/lists/:name', (req, res) => {
     try {
         const name = decodeURIComponent(req.params.name);
-        favoritesDb.deleteList(name);
+        favoritesDb.deleteList(req.user.id, name);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -62,7 +62,7 @@ router.patch('/lists/:name', (req, res) => {
         if (!newName) {
             return res.status(400).json({ error: 'New name required' });
         }
-        const result = favoritesDb.renameList(oldName, newName);
+        const result = favoritesDb.renameList(req.user.id, oldName, newName);
         if (!result.success) return res.status(400).json({ error: result.error });
         res.json({ success: true });
     } catch (error) {
@@ -75,7 +75,7 @@ router.post('/lists/:name/items', (req, res) => {
     try {
         const listName = decodeURIComponent(req.params.name);
         const favorite = req.body;
-        favoritesDb.addFavorite(listName, favorite);
+        favoritesDb.addFavorite(req.user.id, listName, favorite);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -87,7 +87,7 @@ router.delete('/lists/:name/items/:index', (req, res) => {
     try {
         const listName = decodeURIComponent(req.params.name);
         const index = parseInt(req.params.index, 10);
-        const result = favoritesDb.removeFavorite(listName, index);
+        const result = favoritesDb.removeFavorite(req.user.id, listName, index);
         if (!result.success) return res.status(400).json({ error: result.error });
         res.json({ success: true });
     } catch (error) {

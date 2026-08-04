@@ -294,6 +294,7 @@ export function render() {
                  <button class="btn btn-secondary" id="manage-chapters-btn">${state.manageChapters ? 'Done Managing' : `${icon('plus')} Add Chapters`}</button>
                  <button class="btn btn-secondary" id="edit-vol-btn" data-vol-id="${vol.id}">${icon('pencil')} Edit Volume</button>
                </div>
+               <div id="anilist-row" style="margin-top: 12px; font-size: 0.9em;"></div>
             </div>
           </div>
       `;
@@ -351,6 +352,7 @@ export function render() {
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
               ${renderAutoCheckToggle(manga)}
             </div>
+            <div id="anilist-row" style="margin-top: 12px; font-size: 0.9em;"></div>
             ${manga.description ? `<p class="manga-description">${manga.description}</p>` : ''}
             ${state.cbzFiles.length > 0 ? `
             <div class="cbz-section" style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
@@ -505,6 +507,117 @@ function renderMigrateSourceModal() {
   `;
 }
 
+function renderAnilistModal() {
+  const manga = state.manga;
+  if (!manga) return '';
+  return `
+    <div class="modal" id="anilist-modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+          <h2>${icon('link')} Link to AniList</h2>
+          <button class="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted" style="font-size: 0.85em; margin-bottom: 12px;">Search AniList for this manga to sync reading progress.</p>
+
+          <!-- Search Section -->
+          <div class="form-group">
+            <label>Search AniList</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="anilist-search-input" placeholder="Search AniList..." value="${manga.alias || manga.title}" style="flex: 1;">
+              <button class="btn btn-secondary" id="anilist-search-btn">${icon('search')} Search</button>
+            </div>
+          </div>
+
+          <!-- Search Results -->
+          <div id="anilist-search-results" style="max-height: 350px; overflow-y: auto; display: none;">
+            <div id="anilist-results-list"></div>
+          </div>
+          <div id="anilist-search-loading" style="display: none; text-align: center; padding: 20px;">
+            <div class="loading-spinner"></div>
+            <p class="text-muted" style="margin-top: 8px;">Searching...</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Populate the AniList row in the detail header.
+ * Renders nothing when AniList isn't configured/connected so users who
+ * haven't set it up never see it.
+ */
+async function loadAnilistRow() {
+  const row = document.getElementById('anilist-row');
+  const manga = state.manga;
+  if (!row || !manga) return;
+
+  try {
+    const status = await api.anilistStatus();
+    if (!status?.configured || !status?.connected || state.manga?.id !== manga.id) {
+      row.style.display = 'none';
+      row.innerHTML = '';
+      return;
+    }
+
+    const { mapping } = await api.anilistGetMapping(manga.id);
+    if (state.manga?.id !== manga.id) return;
+
+    row.style.display = '';
+
+    if (!mapping) {
+      row.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 8px;">
+          ${icon('link')}
+          <button class="btn btn-small btn-secondary" id="anilist-link-btn">Link to AniList</button>
+        </div>
+      `;
+      document.getElementById('anilist-link-btn')?.addEventListener('click', () => {
+        document.getElementById('anilist-modal')?.classList.add('open');
+      });
+    } else {
+      row.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          ${icon('link')}
+          <span><strong>${mapping.anilist_title}</strong>${mapping.media_format ? ` <span class="text-muted">(${mapping.media_format})</span>` : ''}</span>
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.85em;">
+            <input type="checkbox" id="anilist-sync-toggle" ${mapping.sync_enabled == 1 ? 'checked' : ''}> Sync progress
+          </label>
+          <button class="btn btn-small btn-secondary" id="anilist-unlink-btn">Unlink</button>
+        </div>
+      `;
+      document.getElementById('anilist-sync-toggle')?.addEventListener('change', async (e) => {
+        try {
+          await api.anilistSetSyncEnabled(manga.id, e.target.checked);
+          showToast(e.target.checked ? 'AniList sync enabled' : 'AniList sync disabled', 'success');
+        } catch (err) {
+          e.target.checked = !e.target.checked;
+          showToast('Failed to update sync: ' + err.message, 'error');
+        }
+      });
+      document.getElementById('anilist-unlink-btn')?.addEventListener('click', async () => {
+        if (!confirm(`Unlink "${mapping.anilist_title}" from AniList?`)) return;
+        try {
+          await api.anilistUnmap(manga.id);
+          showToast('Unlinked from AniList', 'success');
+          loadAnilistRow();
+        } catch (err) {
+          showToast('Failed to unlink: ' + err.message, 'error');
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Failed to load AniList row:', err);
+    row.style.display = 'none';
+    row.innerHTML = '';
+  }
+}
+
 function renderModals() {
   const manga = state.manga;
   return `
@@ -512,6 +625,7 @@ function renderModals() {
     ${renderAddVolumeModal()}
     ${renderDeleteModal()}
     ${renderMigrateSourceModal()}
+    ${renderAnilistModal()}
 
     <!-- Edit Manga Modal -->
     <div class="modal" id="edit-manga-modal">
@@ -1488,6 +1602,79 @@ export function setupListeners() {
     }
   });
 
+  // AniList modal: search for media
+  const anilistSearchHandler = async () => {
+    const query = document.getElementById('anilist-search-input')?.value?.trim();
+    if (!query) return;
+
+    const loading = document.getElementById('anilist-search-loading');
+    const resultsContainer = document.getElementById('anilist-search-results');
+    const list = document.getElementById('anilist-results-list');
+
+    loading.style.display = 'block';
+    resultsContainer.style.display = 'none';
+
+    try {
+      const data = await api.anilistSearch(query);
+      const results = data.results || [];
+
+      if (results.length === 0) {
+        list.innerHTML = '<p class="text-muted" style="text-align: center; padding: 20px;">No results found</p>';
+      } else {
+        list.innerHTML = results.map(m => {
+          const title = m.title?.romaji || m.title?.english || m.title?.native || 'Unknown';
+          const sub = m.title?.english && m.title.english !== title
+            ? m.title.english
+            : (m.title?.native && m.title.native !== title ? m.title.native : '');
+          return `
+            <div style="display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 8px;">
+              ${m.coverImage?.medium
+                ? `<img src="${m.coverImage.medium}" alt="" style="width: 48px; height: 68px; object-fit: cover; border-radius: 4px; flex-shrink: 0;">`
+                : ''}
+              <div style="flex: 1; min-width: 0;">
+                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${title}"><strong>${title}</strong></div>
+                <div class="text-muted" style="font-size: 0.8em;">
+                  ${[sub, m.format, m.startDate?.year, `${m.chapters ?? '?'} ch`].filter(Boolean).join(' • ')}
+                </div>
+              </div>
+              <button class="btn btn-small btn-primary anilist-link-result-btn" data-id="${m.id}" data-title="${title.replace(/"/g, '&quot;')}">Link</button>
+            </div>
+          `;
+        }).join('');
+
+        // Link button handlers
+        list.querySelectorAll('.anilist-link-result-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try {
+              btn.disabled = true;
+              btn.textContent = 'Linking...';
+              const result = await api.anilistMap(manga.id, Number(btn.dataset.id));
+              const linkedTitle = result.mapping?.anilist_title || btn.dataset.title;
+              showToast(`Linked to AniList: ${linkedTitle}`, 'success');
+              document.getElementById('anilist-modal')?.classList.remove('open');
+              loadAnilistRow();
+            } catch (err) {
+              btn.disabled = false;
+              btn.textContent = 'Link';
+              showToast('Failed to link: ' + err.message, 'error');
+            }
+          });
+        });
+      }
+
+      loading.style.display = 'none';
+      resultsContainer.style.display = 'block';
+    } catch (err) {
+      loading.style.display = 'none';
+      showToast('AniList search failed: ' + err.message, 'error');
+    }
+  };
+
+  document.getElementById('anilist-search-btn')?.addEventListener('click', anilistSearchHandler);
+  document.getElementById('anilist-search-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') anilistSearchHandler();
+  });
+
   // Chapter filters
   app.querySelectorAll('.filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1657,7 +1844,7 @@ async function toggleRead(chapterNum) {
   const isRead = readChapters.has(chapterNum);
 
   try {
-    await api.post(`/bookmarks/${manga.id}/chapters/${chapterNum}/read`, { read: !isRead });
+    await api.post(`/bookmarks/${manga.id}/chapters/${chapterNum}/read`, { isRead: !isRead });
 
     // Update local state
     if (isRead) {
@@ -1937,6 +2124,7 @@ export async function mount(params = []) {
 
   app.innerHTML = render();
   setupListeners();
+  loadAnilistRow();
 }
 
 /**

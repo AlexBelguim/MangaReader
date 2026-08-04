@@ -5,18 +5,20 @@ export const bookmarkDb = {
         return generateId();
     },
 
-    getAll() {
+    getAll(userId) {
         const db = getDb();
-        const bookmarks = db.prepare('SELECT * FROM bookmarks ORDER BY updated_at DESC').all();
+        if (userId === undefined || userId === null) return [];
+        const bookmarks = db.prepare('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
 
         // Enrich with related data
-        return bookmarks.map(b => this.enrichBookmark(b));
+        return bookmarks.map(b => this.enrichBookmark(b, userId));
     },
 
     // Lightweight listing for the library grid — bulk queries instead of N×11
-    getAllSummary() {
+    getAllSummary(userId) {
         const db = getDb();
-        const bookmarks = db.prepare('SELECT * FROM bookmarks ORDER BY updated_at DESC').all();
+        if (userId === undefined || userId === null) return [];
+        const bookmarks = db.prepare('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
         if (bookmarks.length === 0) return [];
 
         // Bulk: chapter counts (unique chapter numbers per bookmark)
@@ -46,13 +48,29 @@ export const bookmarkDb = {
             GROUP BY bookmark_id
         `).all().forEach(r => downloadedCounts.set(r.bookmark_id, r.cnt));
 
-        // Bulk: read chapter counts
+        // Bulk: read chapter counts (per user; empty without a user)
         const readCounts = new Map();
-        db.prepare(`
-            SELECT bookmark_id, COUNT(*) as cnt
-            FROM read_chapters
-            GROUP BY bookmark_id
-        `).all().forEach(r => readCounts.set(r.bookmark_id, r.cnt));
+        // Bulk: last-read chapter per bookmark (most recent reading_progress
+        // row of this user; bare column rides along with MAX in SQLite)
+        const lastReadMap = new Map();
+        if (userId) {
+            db.prepare(`
+                SELECT bookmark_id, COUNT(*) as cnt
+                FROM read_chapters
+                WHERE user_id = ?
+                GROUP BY bookmark_id
+            `).all(userId).forEach(r => readCounts.set(r.bookmark_id, r.cnt));
+
+            db.prepare(`
+                SELECT bookmark_id, chapter_number, MAX(last_read) AS last_read
+                FROM reading_progress
+                WHERE user_id = ?
+                GROUP BY bookmark_id
+            `).all(userId).forEach(r => lastReadMap.set(r.bookmark_id, {
+                chapter: r.chapter_number,
+                at: r.last_read
+            }));
+        }
 
         // Bulk: excluded chapters per bookmark
         const excludedMap = new Map();
@@ -104,8 +122,8 @@ export const bookmarkDb = {
             cover: b.cover,
             localCover: b.local_cover,
             uniqueChapters: b.unique_chapters,
-            lastReadChapter: b.last_read_chapter,
-            lastReadAt: b.last_read_at,
+            lastReadChapter: lastReadMap.get(b.id)?.chapter ?? null,
+            lastReadAt: lastReadMap.get(b.id)?.at ?? null,
             updatedAt: b.updated_at,
             autoCheck: !!b.auto_check,
             autoDownload: !!b.auto_download,
@@ -126,21 +144,28 @@ export const bookmarkDb = {
         }));
     },
 
-    getById(id) {
+    getById(id, userId) {
         const db = getDb();
         const bookmark = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);
         if (!bookmark) return null;
-        return this.enrichBookmark(bookmark);
+        // Ownership: with a user id, only the owner may see the row (routes
+        // pass the admin's id for demo visitors). Without one the caller is
+        // system-level/public (e.g. the unauthenticated cover routes) and
+        // gets the raw row.
+        if (userId !== undefined && userId !== null && bookmark.user_id !== userId) return null;
+        return this.enrichBookmark(bookmark, userId);
     },
 
-    getByUrl(url) {
+    getByUrl(url, userId) {
         const db = getDb();
-        const bookmark = db.prepare('SELECT * FROM bookmarks WHERE url = ?').get(url);
+        const bookmark = (userId !== undefined && userId !== null)
+            ? db.prepare('SELECT * FROM bookmarks WHERE url = ? AND user_id = ?').get(url, userId)
+            : db.prepare('SELECT * FROM bookmarks WHERE url = ?').get(url);
         if (!bookmark) return null;
-        return this.enrichBookmark(bookmark);
+        return this.enrichBookmark(bookmark, userId);
     },
 
-    enrichBookmark(bookmark) {
+    enrichBookmark(bookmark, userId) {
         const db = getDb();
         const id = bookmark.id;
 
@@ -186,15 +211,15 @@ export const bookmarkDb = {
             'SELECT url FROM deleted_chapter_urls WHERE bookmark_id = ?'
         ).all(id).map(r => r.url);
 
-        // Get read chapters
-        const readChapters = db.prepare(
-            'SELECT chapter_number FROM read_chapters WHERE bookmark_id = ?'
-        ).all(id).map(r => r.chapter_number);
+        // Get read chapters (per user; empty without a user)
+        const readChapters = userId ? db.prepare(
+            'SELECT chapter_number FROM read_chapters WHERE bookmark_id = ? AND user_id = ?'
+        ).all(id, userId).map(r => r.chapter_number) : [];
 
-        // Get reading progress
-        const progressRaw = db.prepare(
-            'SELECT chapter_number, page, total_pages, last_read FROM reading_progress WHERE bookmark_id = ?'
-        ).all(id);
+        // Get reading progress (per user; empty without a user)
+        const progressRaw = userId ? db.prepare(
+            'SELECT chapter_number, page, total_pages, last_read FROM reading_progress WHERE bookmark_id = ? AND user_id = ?'
+        ).all(id, userId) : [];
         const readingProgress = {};
         for (const p of progressRaw) {
             readingProgress[p.chapter_number] = {
@@ -203,6 +228,11 @@ export const bookmarkDb = {
                 lastRead: p.last_read
             };
         }
+
+        // Last-read chapter is per user too: their most recent progress row.
+        const lastReadRow = userId ? db.prepare(
+            'SELECT chapter_number, last_read FROM reading_progress WHERE bookmark_id = ? AND user_id = ? ORDER BY last_read DESC LIMIT 1'
+        ).get(id, userId) : null;
 
         // Get new duplicates
         const newDuplicates = db.prepare(
@@ -250,8 +280,8 @@ export const bookmarkDb = {
             totalChapters: bookmark.total_chapters,
             uniqueChapters: bookmark.unique_chapters,
             lastChecked: bookmark.last_checked,
-            lastReadChapter: bookmark.last_read_chapter,
-            lastReadAt: bookmark.last_read_at,
+            lastReadChapter: lastReadRow?.chapter_number ?? null,
+            lastReadAt: lastReadRow?.last_read ?? null,
             preferredReleaseGroup: bookmark.preferred_release_group,
             createdAt: bookmark.created_at,
             updatedAt: bookmark.updated_at,
@@ -461,13 +491,16 @@ export const bookmarkDb = {
             .all(bookmarkId).map(r => r.chapter_number);
     },
 
-    add(mangaInfo) {
+    add(mangaInfo, userId) {
         const db = getDb();
+        if (userId === undefined || userId === null) {
+            throw new Error('bookmarkDb.add requires a userId (bookmarks are per-user)');
+        }
 
-        // Check if already exists
-        const existing = db.prepare('SELECT id FROM bookmarks WHERE url = ?').get(mangaInfo.url);
+        // Check if already exists (per user — different users may track the same URL)
+        const existing = db.prepare('SELECT id FROM bookmarks WHERE url = ? AND user_id = ?').get(mangaInfo.url, userId);
         if (existing) {
-            return { success: false, message: 'Manga already bookmarked', bookmark: this.getById(existing.id) };
+            return { success: false, message: 'Manga already bookmarked', bookmark: this.getById(existing.id, userId) };
         }
 
         const id = this.generateId();
@@ -475,9 +508,9 @@ export const bookmarkDb = {
 
         const insertBookmark = db.prepare(`
       INSERT INTO bookmarks 
-      (id, url, title, alias, website, source, cover, description, 
+      (id, user_id, url, title, alias, website, source, cover, description, 
        total_chapters, unique_chapters, last_checked, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
         const insertChapter = db.prepare(`
@@ -488,6 +521,7 @@ export const bookmarkDb = {
         db.transaction(() => {
             insertBookmark.run(
                 id,
+                userId,
                 mangaInfo.url,
                 mangaInfo.title,
                 null,
@@ -507,10 +541,10 @@ export const bookmarkDb = {
             }
         })();
 
-        return { success: true, message: 'Bookmark added', bookmark: this.getById(id) };
+        return { success: true, message: 'Bookmark added', bookmark: this.getById(id, userId) };
     },
 
-    update(id, updates) {
+    update(id, updates, userId) {
         const db = getDb();
         const now = new Date().toISOString();
 
@@ -525,8 +559,6 @@ export const bookmarkDb = {
             totalChapters: 'total_chapters',
             uniqueChapters: 'unique_chapters',
             lastChecked: 'last_checked',
-            lastReadChapter: 'last_read_chapter',
-            lastReadAt: 'last_read_at',
             preferredReleaseGroup: 'preferred_release_group',
             autoCheck: 'auto_check',
             autoDownload: 'auto_download',
@@ -549,8 +581,13 @@ export const bookmarkDb = {
         values.push(id);
 
         if (fields.length > 1) {
-            const sql = `UPDATE bookmarks SET ${fields.join(', ')} WHERE id = ?`;
-            db.prepare(sql).run(...values);
+            // Ownership: callers acting on a user's behalf pass their id so a
+            // bookmark row can never be written through someone else's id
+            // (auto-check and the scrape processor pass the owner's id).
+            // Callers without a userId are system-level and stay id-keyed.
+            const scoped = userId !== undefined && userId !== null;
+            const sql = `UPDATE bookmarks SET ${fields.join(', ')} WHERE id = ?${scoped ? ' AND user_id = ?' : ''}`;
+            db.prepare(sql).run(...values, ...(scoped ? [userId] : []));
         }
 
         // Update chapters if provided - MERGE instead of replace to prevent data loss
@@ -675,27 +712,32 @@ export const bookmarkDb = {
             }
         }
 
-        // Update read chapters if provided
-        if (updates.readChapters !== undefined) {
-            db.prepare('DELETE FROM read_chapters WHERE bookmark_id = ?').run(id);
-            const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number) VALUES (?, ?)');
+        // Update read chapters if provided (per user — scoped to user_id)
+        if (updates.readChapters !== undefined && userId) {
+            db.prepare('DELETE FROM read_chapters WHERE bookmark_id = ? AND user_id = ?').run(id, userId);
+            const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)');
             for (const num of updates.readChapters) {
-                insertRead.run(id, num);
+                insertRead.run(id, num, userId);
             }
         }
 
-        return { success: true, message: 'Bookmark updated', bookmark: this.getById(id) };
+        return { success: true, message: 'Bookmark updated', bookmark: this.getById(id, userId) };
     },
 
-    remove(id) {
+    remove(id, userId) {
         const db = getDb();
-        const bookmark = this.getById(id);
+        const bookmark = this.getById(id, userId);
         if (!bookmark) {
             return { success: false, message: 'Bookmark not found' };
         }
 
         // CASCADE will handle related tables
-        db.prepare('DELETE FROM bookmarks WHERE id = ?').run(id);
+        if (userId !== undefined && userId !== null) {
+            db.prepare('DELETE FROM bookmarks WHERE id = ? AND user_id = ?').run(id, userId);
+        } else {
+            // System-level caller (no user context) — stays id-keyed.
+            db.prepare('DELETE FROM bookmarks WHERE id = ?').run(id);
+        }
         return { success: true, message: 'Bookmark removed', bookmark };
     },
 
@@ -736,33 +778,32 @@ export const bookmarkDb = {
         return { success: true };
     },
 
-    updateReadingProgress(id, chapterNumber, page, totalPages) {
+    updateReadingProgress(userId, id, chapterNumber, page, totalPages) {
         const db = getDb();
         const now = new Date().toISOString();
 
         db.prepare(`
-      INSERT OR REPLACE INTO reading_progress (bookmark_id, chapter_number, page, total_pages, last_read)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, chapterNumber, page, totalPages, now);
+      INSERT OR REPLACE INTO reading_progress (bookmark_id, chapter_number, user_id, page, total_pages, last_read)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, chapterNumber, userId, page, totalPages, now);
 
-        db.prepare('UPDATE bookmarks SET last_read_chapter = ?, last_read_at = ?, updated_at = ? WHERE id = ?')
-            .run(chapterNumber, now, now, id);
+        db.prepare('UPDATE bookmarks SET updated_at = ? WHERE id = ?').run(now, id);
 
         // Auto-mark as read if on last page
         if (page >= totalPages) {
-            db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number) VALUES (?, ?)').run(id, chapterNumber);
+            db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)').run(id, chapterNumber, userId);
         }
 
         return { success: true };
     },
 
-    markChapterRead(id, chapterNumber, isRead = true) {
+    markChapterRead(userId, id, chapterNumber, isRead = true) {
         const db = getDb();
 
         if (isRead) {
-            db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number) VALUES (?, ?)').run(id, chapterNumber);
+            db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)').run(id, chapterNumber, userId);
         } else {
-            db.prepare('DELETE FROM read_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(id, chapterNumber);
+            db.prepare('DELETE FROM read_chapters WHERE bookmark_id = ? AND chapter_number = ? AND user_id = ?').run(id, chapterNumber, userId);
         }
 
         db.prepare('UPDATE bookmarks SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
@@ -770,16 +811,16 @@ export const bookmarkDb = {
         return { success: true };
     },
 
-    markChaptersReadBelow(id, chapterNumber) {
+    markChaptersReadBelow(userId, id, chapterNumber) {
         const db = getDb();
 
         const chapters = db.prepare('SELECT DISTINCT number FROM chapters WHERE bookmark_id = ? AND number <= ?').all(id, chapterNumber);
 
-        const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number) VALUES (?, ?)');
+        const insertRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)');
 
         db.transaction(() => {
             for (const ch of chapters) {
-                insertRead.run(id, ch.number);
+                insertRead.run(id, ch.number, userId);
             }
         })();
 

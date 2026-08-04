@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { chapterSettingsDb, trophyDb, readerSettingsDb, getDb } from '../database.js';
+import { getPrimaryAdminId } from '../db/connection.js';
 
 const router = express.Router();
 
@@ -49,7 +50,7 @@ router.put('/chapter-settings', async (req, res) => {
 
 router.get('/trophy-pages', async (req, res) => {
     try {
-        res.json(trophyDb.getAll());
+        res.json(trophyDb.getAll(req.user.id));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -57,7 +58,7 @@ router.get('/trophy-pages', async (req, res) => {
 
 router.put('/trophy-pages', async (req, res) => {
     try {
-        trophyDb.saveAll(req.body);
+        trophyDb.saveAll(req.user.id, req.body);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -66,7 +67,7 @@ router.put('/trophy-pages', async (req, res) => {
 
 router.put('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
     try {
-        trophyDb.save(req.params.mangaId, parseFloat(req.params.chapterNum), req.body);
+        trophyDb.save(req.user.id, req.params.mangaId, parseFloat(req.params.chapterNum), req.body);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -75,7 +76,7 @@ router.put('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
 
 router.get('/trophy-pages/:mangaId/all', async (req, res) => {
     try {
-        res.json(trophyDb.getForManga(req.params.mangaId));
+        res.json(trophyDb.getForManga(req.user.id, req.params.mangaId));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -83,7 +84,7 @@ router.get('/trophy-pages/:mangaId/all', async (req, res) => {
 
 router.get('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
     try {
-        res.json(trophyDb.getForChapter(req.params.mangaId, parseFloat(req.params.chapterNum)));
+        res.json(trophyDb.getForChapter(req.user.id, req.params.mangaId, parseFloat(req.params.chapterNum)));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -93,7 +94,9 @@ router.get('/trophy-pages/:mangaId/:chapterNum', async (req, res) => {
 
 router.get('/reader-settings', async (req, res) => {
     try {
-        res.json(readerSettingsDb.getAll());
+        // Demo tokens (id 0, no users row) read the primary admin's settings
+        const userId = req.user.role === 'demo' ? getPrimaryAdminId() : req.user.id;
+        res.json(readerSettingsDb.getAll(userId));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -102,7 +105,7 @@ router.get('/reader-settings', async (req, res) => {
 router.put('/reader-settings', async (req, res) => {
     try {
         for (const [key, value] of Object.entries(req.body)) {
-            readerSettingsDb.set(key, value);
+            readerSettingsDb.set(req.user.id, key, value);
         }
         res.json({ success: true });
     } catch (error) {

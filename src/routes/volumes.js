@@ -74,7 +74,7 @@ router.post('/:id/volumes/:volumeId/cover/from-chapter', async (req, res) => {
             return res.status(400).json({ error: 'Chapter number required' });
         }
 
-        const bookmark = await bookmarkDb.getById(req.params.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }

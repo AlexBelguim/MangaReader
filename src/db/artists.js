@@ -1,8 +1,21 @@
 import { getDb } from './connection.js';
 
 export const artistDb = {
-    getAll() {
+    // With a userId, only artists linked to that user's bookmarks are
+    // returned and counts cover the caller's bookmarks only — other users'
+    // artists must not leak.
+    getAll(userId = null) {
         const db = getDb();
+        if (userId !== null && userId !== undefined) {
+            return db.prepare(`
+          SELECT a.*, COUNT(ba.bookmark_id) as bookmarkCount 
+          FROM artists a 
+          JOIN bookmark_artists ba ON a.id = ba.artist_id 
+          JOIN bookmarks b ON b.id = ba.bookmark_id AND b.user_id = ?
+          GROUP BY a.id 
+          ORDER BY a.name
+        `).all(userId);
+        }
         return db.prepare(`
       SELECT a.*, COUNT(ba.bookmark_id) as bookmarkCount 
       FROM artists a 
@@ -107,14 +120,16 @@ export const artistDb = {
         return { success: true };
     },
 
-    // Get all bookmarks by artist
-    getBookmarksByArtist(artistId) {
+    // Get all bookmarks by artist (scoped to the caller's own bookmarks
+    // when a userId is given)
+    getBookmarksByArtist(artistId, userId = null) {
         const db = getDb();
+        const scoped = userId !== null && userId !== undefined;
         return db.prepare(`
       SELECT b.* FROM bookmarks b
       JOIN bookmark_artists ba ON b.id = ba.bookmark_id
-      WHERE ba.artist_id = ?
+      WHERE ba.artist_id = ?${scoped ? ' AND b.user_id = ?' : ''}
       ORDER BY b.title
-    `).all(artistId);
+    `).all(...(scoped ? [artistId, userId] : [artistId]));
     }
 };

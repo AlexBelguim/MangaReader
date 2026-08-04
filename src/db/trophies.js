@@ -1,9 +1,11 @@
 import { getDb } from './connection.js';
 
+// Trophy pages are per-user: every method takes userId first, except
+// deleteForChapter which purges all users' entries for deleted chapter content.
 export const trophyDb = {
-    getAll() {
+    getAll(userId) {
         const db = getDb();
-        const rows = db.prepare('SELECT bookmark_id, chapter_number, page_index, is_single, pages FROM trophy_pages').all();
+        const rows = db.prepare('SELECT bookmark_id, chapter_number, page_index, is_single, pages FROM trophy_pages WHERE user_id = ?').all(userId);
 
         const result = {};
         for (const row of rows) {
@@ -17,10 +19,10 @@ export const trophyDb = {
         return result;
     },
 
-    getForChapter(bookmarkId, chapterNumber) {
+    getForChapter(userId, bookmarkId, chapterNumber) {
         const db = getDb();
-        const rows = db.prepare('SELECT page_index, is_single, pages FROM trophy_pages WHERE bookmark_id = ? AND chapter_number = ?')
-            .all(bookmarkId, chapterNumber);
+        const rows = db.prepare('SELECT page_index, is_single, pages FROM trophy_pages WHERE user_id = ? AND bookmark_id = ? AND chapter_number = ?')
+            .all(userId, bookmarkId, chapterNumber);
 
         const result = {};
         for (const row of rows) {
@@ -32,10 +34,10 @@ export const trophyDb = {
         return result;
     },
 
-    getForManga(bookmarkId) {
+    getForManga(userId, bookmarkId) {
         const db = getDb();
-        const rows = db.prepare('SELECT chapter_number, page_index, is_single, pages FROM trophy_pages WHERE bookmark_id = ?')
-            .all(bookmarkId);
+        const rows = db.prepare('SELECT chapter_number, page_index, is_single, pages FROM trophy_pages WHERE user_id = ? AND bookmark_id = ?')
+            .all(userId, bookmarkId);
 
         const result = {};
         for (const row of rows) {
@@ -48,40 +50,41 @@ export const trophyDb = {
         return result;
     },
 
-    save(bookmarkId, chapterNumber, trophyMap) {
+    save(userId, bookmarkId, chapterNumber, trophyMap) {
         const db = getDb();
 
-        db.prepare('DELETE FROM trophy_pages WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, chapterNumber);
+        db.prepare('DELETE FROM trophy_pages WHERE user_id = ? AND bookmark_id = ? AND chapter_number = ?').run(userId, bookmarkId, chapterNumber);
 
-        const insert = db.prepare('INSERT INTO trophy_pages (bookmark_id, chapter_number, page_index, is_single, pages) VALUES (?, ?, ?, ?, ?)');
+        const insert = db.prepare('INSERT INTO trophy_pages (bookmark_id, chapter_number, page_index, user_id, is_single, pages) VALUES (?, ?, ?, ?, ?, ?)');
 
         db.transaction(() => {
             for (const [pageIdx, info] of Object.entries(trophyMap)) {
-                insert.run(bookmarkId, chapterNumber, parseInt(pageIdx), info.isSingle ? 1 : 0, JSON.stringify(info.pages || []));
+                insert.run(bookmarkId, chapterNumber, parseInt(pageIdx), userId, info.isSingle ? 1 : 0, JSON.stringify(info.pages || []));
             }
         })();
 
         return { success: true };
     },
 
+    // Chapter content was deleted: purge every user's entries for it (user-less on purpose)
     deleteForChapter(bookmarkId, chapterNumber) {
         const db = getDb();
         db.prepare('DELETE FROM trophy_pages WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, chapterNumber);
         return { success: true };
     },
 
-    saveAll(trophyData) {
+    saveAll(userId, trophyData) {
         const db = getDb();
 
-        db.prepare('DELETE FROM trophy_pages').run();
+        db.prepare('DELETE FROM trophy_pages WHERE user_id = ?').run(userId);
 
-        const insert = db.prepare('INSERT INTO trophy_pages (bookmark_id, chapter_number, page_index, is_single, pages) VALUES (?, ?, ?, ?, ?)');
+        const insert = db.prepare('INSERT INTO trophy_pages (bookmark_id, chapter_number, page_index, user_id, is_single, pages) VALUES (?, ?, ?, ?, ?, ?)');
 
         db.transaction(() => {
             for (const [mangaId, chapters] of Object.entries(trophyData)) {
                 for (const [chNum, pages] of Object.entries(chapters)) {
                     for (const [pageIdx, info] of Object.entries(pages)) {
-                        insert.run(mangaId, parseFloat(chNum), parseInt(pageIdx), info.isSingle ? 1 : 0, JSON.stringify(info.pages || []));
+                        insert.run(mangaId, parseFloat(chNum), parseInt(pageIdx), userId, info.isSingle ? 1 : 0, JSON.stringify(info.pages || []));
                     }
                 }
             }

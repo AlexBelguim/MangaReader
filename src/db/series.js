@@ -15,61 +15,74 @@ export const seriesDb = {
         return { id, title, alias, created_at: now, updated_at: now };
     },
 
-    // Get all series with entry counts and cover info
-    getAll() {
+    // Get all series with entry counts and cover info. With a userId, only
+    // series containing at least one of that user's bookmarks are returned,
+    // and counts/covers are computed from the caller's own entries only —
+    // other users' titles and covers must not leak.
+    getAll(userId = null) {
         const db = getDb();
+        const scoped = userId !== null && userId !== undefined;
         const series = db.prepare(`
       SELECT s.*,
-        (SELECT COUNT(*) FROM series_entries WHERE series_id = s.id) as entry_count,
+        (SELECT COUNT(*) FROM series_entries se
+         ${scoped ? 'JOIN bookmarks b ON b.id = se.bookmark_id AND b.user_id = ?' : ''}
+         WHERE se.series_id = s.id) as entry_count,
         (SELECT COUNT(*) FROM series_entries se 
          JOIN chapters c ON c.bookmark_id = se.bookmark_id
+         ${scoped ? 'JOIN bookmarks b ON b.id = se.bookmark_id AND b.user_id = ?' : ''}
          WHERE se.series_id = s.id) as total_chapters
       FROM series s
+      ${scoped ? `WHERE EXISTS (
+        SELECT 1 FROM series_entries se
+        JOIN bookmarks b ON b.id = se.bookmark_id
+        WHERE se.series_id = s.id AND b.user_id = ?
+      )` : ''}
       ORDER BY s.title
-    `).all();
+    `).all(...(scoped ? [userId, userId, userId] : []));
 
         // Get cover for each series
         for (const s of series) {
+            let coverEntry = null;
             if (s.cover_entry_id) {
-                const coverEntry = db.prepare(`
+                coverEntry = db.prepare(`
           SELECT b.id as bookmark_id, b.cover, b.local_cover, b.title, b.alias 
           FROM series_entries se
           JOIN bookmarks b ON se.bookmark_id = b.id
-          WHERE se.id = ?
-        `).get(s.cover_entry_id);
-                if (coverEntry) {
-                    s.cover = coverEntry.cover;
-                    s.localCover = coverEntry.local_cover;
-                    s.coverBookmarkId = coverEntry.bookmark_id;
-                    s.coverTitle = coverEntry.alias || coverEntry.title;
-                }
-            } else {
-                // Use first entry's cover
-                const firstEntry = db.prepare(`
+          WHERE se.id = ?${scoped ? ' AND b.user_id = ?' : ''}
+        `).get(...(scoped ? [s.cover_entry_id, userId] : [s.cover_entry_id]));
+            }
+            if (!coverEntry) {
+                // Use first entry's cover (also the fallback when the chosen
+                // cover entry belongs to another user)
+                coverEntry = db.prepare(`
           SELECT b.id as bookmark_id, b.cover, b.local_cover, b.title, b.alias 
           FROM series_entries se
           JOIN bookmarks b ON se.bookmark_id = b.id
-          WHERE se.series_id = ?
+          WHERE se.series_id = ?${scoped ? ' AND b.user_id = ?' : ''}
           ORDER BY se.entry_order, se.created_at
           LIMIT 1
-        `).get(s.id);
-                if (firstEntry) {
-                    s.cover = firstEntry.cover;
-                    s.localCover = firstEntry.local_cover;
-                    s.coverBookmarkId = firstEntry.bookmark_id;
-                    s.coverTitle = firstEntry.alias || firstEntry.title;
-                }
+        `).get(...(scoped ? [s.id, userId] : [s.id]));
+            }
+            if (coverEntry) {
+                s.cover = coverEntry.cover;
+                s.localCover = coverEntry.local_cover;
+                s.coverBookmarkId = coverEntry.bookmark_id;
+                s.coverTitle = coverEntry.alias || coverEntry.title;
             }
         }
 
         return series;
     },
 
-    // Get a series by ID with all entries
-    getById(id) {
+    // Get a series by ID with all entries. With a userId, entries are
+    // filtered to that user's bookmarks; a series the user has no entries in
+    // returns null (indistinguishable from "not found").
+    getById(id, userId = null) {
         const db = getDb();
         const series = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
         if (!series) return null;
+
+        const scoped = userId !== null && userId !== undefined;
 
         // Get all entries with bookmark data
         series.entries = db.prepare(`
@@ -79,9 +92,11 @@ export const seriesDb = {
              (SELECT COUNT(*) FROM downloaded_chapters WHERE bookmark_id = b.id) as downloaded_count
       FROM series_entries se
       JOIN bookmarks b ON se.bookmark_id = b.id
-      WHERE se.series_id = ?
+      WHERE se.series_id = ?${scoped ? ' AND b.user_id = ?' : ''}
       ORDER BY se.entry_order, se.created_at
-    `).all(id);
+    `).all(...(scoped ? [id, userId] : [id]));
+
+        if (scoped && series.entries.length === 0) return null;
 
         // Get downloaded chapters for each entry
         for (const entry of series.entries) {
@@ -211,15 +226,18 @@ export const seriesDb = {
     `).all(bookmarkId);
     },
 
-    // Get bookmarks not in any series (for adding to series)
-    getBookmarksNotInSeries() {
+    // Get bookmarks not in any series (for adding to series). Scoped to the
+    // caller's own bookmarks when a userId is given.
+    getBookmarksNotInSeries(userId = null) {
         const db = getDb();
+        const scoped = userId !== null && userId !== undefined;
         const bookmarks = db.prepare(`
       SELECT b.id, b.title, b.alias, b.cover, b.local_cover
       FROM bookmarks b
       WHERE b.id NOT IN (SELECT bookmark_id FROM series_entries)
+      ${scoped ? 'AND b.user_id = ?' : ''}
       ORDER BY b.title
-    `).all();
+    `).all(...(scoped ? [userId] : []));
         // Map local_cover to localCover for frontend
         return bookmarks.map(b => ({ ...b, localCover: b.local_cover }));
     },
