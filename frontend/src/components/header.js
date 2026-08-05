@@ -75,7 +75,7 @@ export function renderHeader(viewMode = 'manga') {
           <button class="btn btn-secondary" id="logout-btn" title="Log out">${icon('log-out', { title: 'Log out' })}</button>
           <a href="#/scrapers" class="btn btn-secondary" title="Search Scrapers">${icon('search', { title: 'Search Scrapers' })}</a>
           ${adminLink}
-          <!-- <a href="#/settings" class="btn btn-secondary" title="Settings">${icon('settings')}</a> -->
+          <a href="#/settings" class="btn btn-secondary" title="Settings">${icon('settings', { title: 'Settings' })}</a>
         </div>
         <button class="hamburger-btn mobile-only" id="hamburger-btn">
           <span></span><span></span><span></span>
@@ -93,7 +93,7 @@ export function renderHeader(viewMode = 'manga') {
         <button class="mobile-menu-item" id="mobile-logout-btn">${icon('log-out')} Logout</button>
         <a href="#/scrapers" class="mobile-menu-item">${icon('search')} Scrapers</a>
         ${adminLinkMobile}
-        <!-- <a href="#/settings" class="mobile-menu-item">${icon('settings')} Settings</a> -->
+        <a href="#/settings" class="mobile-menu-item">${icon('settings')} Settings</a>
       </div>
     </header>
   `;

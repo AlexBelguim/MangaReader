@@ -102,9 +102,11 @@ export default {
         const syncResultEl = document.getElementById('anilist-sync-result');
 
         const refreshAnilistStatus = async () => {
+            // Show the section even if the status call fails (e.g. old backend
+            // without the AniList routes) — otherwise it hides silently.
+            anilistGroup.style.display = 'block';
             try {
                 const status = await api.anilistStatus();
-                anilistGroup.style.display = 'block';
 
                 if (!status.configured) {
                     statusEl.textContent = 'Not configured — set ANILIST_CLIENT_ID and ANILIST_CLIENT_SECRET in .env and restart the server.';
@@ -124,7 +126,7 @@ export default {
                 }
             } catch (err) {
                 console.error(err);
-                statusEl.textContent = 'Failed to load AniList status';
+                statusEl.textContent = 'Failed to load AniList status — is the server running the latest code?';
             }
         };
 
