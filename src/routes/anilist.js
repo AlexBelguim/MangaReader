@@ -96,7 +96,8 @@ router.get('/map/:bookmarkId', (req, res) => {
     res.json({ mapping: anilistDb.getMapping(req.params.bookmarkId) });
 });
 
-// Link a bookmark to an AniList media entry, then push current progress
+// Link a bookmark to an AniList media entry, then reconcile progress in both
+// directions: pull into the app when AniList is ahead, push when the app is.
 router.post('/map', async (req, res) => {
     const tokenRow = requireConnection(req, res);
     if (!tokenRow) return;
@@ -108,8 +109,25 @@ router.post('/map', async (req, res) => {
         const media = await anilistService.getMedia(parseInt(anilistId, 10));
         if (!media) return res.status(404).json({ error: 'AniList media not found' });
         anilistDb.setMapping(bookmarkId, media);
+
+        // Pull first when AniList is ahead (clamped to chapters the app knows)
+        let pull = null;
+        const entry = await anilistService.getListEntry(tokenRow.access_token, tokenRow.anilist_user_id, media.id);
+        const anilistProgress = Math.floor(entry?.progress || 0);
+        const localHighest = anilistDb.highestReadChapter(bookmarkId, req.user.id);
+        if (anilistProgress > localHighest) {
+            const target = Math.min(anilistProgress, anilistDb.maxKnownChapter(bookmarkId));
+            if (target > localHighest) {
+                bookmarkDb.markChaptersReadBelow(req.user.id, bookmarkId, target);
+                anilistDb.setLastPushed(req.user.id, bookmarkId,
+                    Math.max(anilistDb.getLastPushed(req.user.id, bookmarkId), target));
+                pull = { markedUpTo: target };
+            }
+        }
+
+        // Push covers the opposite case (and no-ops when we just pulled)
         const push = await anilistService.pushProgress(req.user.id, bookmarkId);
-        res.json({ success: true, mapping: anilistDb.getMapping(bookmarkId), push });
+        res.json({ success: true, mapping: anilistDb.getMapping(bookmarkId), push, pull });
     } catch (error) {
         res.status(502).json({ error: error.message });
     }

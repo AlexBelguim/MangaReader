@@ -121,6 +121,16 @@ export const anilistService = {
         return data.Media;
     },
 
+    /** The user's list entry for one media (progress/status), or null if not listed. */
+    async getListEntry(token, anilistUserId, mediaId) {
+        const data = await this.graphql(token, `
+            query ($userId: Int, $mediaId: Int) {
+                MediaList(userId: $userId, mediaId: $mediaId) { progress status }
+            }
+        `, { userId: anilistUserId, mediaId });
+        return data.MediaList;
+    },
+
     /** The user's full manga list: [{ mediaId, progress, status, updatedAt }]. */
     async getMangaList(token, anilistUserId) {
         const data = await this.graphql(token, `

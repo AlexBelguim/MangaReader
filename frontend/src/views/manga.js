@@ -1650,7 +1650,8 @@ export function setupListeners() {
               btn.textContent = 'Linking...';
               const result = await api.anilistMap(manga.id, Number(btn.dataset.id));
               const linkedTitle = result.mapping?.anilist_title || btn.dataset.title;
-              showToast(`Linked to AniList: ${linkedTitle}`, 'success');
+              const pullNote = result.pull?.markedUpTo ? ` — pulled progress up to ch. ${result.pull.markedUpTo}` : '';
+              showToast(`Linked to AniList: ${linkedTitle}${pullNote}`, 'success');
               document.getElementById('anilist-modal')?.classList.remove('open');
               loadAnilistRow();
             } catch (err) {
