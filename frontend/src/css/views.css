@@ -2410,3 +2410,176 @@ body.demo-mode .chapter-actions {
 body.demo-mode #app {
   padding-bottom: 28px;
 }
+
+/* ==================== Settings View ==================== */
+
+.settings-container {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--space-lg) var(--space-md);
+}
+
+.settings-header {
+  /* The global `header` rule in styles.css styles the sticky app nav;
+     neutralize it for this in-page heading. */
+  background: none;
+  border-bottom: none;
+  position: static;
+  margin-bottom: var(--space-lg);
+}
+
+.settings-header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.admin-header {
+  /* Same global `header` leak as .settings-header — neutralize the
+     sticky-nav styling on the admin page's in-page heading. */
+  background: none;
+  border-bottom: none;
+  position: static;
+}
+
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* The form starts hidden via inline style; settings.js clears it once
+   settings load, at which point this flex layout takes over. */
+#settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+#settings-loader {
+  color: var(--text-secondary);
+  padding: var(--space-md) 0;
+}
+
+.settings-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+}
+
+.settings-group h2 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.setting-item label {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Matches .sort-select: dark input surface, custom chevron, accent focus. */
+.setting-item select {
+  min-width: 180px;
+  padding: var(--space-sm) var(--space-md);
+  padding-right: 30px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--transition-fast);
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23a0a0a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.setting-item select:focus {
+  border-color: var(--accent-primary);
+}
+
+.setting-item select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-top: var(--space-md);
+}
+
+/* ---- AniList ---- */
+
+#anilist-status {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+#anilist-group .settings-actions {
+  justify-content: flex-start;
+}
+
+#anilist-sync-result {
+  margin-top: var(--space-md);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+#anilist-sync-result:empty {
+  margin-top: 0;
+}
+
+#anilist-sync-result ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+#anilist-sync-result li {
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (max-width: 480px) {
+  .settings-container {
+    padding: var(--space-md) var(--space-sm);
+  }
+
+  .setting-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setting-item select {
+    width: 100%;
+  }
+
+  .settings-actions {
+    justify-content: stretch;
+  }
+
+  .settings-actions .btn {
+    flex: 1;
+  }
+}

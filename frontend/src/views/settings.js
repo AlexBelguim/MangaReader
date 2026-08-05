@@ -1,10 +1,12 @@
 import { api } from '../api.js';
 import { showToast } from '../utils/toast.js';
+import { renderHeader } from '../components/header.js';
 
 export default {
     mount: async (params) => {
         const app = document.getElementById('app');
         app.innerHTML = `
+            ${renderHeader()}
             <div class="settings-container">
                 <header class="settings-header">
                     <h1>Settings</h1>
@@ -22,12 +24,12 @@ export default {
                                     <option value="system">System Default</option>
                                 </select>
                             </div>
-                        </div>
-                        
-                        <!-- Add more settings here as needed -->
 
-                        <div class="settings-actions">
-                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                            <!-- Add more settings here as needed -->
+
+                            <div class="settings-actions">
+                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                            </div>
                         </div>
                     </form>
 
@@ -36,8 +38,8 @@ export default {
                         <div id="anilist-status" class="setting-item">Loading…</div>
                         <div class="settings-actions">
                             <button id="anilist-connect" class="btn btn-primary" style="display: none;">Connect AniList</button>
-                            <button id="anilist-sync" class="btn" style="display: none;">Sync from AniList</button>
-                            <button id="anilist-disconnect" class="btn" style="display: none;">Disconnect</button>
+                            <button id="anilist-sync" class="btn btn-secondary" style="display: none;">Sync from AniList</button>
+                            <button id="anilist-disconnect" class="btn btn-secondary" style="display: none;">Disconnect</button>
                         </div>
                         <div id="anilist-sync-result"></div>
                     </div>
@@ -58,7 +60,8 @@ export default {
             }
 
             loader.style.display = 'none';
-            form.style.display = 'block';
+            // Clear the inline display so the stylesheet controls the layout.
+            form.style.display = '';
 
             // Handle submission
             form.addEventListener('submit', async (e) => {

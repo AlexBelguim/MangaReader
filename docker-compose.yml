@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     depends_on:
       - flaresolverr
+    # Injects extra vars (e.g. ANILIST_CLIENT_ID/SECRET) from .env into the
+    # container. The environment: block below still wins on any conflict.
+    env_file:
+      - .env
     ports:
       - "3456:3000"
     environment:
