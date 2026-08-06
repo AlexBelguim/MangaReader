@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import sharp from 'sharp';
 import { bookmarkDb, chapterSettingsDb } from '../database.js';
+import { getPrimaryAdminId } from '../db/connection.js';
 import { downloader } from '../downloader.js';
 import { favoritesDb } from '../db/favorites.js';
 import { trophyDb } from '../db/trophies.js';
@@ -14,11 +15,16 @@ import { CONFIG } from '../config.js';
 
 const router = express.Router();
 
+// Library owner this request acts on: demo tokens (id 0) read the primary
+// admin's library (narrowed to demo-flagged bookmarks upstream), everyone
+// else their own.
+const ownerId = (req) => req.user?.role === 'demo' ? getPrimaryAdminId() : req.user.id;
+
 // Get images for a chapter (for cover selection)
 router.get('/:id/chapters/:chapterNumber/images', async (req, res) => {
     try {
         const { id, chapterNumber } = req.params;
-        const bookmark = await bookmarkDb.getById(id, req.user.id);
+        const bookmark = await bookmarkDb.getById(id, ownerId(req));
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNumber), bookmark.alias);
@@ -43,7 +49,7 @@ router.get('/:id/chapters/:chapterNumber/images', async (req, res) => {
 router.get('/:id/chapters/:chapterNumber/images/:filename', async (req, res) => {
     try {
         const { id, chapterNumber, filename } = req.params;
-        const bookmark = await bookmarkDb.getById(id, req.user.id);
+        const bookmark = await bookmarkDb.getById(id, ownerId(req));
         if (!bookmark) return res.status(404).send('Not Found');
 
         const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNumber), bookmark.alias);
@@ -66,7 +72,7 @@ router.get('/:id/chapters/:chapterNumber/images/:filename', async (req, res) => 
 // Get chapter images for reader
 router.get('/:id/chapters/:num/reader-images', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -94,7 +100,7 @@ router.get('/:id/chapters/:num/reader-images', async (req, res) => {
 // Get version details for a chapter
 router.get('/:id/chapters/:num/versions', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -133,7 +139,7 @@ router.get('/:id/chapters/:num/versions', async (req, res) => {
 // Delete a downloaded chapter
 router.delete('/:id/chapters/:num/download', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const chapterNum = parseFloat(req.params.num);
@@ -158,7 +164,7 @@ router.delete('/:id/chapters/:num/download', async (req, res) => {
 // Get next chapter's first image (for link mode)
 router.get('/:id/chapters/:num/next-preview', async (req, res) => {
     try {
-        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
 
         const currentChapter = parseFloat(req.params.num);

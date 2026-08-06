@@ -8,6 +8,7 @@ import fs from 'fs-extra';
 import sharp from 'sharp';
 import multer from 'multer';
 import { bookmarkDb } from '../database.js';
+import { getPrimaryAdminId } from '../db/connection.js';
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
 
@@ -17,6 +18,10 @@ const upload = multer({
 });
 
 const router = express.Router();
+
+// Library owner this request acts on: demo tokens (id 0) read the primary
+// admin's library, everyone else their own.
+const ownerId = (req) => req.user?.role === 'demo' ? getPrimaryAdminId() : req.user.id;
 
 // Create a volume
 router.post('/:id/volumes', async (req, res) => {
@@ -74,7 +79,7 @@ router.post('/:id/volumes/:volumeId/cover/from-chapter', async (req, res) => {
             return res.status(400).json({ error: 'Chapter number required' });
         }
 
-        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         if (!bookmark) {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
