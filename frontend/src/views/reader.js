@@ -15,6 +15,7 @@ import { session } from '../session.js';
 let state = {
     manga: null,
     chapter: null,
+    versionUrl: null, // URL of the chapter version being read (null = only/base version)
     images: [],
     trophyPages: {}, // { pageIndex: { isSingle: true, pages: [] } }
     mode: 'manga', // 'webtoon' or 'manga'
@@ -39,6 +40,35 @@ let state = {
 };
 
 // ==================== HELPERS ====================
+
+/**
+ * Human label for a chapter version URL: release group, else a distinctive
+ * title, plus a Local marker for imported files. Empty when nothing useful
+ * is known (the caller falls back to "Version N").
+ */
+function describeVersion(url, manga = state.manga) {
+    if (!url || !manga) return '';
+    const ch = (manga.chapters || []).find(c => c.url === url);
+    const parts = [];
+    if (ch) {
+        if (ch.releaseGroup) parts.push(ch.releaseGroup);
+        else if (ch.title && ch.title !== `Chapter ${ch.number}`) parts.push(ch.title);
+    }
+    if (url.startsWith('local://')) parts.push('Local');
+    return parts.join(' · ');
+}
+
+/**
+ * Label shown next to the chapter number when this chapter has more than
+ * one downloaded version, so it is clear which one is on screen.
+ */
+function currentVersionLabel() {
+    const num = state.chapter?.number;
+    const versions = state.manga?.downloadedVersions?.[num];
+    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    if (list.length < 2 || !state.versionUrl) return '';
+    return describeVersion(state.versionUrl) || `Version ${list.indexOf(state.versionUrl) + 1}`;
+}
 
 /**
  * Check if current page is favorited in any list
@@ -128,6 +158,7 @@ export function render() {
 
     const displayName = state.manga.alias || state.manga.title;
     const chapterNum = state.chapter?.number;
+    const versionLabel = state.isCollectionMode || state.isStreamingMode ? '' : currentVersionLabel();
     const spreads = buildSpreads();
     const totalSpreads = spreads.length;
     const totalPages = state.images.length;
@@ -158,7 +189,7 @@ export function render() {
         <button class="reader-bar-btn close-btn" id="reader-close-btn" title="Back">×</button>
         <div class="reader-title">
           <span class="manga-name">${displayName}</span>
-          ${state.isStreamingMode ? '' : `<span class="chapter-name">Ch. ${chapterNum}</span>`}
+          ${state.isStreamingMode ? '' : `<span class="chapter-name">Ch. ${chapterNum}${versionLabel ? ` · <span class="version-label" title="Version being read">${versionLabel}</span>` : ''}</span>`}
         </div>
         ${state.isCollectionMode ? '' : `
         <div class="reader-bar-tools" id="reader-toolbar">
@@ -637,27 +668,33 @@ function updateTrophyButton() {
 // ==================== READING PROGRESS ====================
 
 /**
- * Calculate and save current reading progress
+ * Capture the current reading position synchronously.
+ *
+ * Returned separately from the save so callers that are about to lose the
+ * state (unmount, which the router does not await) can snapshot first and
+ * send later. `currentPage === totalPages` means the chapter is finished:
+ * that is what the server's auto-mark-read checks, and it also makes the
+ * next open start at page 1 instead of resuming on the last page.
  */
-async function saveCurrentProgress() {
-    if (!state.manga || !state.chapter || state.isCollectionMode || !state.images.length) return;
+function progressSnapshot() {
+    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode || !state.images.length) return null;
 
+    const totalPages = state.images.length;
     let currentPage = 1;
+    let reachedEnd = false;
+
     if (state.mode === 'manga') {
-        if (state.singlePageMode) {
-            currentPage = state.currentPage + 1;
-        } else {
-            const spreads = buildSpreads();
-            const spread = spreads[state.currentPage];
-            if (spread && spread.length > 0) {
-                currentPage = spread[0] + 1;
-            }
-        }
+        // Visible pages cover single page, spreads and the link spread alike.
+        const visible = getVisiblePages();
+        if (visible.length > 0) currentPage = Math.min(...visible) + 1;
+        // Seeing the last page (alone, in a spread, or paired with the next
+        // chapter's preview) is "done reading".
+        reachedEnd = visible.includes(totalPages - 1);
     } else {
         // Webtoon - get from scroll position
         const content = document.getElementById('reader-content');
         if (content) {
-            const images = content.querySelectorAll('img');
+            const images = [...content.querySelectorAll('img')];
             const scrollTop = content.scrollTop;
             let accumulatedHeight = 0;
             images.forEach((img, i) => {
@@ -666,21 +703,59 @@ async function saveCurrentProgress() {
                 }
                 accumulatedHeight += img.offsetHeight;
             });
+            // The last image's top rarely reaches the top of the viewport, so
+            // "scrolled to the bottom" is the finish line. Before the images
+            // have laid out the content is not scrollable yet; don't mistake
+            // that for having read a chapter that fits on one screen.
+            const scrollable = content.scrollHeight > content.clientHeight + 10;
+            const allLoaded = images.length > 0 && images.every(img => img.complete && img.naturalHeight > 0);
+            reachedEnd = scrollable
+                ? scrollTop + content.clientHeight >= content.scrollHeight - 4
+                : allLoaded;
         }
     }
 
+    if (reachedEnd) currentPage = totalPages;
+
+    return { mangaId: state.manga.id, chapterNumber: state.chapter.number, currentPage, totalPages };
+}
+
+/**
+ * Save reading progress (from a snapshot, or the live state)
+ */
+async function saveCurrentProgress(snapshot = progressSnapshot()) {
+    // Demo visitors: progress lives only for the session, never saved
+    if (!snapshot || session.isDemo) return;
+
     try {
-        // Demo visitors: progress lives only for the session, never saved
-        if (session.isDemo) return;
         await api.updateReadingProgress(
-            state.manga.id,
-            state.chapter.number,
-            currentPage,
-            state.images.length
+            snapshot.mangaId,
+            snapshot.chapterNumber,
+            snapshot.currentPage,
+            snapshot.totalPages
         );
+        // Keep the in-memory bookmark in step so a later navigation (next
+        // chapter, continue reading) sees the chapter as read right away.
+        if (snapshot.currentPage >= snapshot.totalPages && state.manga?.id === snapshot.mangaId) {
+            const read = new Set(state.manga.readChapters || []);
+            read.add(snapshot.chapterNumber);
+            state.manga.readChapters = [...read];
+        }
     } catch (error) {
         console.error('Failed to save progress:', error);
     }
+}
+
+// Progress used to be written only when leaving the chapter, so closing the
+// tab on the last page never marked it read. Save shortly after every page
+// change instead (debounced so flipping through pages is one request).
+let _progressTimer = null;
+function scheduleProgressSave() {
+    if (_progressTimer) clearTimeout(_progressTimer);
+    _progressTimer = setTimeout(() => {
+        _progressTimer = null;
+        saveCurrentProgress();
+    }, 1500);
 }
 
 // ==================== EVENT LISTENERS ====================
@@ -696,7 +771,7 @@ export function setupListeners() {
             await saveCurrentProgress();
             await saveSettings();
         }
-        
+
         if (state.isStreamingMode) {
             router.go('/scrapers');
         } else if (state.manga && state.manga.id !== 'gallery') {
@@ -903,6 +978,9 @@ export function setupListeners() {
             state.showControls = !state.showControls;
             document.querySelector('.reader')?.classList.toggle('controls-hidden', !state.showControls);
         });
+        // Scrolling is the page turn in webtoon mode: track it for progress
+        // and for marking the chapter read at the bottom.
+        document.getElementById('reader-content')?.addEventListener('scroll', scheduleProgressSave, { passive: true });
     }
 
     // ==================== PAGE MANIPULATION TOOLBAR ====================
@@ -914,7 +992,7 @@ export function setupListeners() {
 
         try {
             showToast('Rotating...', 'info');
-            const result = await api.rotatePage(state.manga.id, state.chapter.number, filename);
+            const result = await api.rotatePage(state.manga.id, state.chapter.number, filename, 90, state.versionUrl);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Page rotated', 'success');
@@ -939,7 +1017,7 @@ export function setupListeners() {
 
         try {
             showToast('Swapping...', 'info');
-            const result = await api.swapPages(state.manga.id, state.chapter.number, fnA, fnB);
+            const result = await api.swapPages(state.manga.id, state.chapter.number, fnA, fnB, state.versionUrl);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Pages swapped', 'success');
@@ -975,13 +1053,13 @@ export function setupListeners() {
 
             // Now perform the split operation (keep loading true while this happens)
             showToast('Splitting page...', 'info');
-            const result = await api.splitPage(state.manga.id, state.chapter.number, filename);
+            const result = await api.splitPage(state.manga.id, state.chapter.number, filename, state.versionUrl);
 
             // Re-enable button
             if (splitBtn) splitBtn.disabled = false;
 
             // Load the chapter fresh - this will set loading=false when done
-            await loadData(state.manga.id, state.chapter.number, state.chapter.versionUrl);
+            await loadData(state.manga.id, state.chapter.number, state.versionUrl);
 
             // Re-render the app to dismiss the loading spinner
             app.innerHTML = render();
@@ -999,7 +1077,7 @@ export function setupListeners() {
             // On error, reload to restore state
             if (splitBtn) splitBtn.disabled = false;
             showToast('Split failed: ' + e.message, 'error');
-            await loadData(state.manga.id, state.chapter.number, state.chapter.versionUrl);
+            await loadData(state.manga.id, state.chapter.number, state.versionUrl);
             app.innerHTML = render();
             setupListeners();
         }
@@ -1014,7 +1092,7 @@ export function setupListeners() {
 
         try {
             showToast('Deleting...', 'info');
-            const result = await api.deletePage(state.manga.id, state.chapter.number, filename);
+            const result = await api.deletePage(state.manga.id, state.chapter.number, filename, state.versionUrl);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Page deleted', 'success');
@@ -1331,8 +1409,12 @@ async function preloadNextChapter() {
 /**
  * Show a version selection modal and return the chosen URL
  * Returns the selected version URL, or null if cancelled
+ *
+ * `manga` supplies release group / title per URL and `details` (from the
+ * versions endpoint) the on-disk page count, so the choices read as
+ * "GroupName · 24 pages" rather than an anonymous "Version 1 / 2".
  */
-function showVersionSelector(versions, chapterNum) {
+function showVersionSelector(versions, chapterNum, manga = state.manga, details = []) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'version-modal-overlay';
@@ -1348,7 +1430,15 @@ function showVersionSelector(versions, chapterNum) {
         versions.forEach((url, idx) => {
             const btn = document.createElement('button');
             btn.className = 'version-item';
-            btn.textContent = `Version ${idx + 1}`;
+            const label = describeVersion(url, manga) || `Version ${idx + 1}`;
+            const detail = details.find(d => d.url === url);
+            const meta = [];
+            if (detail?.imageCount) meta.push(`${detail.imageCount} pages`);
+            if (detail?.folder) meta.push(detail.folder);
+            btn.innerHTML = `<span class="version-item-title"></span>${meta.length ? `<span class="version-item-meta"></span>` : ''}`;
+            btn.querySelector('.version-item-title').textContent = label;
+            if (meta.length) btn.querySelector('.version-item-meta').textContent = meta.join(' · ');
+            btn.title = url;
             btn.addEventListener('click', () => {
                 overlay.remove();
                 resolve(url);
@@ -1629,10 +1719,12 @@ function handleKeyboard(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
     if (e.key === 'Escape') {
-        saveCurrentProgress();
-        if (state.manga) {
-            router.go(`/manga/${state.manga.id}`);
-        }
+        const mangaId = state.manga?.id;
+        // Save before leaving so the manga page shows the updated progress;
+        // unmount() also saves, but that request races the page's own fetch.
+        Promise.all([saveCurrentProgress(), saveSettings()]).finally(() => {
+            if (mangaId) router.go(`/manga/${mangaId}`);
+        });
         return;
     }
 
@@ -1728,6 +1820,8 @@ function updateSpread() {
 
         // Update favorite button
         updateFavoriteButton();
+
+        if (state.mode === 'manga') scheduleProgressSave();
     }
 }
 
@@ -1796,6 +1890,13 @@ async function loadData(mangaId, chapterNum, versionUrl) {
         // Single-page is a global preference (default on); per-chapter settings
         // below can still override it, and browse/stream mode forces it on.
         state.singlePageMode = localStorage.getItem('reader_single_page') !== '0';
+        // Per-chapter flags start from their defaults on every load. Anything
+        // else comes from this chapter's saved settings or, failing that, is
+        // inherited from the previous chapter below - not silently carried
+        // over from whatever chapter (of whatever manga) was open before.
+        state.firstPageSingle = true;
+        state.lastPageSingle = false;
+        state.versionUrl = null;
 
         // Special handling for Favorite Galleries
         if (mangaId === 'gallery') {
@@ -1947,8 +2048,10 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             if (state._preloadCache && state._preloadCache.mangaId === mangaId && state._preloadCache.chapterNum === chapterNumFloat) {
                 console.log('[Reader] Using preloaded images for chapter', chapterNum);
                 state.images = state._preloadCache.images || [];
+                state.versionUrl = versionUrl || state._preloadCache.versionUrl || null;
                 state._preloadCache = null;
             } else {
+                state.versionUrl = versionUrl || null;
                 const imagesEndpoint = versionUrl
                     ? `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images?version=${encodeURIComponent(versionUrl)}`
                     : `/bookmarks/${mangaId}/chapters/${chapterNum}/reader-images`;
@@ -2243,14 +2346,20 @@ async function startStream(url, scraperName) {
 export async function mount(params = []) {
     console.log('[Reader] mount called with params:', params);
     let [mangaId, chapterNum] = params;
-    
-    // Parse ?version= from chapterNum (router concatenates query params with last path segment)
+
+    // Parse ?version= from the hash. The router strips the query string
+    // before splitting params, so it never arrives inside chapterNum any
+    // more; reading it from the hash keeps the "open this exact version"
+    // links from the manga page and from chapter navigation working instead
+    // of popping the version chooser every time.
     let urlVersionParam = null;
     if (chapterNum && chapterNum.includes('?')) {
         const [num, queryStr] = chapterNum.split('?');
         chapterNum = num;
-        const queryParams = new URLSearchParams(queryStr);
-        urlVersionParam = queryParams.get('version');
+        urlVersionParam = new URLSearchParams(queryStr).get('version');
+    } else {
+        const hashQuery = window.location.hash.split('?')[1];
+        if (hashQuery) urlVersionParam = new URLSearchParams(hashQuery).get('version');
     }
     console.log('[Reader] mangaId:', mangaId, 'chapterNum:', chapterNum, 'urlVersion:', urlVersionParam);
 
@@ -2286,8 +2395,14 @@ export async function mount(params = []) {
                 visibleVersions = versions.filter(url => !deletedUrls.has(url));
             }
             if (visibleVersions.length > 1) {
-                // Show version selection modal
-                const choice = await showVersionSelector(visibleVersions, chapterNum);
+                // Show version selection modal (page counts are a nicety; the
+                // chooser works without them if the lookup fails)
+                let details = [];
+                try {
+                    const data = await api.getChapterVersions(mangaId, chapterNum);
+                    details = data.versions || [];
+                } catch (e) { /* labels fall back to group/title only */ }
+                const choice = await showVersionSelector(visibleVersions, chapterNum, manga, details);
                 if (choice === null) {
                     // User cancelled — go back to manga page
                     router.go(`/manga/${mangaId}`);
@@ -2333,27 +2448,35 @@ export async function mount(params = []) {
  */
 export async function unmount() {
     console.log('[Reader] unmount called');
-    
+
     if (state._streamAbortController) {
         state._streamAbortController.abort();
         state._streamAbortController = null;
     }
-    
-    if (!state.isStreamingMode) {
-        await saveCurrentProgress();
-        await saveSettings();
-    }
-    
+
+    // Snapshot synchronously, before any await. The router does not await
+    // unmount, so the next view's mount() (often this same reader for the
+    // next chapter) resets this module's state while our requests are in
+    // flight. Reading state after an await saved the NEXT chapter's number,
+    // or the reset singlePageMode = false, under the chapter being left.
+    if (_progressTimer) { clearTimeout(_progressTimer); _progressTimer = null; }
+    const progress = progressSnapshot();
+    const settings = settingsSnapshot();
+
     document.body.classList.remove('reader-active');
     document.removeEventListener('keydown', handleKeyboard);
     state.manga = null;
     state.chapter = null;
+    state.versionUrl = null;
     state.images = [];
     state.loading = true;
     state.singlePageMode = false;
     state.isStreamingMode = false;
     state._resumeScrollToPage = null;
     state._preloadCache = null;
+
+    await saveCurrentProgress(progress);
+    await saveSettings(settings);
 }
 
 /**
@@ -2380,14 +2503,13 @@ function applyChapterSettings(s) {
     if (s.singlePageMode !== undefined) state.singlePageMode = s.singlePageMode;
 }
 
-async function saveSettings() {
-    if (!state.manga || !state.chapter || state.manga.id === 'gallery' || state.isStreamingMode) return;
-    // Demo visitors can change reader settings for their session (state is
-    // already updated locally by the callers) but nothing is persisted.
-    if (session.isDemo) return;
-
-    try {
-        await api.updateChapterSettings(state.manga.id, state.chapter.number, {
+/** Capture the reader settings for the open chapter (see progressSnapshot). */
+function settingsSnapshot() {
+    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode) return null;
+    return {
+        mangaId: state.manga.id,
+        chapterNumber: state.chapter.number,
+        settings: {
             mode: state.mode,
             direction: state.direction,
             firstPageSingle: state.firstPageSingle,
@@ -2396,7 +2518,17 @@ async function saveSettings() {
             // like every other reader setting. Without this it was the one
             // control that reset on every chapter change.
             singlePageMode: state.singlePageMode
-        });
+        }
+    };
+}
+
+async function saveSettings(snapshot = settingsSnapshot()) {
+    // Demo visitors can change reader settings for their session (state is
+    // already updated locally by the callers) but nothing is persisted.
+    if (!snapshot || session.isDemo) return;
+
+    try {
+        await api.updateChapterSettings(snapshot.mangaId, snapshot.chapterNumber, snapshot.settings);
     } catch (e) {
         console.error('Failed to save settings:', e);
     }

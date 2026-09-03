@@ -19,6 +19,8 @@ import { CONFIG } from '../config.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../queue.js';
+import { favoritesDb } from '../db/favorites.js';
+import { trophyDb } from '../db/trophies.js';
 import { scraperFactory } from '../scrapers/index.js';
 import { anilistService } from '../services/anilistService.js';
 
@@ -804,60 +806,50 @@ router.delete('/:id/chapters', async (req, res) => {
             return res.status(404).json({ error: 'Bookmark not found' });
         }
 
-        // Queue the actual file deletion to run in the background
-        // so the UI doesn't freeze waiting for local file IO
-        queue.add('delete-chapter', {
-            bookmarkId: bookmark.id,
-            title: bookmark.title,
-            chapterNumber: chapterNumber,
-            alias: bookmark.alias,
-            url: url
-        }, req.user.id);
-
+        const chapterNum = parseFloat(chapterNumber);
         const downloadedVersions = { ...(bookmark.downloadedVersions || {}) };
-        const numKey = String(chapterNumber);
-        if (downloadedVersions[numKey]) {
-            const versions = downloadedVersions[numKey];
-            if (Array.isArray(versions)) {
-                downloadedVersions[numKey] = versions.filter(v => v !== url);
-                if (downloadedVersions[numKey].length === 0) {
-                    delete downloadedVersions[numKey];
-                } else if (downloadedVersions[numKey].length === 1) {
-                    downloadedVersions[numKey] = downloadedVersions[numKey][0];
-                }
-            } else if (versions === url) {
-                delete downloadedVersions[numKey];
-            }
+        const numKey = String(chapterNum);
+        const current = downloadedVersions[numKey];
+        const currentList = Array.isArray(current) ? current : (current ? [current] : []);
+        // No url = "delete this chapter's files": everything goes.
+        const remainingUrls = url ? currentList.filter(v => v !== url) : [];
+
+        // Delete the files right here, before touching the DB. This used to be
+        // queued as a background job, which sits behind any running scrape;
+        // a re-download started in the meantime finished first and was then
+        // wiped by the late delete, leaving a "downloaded" chapter with no
+        // files. remainingUrls lets the downloader attribute the unversioned
+        // base folder to the version being deleted.
+        const result = await downloader.deleteChapter(
+            bookmark.title, chapterNum, bookmark.alias, url || null, { remainingUrls }
+        );
+        if (!result.success) {
+            return res.status(500).json({ error: result.message || 'Failed to delete chapter files' });
+        }
+
+        if (remainingUrls.length > 0) {
+            downloadedVersions[numKey] = remainingUrls;
+        } else {
+            delete downloadedVersions[numKey];
         }
 
         let downloadedChapters = [...(bookmark.downloadedChapters || [])];
-        if (!downloadedVersions[numKey]) {
-            downloadedChapters = downloadedChapters.filter(n => n !== chapterNumber);
+        if (remainingUrls.length === 0) {
+            downloadedChapters = downloadedChapters.filter(n => n !== chapterNum);
+            // Favorites/trophies point at files that no longer exist.
+            favoritesDb.deleteForChapter(bookmark.id, chapterNum);
+            trophyDb.deleteForChapter(bookmark.id, chapterNum);
         }
 
-        const updatedChapters = bookmark.chapters.filter(ch =>
-            !(ch.number === chapterNumber && ch.url === url)
-        );
-
-        const remainingVersionsCount = updatedChapters.filter(ch => ch.number === chapterNumber).length;
-        const updatedDuplicates = (bookmark.duplicateChapters || []).map(dup => {
-            if (dup.number === chapterNumber) {
-                if (remainingVersionsCount <= 1) {
-                    return null;
-                }
-                return { ...dup, count: remainingVersionsCount };
-            }
-            return dup;
-        }).filter(Boolean);
-
+        // Only the download state changes. The chapter/version row itself is
+        // kept so the version can be re-downloaded from the list (hiding a
+        // version is a separate action).
         await bookmarkDb.update(req.params.id, {
-            chapters: updatedChapters,
-            duplicateChapters: updatedDuplicates,
             downloadedVersions,
             downloadedChapters
         }, req.user.id);
 
-        res.json({ success: true, message: 'Chapter version removed' });
+        res.json({ success: true, message: result.message || 'Chapter files deleted' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1223,13 +1215,22 @@ function calculateNextCheck(schedule, day, time) {
 // ==================== PAGE MANIPULATION ====================
 
 // Helper to get chapter directory for a bookmark
-async function getChapterDir(bookmarkId, chapterNum, userId) {
+// Resolves the same folder the reader loaded (see downloader.resolveChapterDir)
+// so a page edit lands on the version that is on screen. Without the version
+// URL this picked the first folder on disk, which for a chapter with several
+// downloaded versions was often a different one than the reader showed - the
+// swap/rotate then appeared to work (the response returned that other folder)
+// but was gone on the next open of the version actually being read.
+async function getChapterDir(bookmarkId, chapterNum, userId, versionUrl = null) {
     const bookmark = await bookmarkDb.getById(bookmarkId, userId);
     if (!bookmark) return null;
+    return downloader.resolveChapterDir(bookmark.title, parseFloat(chapterNum), bookmark.alias, versionUrl);
+}
 
-    const versions = await downloader.getExistingVersions(bookmark.title, parseFloat(chapterNum), bookmark.alias);
-    const validVersion = versions.find(v => v.imageCount > 0);
-    return validVersion ? validVersion.path : null;
+// Version URL a page-edit request refers to (body for POST, query for DELETE).
+function requestVersion(req) {
+    const v = req.body?.version ?? req.query?.version;
+    return v ? String(v) : null;
 }
 
 // Helper to get sorted image list for a chapter.
@@ -1237,8 +1238,8 @@ async function getChapterDir(bookmarkId, chapterNum, userId) {
 // between the initial reader-images load and the post-swap/rotate reload.
 // If the two sorts disagree, indices shift and the operation appears to
 // target a different spread than what's on screen.
-async function getChapterImages(bookmarkId, chapterNum, userId) {
-    const chapterDir = await getChapterDir(bookmarkId, chapterNum, userId);
+async function getChapterImages(bookmarkId, chapterNum, userId, versionUrl = null) {
+    const chapterDir = await getChapterDir(bookmarkId, chapterNum, userId, versionUrl);
     if (!chapterDir || !await fs.pathExists(chapterDir)) return [];
 
     const files = await fs.readdir(chapterDir);
@@ -1251,7 +1252,14 @@ async function getChapterImages(bookmarkId, chapterNum, userId) {
         });
 
     const relativeChapterDir = path.relative(CONFIG.downloadsDir, chapterDir).replace(/\\/g, '/');
-    return imageFiles.map(file => `/downloads/${relativeChapterDir}/${file}`);
+    // Same mtime-versioned URLs as the reader's initial load (see
+    // downloader._getImagesFromDir) so edited pages are never served from the
+    // browser's image cache.
+    const urls = [];
+    for (const file of imageFiles) {
+        urls.push(`/downloads/${relativeChapterDir}/${file}?v=${await downloader.fileVersion(path.join(chapterDir, file))}`);
+    }
+    return urls;
 }
 
 // Rotate a page
@@ -1264,7 +1272,8 @@ router.post('/:id/chapters/:chapterNum/pages/rotate', async (req, res) => {
             return res.status(400).json({ error: 'Filename is required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
+        const versionUrl = requestVersion(req);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id, versionUrl);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1285,7 +1294,7 @@ router.post('/:id/chapters/:chapterNum/pages/rotate', async (req, res) => {
         await fs.move(filePath + '.tmp', filePath, { overwrite: true });
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum, req.user.id);
+        const images = await getChapterImages(id, chapterNum, req.user.id, versionUrl);
         res.json({ images });
     } catch (error) {
         // Handle EBUSY error - file is locked by another process
@@ -1306,7 +1315,8 @@ router.post('/:id/chapters/:chapterNum/pages/swap', async (req, res) => {
             return res.status(400).json({ error: 'Both filenameA and filenameB are required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
+        const versionUrl = requestVersion(req);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id, versionUrl);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1328,7 +1338,7 @@ router.post('/:id/chapters/:chapterNum/pages/swap', async (req, res) => {
         await fs.move(tempPath, filePathB);
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum, req.user.id);
+        const images = await getChapterImages(id, chapterNum, req.user.id, versionUrl);
         res.json({ images });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1345,7 +1355,7 @@ router.post('/:id/chapters/:chapterNum/pages/split', async (req, res) => {
             return res.status(400).json({ error: 'Filename is required' });
         }
 
-        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id, requestVersion(req));
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1484,7 +1494,7 @@ router.post('/:id/chapters/:chapterNum/pages/split', async (req, res) => {
         // Handle file locked errors more gracefully
         if (error.code === 'EBUSY' || error.code === 'ENOENT') {
             // Still return success - the split likely worked, just the delete failed
-            const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
+            const chapterDir = await getChapterDir(id, chapterNum, req.user.id, requestVersion(req));
             if (chapterDir) {
                 const allFiles = await fs.readdir(chapterDir);
                 const imageFiles = allFiles.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
@@ -1507,7 +1517,8 @@ router.delete('/:id/chapters/:chapterNum/pages/:filename', async (req, res) => {
         const { id, chapterNum, filename } = req.params;
         const decodedFilename = decodeURIComponent(filename);
 
-        const chapterDir = await getChapterDir(id, chapterNum, req.user.id);
+        const versionUrl = requestVersion(req);
+        const chapterDir = await getChapterDir(id, chapterNum, req.user.id, versionUrl);
         if (!chapterDir) {
             return res.status(404).json({ error: 'Chapter not found or not downloaded' });
         }
@@ -1521,7 +1532,7 @@ router.delete('/:id/chapters/:chapterNum/pages/:filename', async (req, res) => {
         await fs.remove(filePath);
 
         // Return updated image list
-        const images = await getChapterImages(id, chapterNum, req.user.id);
+        const images = await getChapterImages(id, chapterNum, req.user.id, versionUrl);
         res.json({ images });
     } catch (error) {
         // Handle EBUSY error - file is locked by another process

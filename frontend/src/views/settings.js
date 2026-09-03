@@ -1,6 +1,21 @@
 import { api } from '../api.js';
 import { showToast } from '../utils/toast.js';
 import { renderHeader } from '../components/header.js';
+import { router } from '../router.js';
+import { session } from '../session.js';
+import { icon, placeholder, coverImg } from '../icons.js';
+
+const SLIDESHOW_DEFAULTS = {
+    disabledMangaIds: [],
+    includeLists: false,
+    includeTrophies: false,
+    intervalMs: 8000,
+    shuffle: false
+};
+
+function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 export default {
     mount: async (params) => {
@@ -43,13 +58,49 @@ export default {
                         </div>
                         <div id="anilist-sync-result"></div>
                     </div>
+
+                    <div class="settings-group" id="slideshow-group">
+                        <h2>Slideshow</h2>
+                        <p class="settings-hint">Fullscreen slideshow of your volume covers. Pick which manga to include — only manga with volumes are listed.</p>
+                        <div class="setting-item">
+                            <label for="slideshow-interval">Slide duration</label>
+                            <select id="slideshow-interval">
+                                <option value="3000">3 seconds</option>
+                                <option value="5000">5 seconds</option>
+                                <option value="8000">8 seconds</option>
+                                <option value="10000">10 seconds</option>
+                                <option value="15000">15 seconds</option>
+                                <option value="30000">30 seconds</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="slideshow-shuffle">Shuffle order</label>
+                            <input type="checkbox" id="slideshow-shuffle">
+                        </div>
+                        <div class="setting-item">
+                            <label for="slideshow-lists">Include gallery lists</label>
+                            <input type="checkbox" id="slideshow-lists">
+                        </div>
+                        <div class="setting-item">
+                            <label for="slideshow-trophies">Include trophy pages</label>
+                            <input type="checkbox" id="slideshow-trophies">
+                        </div>
+                        <div id="slideshow-manga-list" class="slideshow-manga-list">
+                            <div class="loader">Loading manga…</div>
+                        </div>
+                        <div class="settings-actions">
+                            <button id="slideshow-start" class="btn btn-primary">${icon('images')} Start Slideshow</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
 
         // Load settings
+        let loadedSettings = {};
         try {
             const settings = await api.get('/settings') || {};
+            loadedSettings = settings;
 
             const form = document.getElementById('settings-form');
             const loader = document.getElementById('settings-loader');
@@ -175,5 +226,88 @@ export default {
         });
 
         refreshAnilistStatus();
+
+        // ---- Slideshow section ----
+        const cfg = { ...SLIDESHOW_DEFAULTS, ...(loadedSettings.slideshow || {}) };
+        cfg.disabledMangaIds = [...(cfg.disabledMangaIds || [])];
+
+        const intervalSel = document.getElementById('slideshow-interval');
+        const shuffleCb = document.getElementById('slideshow-shuffle');
+        const listsCb = document.getElementById('slideshow-lists');
+        const trophiesCb = document.getElementById('slideshow-trophies');
+        const mangaListEl = document.getElementById('slideshow-manga-list');
+
+        intervalSel.value = String(cfg.intervalMs);
+        if (!intervalSel.value) intervalSel.value = '8000';
+        shuffleCb.checked = !!cfg.shuffle;
+        listsCb.checked = !!cfg.includeLists;
+        trophiesCb.checked = !!cfg.includeTrophies;
+
+        const saveSlideshow = async () => {
+            if (session.isDemo) return; // demo settings are read-only
+            try {
+                await api.post('/settings', { key: 'slideshow', value: cfg });
+            } catch (err) {
+                console.error(err);
+                showToast('Failed to save slideshow settings', 'error');
+            }
+        };
+
+        intervalSel.addEventListener('change', () => {
+            cfg.intervalMs = parseInt(intervalSel.value, 10) || 8000;
+            saveSlideshow();
+        });
+        shuffleCb.addEventListener('change', () => { cfg.shuffle = shuffleCb.checked; saveSlideshow(); });
+        listsCb.addEventListener('change', () => { cfg.includeLists = listsCb.checked; saveSlideshow(); });
+        trophiesCb.addEventListener('change', () => { cfg.includeTrophies = trophiesCb.checked; saveSlideshow(); });
+
+        document.getElementById('slideshow-start').addEventListener('click', () => {
+            // Request fullscreen inside the click gesture — the slideshow view
+            // itself can't reliably do it after an async mount.
+            document.documentElement.requestFullscreen?.().catch(() => {});
+            router.go('/slideshow');
+        });
+
+        try {
+            const mangaList = await api.getAllVolumes();
+            if (mangaList.length === 0) {
+                mangaListEl.innerHTML = '<p class="settings-hint">No manga with volumes yet — create volumes from a manga\'s page first.</p>';
+            } else {
+                const disabled = new Set(cfg.disabledMangaIds);
+                mangaListEl.innerHTML = mangaList.map(m => {
+                    const name = esc(m.alias || m.title);
+                    const covered = m.volumes.filter(v => v.cover).length;
+                    const coverUrl = m.localCover
+                        ? `/api/public/covers/${m.id}/${encodeURIComponent(m.localCover.split(/[/\\]/).pop())}`
+                        : m.cover;
+                    const noCovers = covered === 0;
+                    return `
+                        <label class="slideshow-manga-row${noCovers ? ' no-covers' : ''}" title="${noCovers ? 'No volume covers yet' : name}">
+                            <input type="checkbox" data-manga-id="${m.id}" ${!disabled.has(m.id) && !noCovers ? 'checked' : ''} ${noCovers ? 'disabled' : ''}>
+                            <span class="slideshow-manga-thumb">${coverUrl ? coverImg(coverUrl, name, { kind: 'book' }) : placeholder('book')}</span>
+                            <span class="slideshow-manga-info">
+                                <span class="slideshow-manga-name">${name}</span>
+                                <span class="slideshow-manga-meta">${m.volumes.length} volume${m.volumes.length === 1 ? '' : 's'} · ${covered} cover${covered === 1 ? '' : 's'}</span>
+                            </span>
+                        </label>
+                    `;
+                }).join('');
+
+                mangaListEl.addEventListener('change', (e) => {
+                    const cb = e.target.closest('input[data-manga-id]');
+                    if (!cb) return;
+                    const id = cb.dataset.mangaId;
+                    if (cb.checked) {
+                        cfg.disabledMangaIds = cfg.disabledMangaIds.filter(x => x !== id);
+                    } else if (!cfg.disabledMangaIds.includes(id)) {
+                        cfg.disabledMangaIds.push(id);
+                    }
+                    saveSlideshow();
+                });
+            }
+        } catch (err) {
+            console.error(err);
+            mangaListEl.innerHTML = '<p class="settings-hint">Failed to load manga list.</p>';
+        }
     }
 };

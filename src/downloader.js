@@ -105,6 +105,10 @@ class Downloader {
       }
     }
 
+    // readdir order is filesystem-dependent (arbitrary on SMB/CIFS mounts).
+    // Sort so every caller that picks "the first folder" agrees: the
+    // unversioned base folder sorts before its " vXXXX" siblings.
+    versions.sort((a, b) => a.folder.localeCompare(b.folder));
     return versions;
   }
 
@@ -176,8 +180,12 @@ class Downloader {
     let version = null;
 
     if (chapterUrl) {
-      // Check if there are existing downloads for this chapter
-      const existingVersions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
+      // Check if there are existing downloads for this chapter. Only folders
+      // that actually hold images count: an empty folder left behind by a
+      // failed download (or a half-finished delete) must neither force a
+      // version suffix nor make this version look "already downloaded".
+      const existingVersions = (await this.getExistingVersions(mangaTitle, chapterNumber, alias))
+        .filter(v => v.imageCount > 0);
 
       if (existingVersions.length > 0) {
         // There's already a download - use version suffix for new one
@@ -292,6 +300,20 @@ class Downloader {
       }
     }
 
+    if (results.success + results.skipped === 0) {
+      // Nothing usable landed on disk. Remove the empty folder (it would make
+      // the next attempt think this version already exists) and fail the task
+      // so the caller never records the chapter as downloaded. Previously an
+      // empty scrape/all-failed download was marked downloaded and the reader
+      // then reported "Chapter not downloaded" for a chapter with a checkmark.
+      try {
+        if (!(await this._dirHasImages(chapterDir))) await fs.remove(chapterDir);
+      } catch (e) { }
+      throw new Error(images.length === 0
+        ? 'No pages found for this chapter (scraper returned nothing)'
+        : `All ${results.failed} pages failed to download`);
+    }
+
     return results;
   }
 
@@ -359,31 +381,31 @@ class Downloader {
     return files.some(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f));
   }
 
-  // Get local chapter images for the reader
-  async getLocalChapterImages(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
-    // First try to find the specific version if URL provided
+  // Resolve the on-disk folder for a chapter. This is the single source of
+  // truth for BOTH reading and page edits (swap/rotate/split/delete), so an
+  // edit always lands in the folder that is on screen. Preference order:
+  // the folder matching the version URL, then the unversioned base folder,
+  // then any versioned folder. Only folders that contain images count, so an
+  // empty leftover folder never shadows a real one.
+  async resolveChapterDir(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
     if (chapterUrl) {
       const version = this.getVersionTokenFromUrl(chapterUrl);
       const versionedDir = this.getChapterDir(mangaTitle, chapterNumber, alias, version);
-
-      if (await fs.pathExists(versionedDir)) {
-        return await this._getImagesFromDir(versionedDir);
-      }
+      if (await this._dirHasImages(versionedDir)) return versionedDir;
     }
 
-    // Try base chapter dir (no version)
     const baseDir = this.getChapterDir(mangaTitle, chapterNumber, alias);
-    if (await fs.pathExists(baseDir)) {
-      return await this._getImagesFromDir(baseDir);
-    }
+    if (await this._dirHasImages(baseDir)) return baseDir;
 
-    // Try any versioned folder for this chapter
     const existingVersions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
-    if (existingVersions.length > 0) {
-      return await this._getImagesFromDir(existingVersions[0].path);
-    }
+    const withImages = existingVersions.find(v => v.imageCount > 0);
+    return withImages ? withImages.path : null;
+  }
 
-    return null;
+  // Get local chapter images for the reader
+  async getLocalChapterImages(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
+    const chapterDir = await this.resolveChapterDir(mangaTitle, chapterNumber, alias, chapterUrl);
+    return chapterDir ? await this._getImagesFromDir(chapterDir) : null;
   }
 
   async _getImagesFromDir(chapterDir) {
@@ -403,11 +425,30 @@ class Downloader {
 
     const relativeChapterDir = path.relative(this.downloadsDir, chapterDir);
 
-    return imageFiles.map((file, index) => ({
-      index: index + 1,
-      url: `/downloads/${relativeChapterDir.replace(/\\/g, '/')}/${file}`,
-      isLocal: true
-    }));
+    // Version the URL by the file's mtime. A swap/rotate/split changes the
+    // bytes behind an unchanged filename; without this the browser's in-memory
+    // image cache kept showing the old page the next time the chapter was
+    // opened in the same tab, so edits looked like they had not stuck.
+    const results = [];
+    for (let index = 0; index < imageFiles.length; index++) {
+      const file = imageFiles[index];
+      results.push({
+        index: index + 1,
+        url: `/downloads/${relativeChapterDir.replace(/\\/g, '/')}/${file}?v=${await this.fileVersion(path.join(chapterDir, file))}`,
+        isLocal: true
+      });
+    }
+    return results;
+  }
+
+  // Cache-busting token for an image URL: mtime in ms (0 if unreadable).
+  async fileVersion(filePath) {
+    try {
+      const stat = await fs.stat(filePath);
+      return Math.floor(stat.mtimeMs);
+    } catch (e) {
+      return 0;
+    }
   }
 
   // Cover management
@@ -508,8 +549,28 @@ class Downloader {
     return covers.length > 0 ? covers[0] : null;
   }
 
-  async deleteChapter(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
+  // options.remainingUrls: the version URLs that stay downloaded after this
+  // delete (per the DB). Lets the unversioned base folder be attributed to the
+  // URL being deleted: the base folder belongs to whichever version was
+  // downloaded first, and it is this one when every remaining version has its
+  // own " vXXXX" folder on disk. With no remaining versions every folder of
+  // the chapter goes, stale leftovers included.
+  async deleteChapter(mangaTitle, chapterNumber, alias = null, chapterUrl = null, options = {}) {
     let chapterDir;
+    const remainingUrls = Array.isArray(options.remainingUrls) ? options.remainingUrls : null;
+
+    if (chapterUrl && remainingUrls && remainingUrls.length === 0) {
+      // Last downloaded version of this chapter: nothing else may live in any
+      // of its folders, so clear them all rather than guessing which one is ours.
+      const versions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
+      if (versions.length === 0) return { success: true, message: 'No versions found' };
+      try {
+        for (const ver of versions) await fs.remove(ver.path);
+        return { success: true, message: `Deleted ${versions.length} folder(s)` };
+      } catch (error) {
+        return { success: false, message: error.message };
+      }
+    }
 
     if (chapterUrl) {
       // Delete specific version
@@ -523,17 +584,23 @@ class Downloader {
         if (existingVersions.length > 0) {
           // Try to find matching version by hash
           const matchingVersion = existingVersions.find(v => v.version === version);
+          const baseFolder = existingVersions.find(v => !v.isVersioned);
+          // The base folder is ours when it is the only folder, or when every
+          // remaining version is accounted for by its own versioned folder.
+          const baseBelongsToUrl = !!baseFolder && (
+            existingVersions.length === 1 ||
+            (remainingUrls !== null && remainingUrls.every(u => {
+              const token = this.getVersionTokenFromUrl(u);
+              return existingVersions.some(v => v.version === token);
+            }))
+          );
           if (matchingVersion) {
             chapterDir = matchingVersion.path;
-          } else if (existingVersions.length === 1 && !existingVersions[0].isVersioned) {
-            // Only one folder exists and it's the unversioned base folder.
-            // This is safe to delete ONLY if there are no other versioned folders —
-            // meaning this base folder must belong to the URL we're trying to delete
-            // (it was the first/only download so it got no version suffix).
-            chapterDir = existingVersions[0].path;
+          } else if (baseBelongsToUrl) {
+            chapterDir = baseFolder.path;
           } else {
-            // Multiple folders exist or the single folder is versioned but doesn't
-            // match our hash — the version was likely never downloaded.
+            // Multiple folders exist and none can be attributed to this URL -
+            // the version was likely never downloaded.
             return { success: true, message: 'Version not on disk (nothing to delete)' };
           }
         } else {

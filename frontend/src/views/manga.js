@@ -878,22 +878,37 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     isExtra ? 'extra' : ''
   ].filter(Boolean).join(' ');
 
+  // How many of this chapter's versions are on disk - with two or more the
+  // rows get a "keep only this one" shortcut, and the dropdown is annotated
+  // with page counts when opened (see annotateVersionPages).
+  const downloadedList = Array.isArray(downloadedVersions)
+    ? downloadedVersions
+    : (downloadedVersions ? [downloadedVersions] : []);
+  const downloadedCount = downloadedList.length;
+
   // Render version dropdown if multiple versions exist
   const versionsHtml = hasMultiple ? `
     <div class="versions-dropdown hidden" id="versions-${num}">
       ${displayVersions.map(v => {
     const versionUrl = encodeURIComponent(v.url);
-    const isVersionDownloaded = Array.isArray(downloadedVersions)
-      ? downloadedVersions.includes(v.url)
-      : downloadedVersions === v.url;
+    const isVersionDownloaded = downloadedList.includes(v.url);
     const isLocalVersion = v.url.startsWith('local://');
+    // Title first (when it says more than "Chapter N"), then group and
+    // upload date, so two versions of the same chapter are telling apart.
+    const distinctTitle = v.title && v.title !== `Chapter ${num}` ? v.title : '';
+    const label = distinctTitle || v.releaseGroup || 'Version';
+    const meta = [
+      distinctTitle && v.releaseGroup ? v.releaseGroup : '',
+      formatVersionDate(v.uploadedAt)
+    ].filter(Boolean).join(' · ');
     return `
           <div class="version-row ${isVersionDownloaded ? 'downloaded' : ''}"
                data-version-url="${versionUrl}" data-num="${num}">
-            <span class="version-title" style="cursor: pointer; flex: 1;">${v.title || v.releaseGroup || 'Version'}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}</span>
+            <span class="version-title" style="cursor: pointer; flex: 1;" title="${escapeAttr(v.url)}">${escapeHtml(label)}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}${meta ? `<span class="version-meta">${escapeHtml(meta)}</span>` : ''}${isVersionDownloaded ? `<span class="version-meta version-pages" data-url="${versionUrl}"></span>` : ''}</span>
             <div class="version-actions">
               ${isVersionDownloaded
         ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">${icon('play', { title: 'Read' })}</button>
+                   ${downloadedCount > 1 ? `<button class="btn-icon small" data-action="keep-version" data-num="${num}" data-url="${versionUrl}" title="Keep only this version (delete the other ${downloadedCount - 1})">${icon('check', { title: 'Keep only this version' })}</button>` : ''}
                    <button class="btn-icon small danger" data-action="delete-version" data-num="${num}" data-url="${versionUrl}">${icon('trash-2', { title: 'Delete version' })}</button>`
         : `<button class="btn-icon small" data-action="download-version" data-num="${num}" data-url="${versionUrl}">${icon('download', { title: 'Download' })}</button>`
       }
@@ -955,8 +970,8 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
         </button>`
     }
           ${hasMultiple ? `
-            <button class="btn-icon small versions-btn" data-action="versions" data-num="${num}">
-              ${visibleVersions.length} ${icon('chevron-down')}
+            <button class="btn-icon small versions-btn" data-action="versions" data-num="${num}" title="${visibleVersions.length} versions, ${downloadedCount} downloaded">
+              ${downloadedCount > 1 ? `${downloadedCount}/` : ''}${visibleVersions.length} ${icon('chevron-down')}
             </button>
           ` : ''}
         </div>
@@ -964,6 +979,22 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
       ${versionsHtml}
     </div>
   `;
+}
+
+// Short upload date for a version row ("2024-03-08"); empty when unknown.
+function formatVersionDate(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return String(value).slice(0, 10);
+  return d.toISOString().slice(0, 10);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, '&quot;');
 }
 
 /**
@@ -1792,6 +1823,9 @@ export function setupListeners() {
         case 'delete-version':
           await deleteVersion(num, url);
           break;
+        case 'keep-version':
+          await keepOnlyVersion(num, url);
+          break;
         case 'hide-version':
           await hideVersion(num, url);
           break;
@@ -1942,7 +1976,66 @@ function toggleVersions(chapterNum) {
   const dropdown = document.getElementById(`versions-${chapterNum}`);
   if (dropdown) {
     dropdown.classList.toggle('hidden');
+    if (!dropdown.classList.contains('hidden')) annotateVersionPages(chapterNum, dropdown);
   }
+}
+
+/**
+ * Fill in the on-disk page count (and folder) for each downloaded version
+ * row once the dropdown opens. Two versions of a chapter usually share a
+ * title, so the page count is often the only thing that tells them apart
+ * when deciding which one to keep.
+ */
+async function annotateVersionPages(chapterNum, dropdown) {
+  const manga = state.manga;
+  const slots = dropdown.querySelectorAll('.version-pages');
+  if (!manga || slots.length === 0 || dropdown.dataset.annotated === '1') return;
+  dropdown.dataset.annotated = '1';
+  try {
+    const data = await api.getChapterVersions(manga.id, chapterNum);
+    const byUrl = new Map((data.versions || []).filter(v => v.url).map(v => [v.url, v]));
+    slots.forEach(slot => {
+      const url = decodeURIComponent(slot.dataset.url);
+      const v = byUrl.get(url);
+      if (v) {
+        slot.textContent = `${v.imageCount} pages`;
+        slot.title = v.folder;
+      }
+    });
+  } catch (e) {
+    dropdown.dataset.annotated = '';
+  }
+}
+
+/**
+ * Keep one downloaded version of a chapter and delete every other one
+ */
+async function keepOnlyVersion(chapterNum, keepUrl) {
+  const manga = state.manga;
+  const versions = manga.downloadedVersions?.[chapterNum] || [];
+  const list = Array.isArray(versions) ? versions : [versions];
+  const others = list.filter(u => u && u !== keepUrl);
+  if (others.length === 0) {
+    showToast('This is the only downloaded version', 'info');
+    return;
+  }
+  if (!confirm(`Delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${chapterNum}?`)) return;
+
+  let failed = 0;
+  for (const url of others) {
+    try {
+      await api.request(`/bookmarks/${manga.id}/chapters`, {
+        method: 'DELETE',
+        body: JSON.stringify({ chapterNumber: chapterNum, url })
+      });
+    } catch (error) {
+      failed++;
+      showToast('Failed to delete a version: ' + error.message, 'error');
+    }
+  }
+  if (failed === 0) showToast('Other versions deleted', 'success');
+  await loadData(manga.id);
+  mount([manga.id]);
 }
 
 /**

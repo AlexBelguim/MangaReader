@@ -47,7 +47,7 @@ export const requireAdmin = (req, res, next) => {
 // /series is allowed but the series router strips it down to demo-flagged
 // entries (see routes/series.js). Deliberately excludes /scrapers,
 // /favorites, /queue, /downloads and /admin.
-const DEMO_GET_WHITELIST = ['/bookmarks', '/chapter-settings', '/reader-settings', '/settings', '/auth/me', '/series'];
+const DEMO_GET_WHITELIST = ['/bookmarks', '/chapter-settings', '/reader-settings', '/settings', '/auth/me', '/series', '/volumes'];
 
 // Non-GET paths that count as "downloading" rather than "editing" for the
 // per-user permission flags.

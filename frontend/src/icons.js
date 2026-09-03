@@ -72,6 +72,10 @@ export const ICON_PATHS = {
   'wrench':        '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/>',
   'chevron-up':    '<path d="m18 15-6-6-6 6"/>',
   'chevron-down':  '<path d="m6 9 6 6 6-6"/>',
+  'chevron-left':  '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'x':             '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'images':        '<path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.296-1.296a2.41 2.41 0 0 0-3.408 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/>',
 
   // ---- reader controls ----
   'columns-2':     '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',

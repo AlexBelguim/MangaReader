@@ -442,6 +442,10 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
                     const images = await scraper.getChapterImages(url);
                     await downloader.downloadChapter(bookmark.title, chapterNumber, images, bookmark.alias, null, url);
                     await bookmarkDb.markChapterDownloaded(bookmark.id, chapterNumber, url);
+                    // Explicitly downloading a version means the user wants it
+                    // back; a lingering "hidden" flag would make the reader skip
+                    // it when picking which downloaded version to open.
+                    bookmarkDb.clearDeletedUrl(bookmark.id, url);
                     task.completed = 1;
                     task.completedChapters = [chapterNumber];
                     task.status = 'complete';

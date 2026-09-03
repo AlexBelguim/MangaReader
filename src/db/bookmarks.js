@@ -351,6 +351,54 @@ export const bookmarkDb = {
         });
     },
 
+    // All volumes across a user's library, grouped per bookmark.
+    // Only bookmarks that have at least one volume come back — this powers
+    // the slideshow settings picker and the slideshow itself.
+    getAllVolumes(userId) {
+        const db = getDb();
+
+        // Auto-migrate: Check for cover column (same lazy ALTER as getVolumes)
+        try {
+            db.prepare('SELECT cover FROM volumes LIMIT 1').get();
+        } catch (e) {
+            if (e.message.includes('no such column')) {
+                try {
+                    db.prepare('ALTER TABLE volumes ADD COLUMN cover TEXT').run();
+                } catch (e2) {
+                    console.error('Failed to add cover column to volumes (getAllVolumes):', e2);
+                }
+            }
+        }
+
+        const rows = db.prepare(`
+            SELECT v.id, v.name, v.cover, b.id AS bookmark_id, b.title, b.alias,
+                   b.cover AS manga_cover, b.local_cover, b.is_demo
+            FROM volumes v
+            JOIN bookmarks b ON b.id = v.bookmark_id
+            WHERE b.user_id = ?
+            ORDER BY COALESCE(b.alias, b.title) COLLATE NOCASE, v.display_order, v.created_at
+        `).all(userId);
+
+        const byBookmark = new Map();
+        for (const row of rows) {
+            let entry = byBookmark.get(row.bookmark_id);
+            if (!entry) {
+                entry = {
+                    id: row.bookmark_id,
+                    title: row.title,
+                    alias: row.alias,
+                    cover: row.manga_cover,
+                    localCover: row.local_cover,
+                    isDemo: !!row.is_demo,
+                    volumes: []
+                };
+                byBookmark.set(row.bookmark_id, entry);
+            }
+            entry.volumes.push({ id: row.id, name: row.name, cover: row.cover });
+        }
+        return [...byBookmark.values()];
+    },
+
     // Create a volume
     createVolume(bookmarkId, name, chapterNumbers) {
         const db = getDb();

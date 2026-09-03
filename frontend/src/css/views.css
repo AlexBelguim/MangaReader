@@ -435,6 +435,17 @@
     gap: var(--space-xs);
 }
 
+/* Secondary details on a version row: group, upload date, page count */
+.version-meta {
+    margin-left: var(--space-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.version-meta:empty {
+    display: none;
+}
+
 .versions-btn {
     background: var(--accent-secondary) !important;
     color: white !important;
@@ -514,6 +525,13 @@
 .reader-title .chapter-name {
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.reader-title .version-label {
+    color: rgba(255, 255, 255, 0.85);
 }
 
 .reader-content {
@@ -1131,6 +1149,19 @@ body.reader-active .category-fab {
 .version-item:hover {
     background: rgba(var(--accent-rgb), 0.35);
     border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+.version-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    text-align: left;
+}
+
+.version-item-meta {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.55);
 }
 
 .version-cancel {
@@ -2581,5 +2612,268 @@ body.demo-mode #app {
 
   .settings-actions .btn {
     flex: 1;
+  }
+}
+
+/* ==================== Slideshow ==================== */
+
+/* ---- settings section ---- */
+
+.settings-hint {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-bottom: var(--space-md);
+}
+
+#slideshow-group .setting-item {
+  padding: var(--space-xs) 0;
+}
+
+.slideshow-manga-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-md);
+}
+
+.slideshow-manga-list .loader,
+.slideshow-manga-list .settings-hint {
+  padding: var(--space-md);
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.slideshow-manga-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.slideshow-manga-row:last-child {
+  border-bottom: none;
+}
+
+.slideshow-manga-row:hover {
+  background: var(--bg-hover);
+}
+
+.slideshow-manga-row.no-covers {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.slideshow-manga-thumb {
+  width: 34px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.slideshow-manga-thumb img,
+.slideshow-manga-thumb .placeholder {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.slideshow-manga-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.slideshow-manga-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slideshow-manga-meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* ---- fullscreen view ---- */
+
+.slideshow {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.slideshow.controls-hidden {
+  cursor: none;
+}
+
+.slideshow-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.slideshow-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.slideshow-img.active {
+  opacity: 1;
+}
+
+/* Hide the layer that never got a src (broken-image glyph) */
+.slideshow-img:not([src]) {
+  display: none;
+}
+
+.slideshow-ui {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  transition: opacity var(--transition-fast, 0.2s);
+}
+
+.slideshow.controls-hidden .slideshow-ui {
+  opacity: 0;
+}
+
+.slideshow-topbar,
+.slideshow-bottombar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.slideshow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  transition: border-color var(--transition-fast, 0.2s);
+}
+
+.slideshow-btn:hover {
+  border-color: var(--accent-primary);
+}
+
+.slideshow-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.slideshow-counter {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.slideshow-caption {
+  min-width: 0;
+}
+
+.slideshow-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slideshow-title svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.slideshow-subtitle {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slideshow-transport {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.slideshow-loading {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+
+.slideshow-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.slideshow-empty p {
+  max-width: 420px;
+}
+
+@media (max-width: 480px) {
+  #slideshow-group .setting-item {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  #slideshow-group .setting-item select {
+    width: auto;
+    min-width: 0;
+  }
+
+  .slideshow-caption {
+    display: none;
   }
 }

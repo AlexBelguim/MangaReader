@@ -3,10 +3,26 @@
  */
 
 import express from 'express';
-import { chapterSettingsDb, trophyDb, readerSettingsDb, getDb } from '../database.js';
+import { bookmarkDb, chapterSettingsDb, trophyDb, readerSettingsDb, getDb } from '../database.js';
 import { getPrimaryAdminId } from '../db/connection.js';
 
 const router = express.Router();
+
+// ==================== VOLUMES (whole library) ====================
+
+// All volumes grouped per manga — only manga that actually have volumes.
+// Powers the slideshow settings picker and the slideshow view.
+router.get('/volumes', async (req, res) => {
+    try {
+        const userId = req.user.role === 'demo' ? getPrimaryAdminId() : req.user.id;
+        let manga = bookmarkDb.getAllVolumes(userId);
+        // Demo visitors only ever see demo-flagged bookmarks
+        if (req.user.role === 'demo') manga = manga.filter(m => m.isDemo);
+        res.json(manga);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // ==================== CHAPTER SETTINGS ====================
 

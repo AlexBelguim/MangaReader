@@ -248,6 +248,11 @@ class ApiClient {
         return this.get(`/bookmarks/${id}`);
     }
 
+    // All volumes across the library, grouped per manga (only manga with volumes)
+    getAllVolumes() {
+        return this.get('/volumes');
+    }
+
     getChapters(bookmarkId, { page = 0, limit = 50, filter = 'all' } = {}) {
         return this.get(`/bookmarks/${bookmarkId}/chapters?page=${page}&limit=${limit}&filter=${filter}`);
     }
@@ -602,20 +607,31 @@ class ApiClient {
 
     // ==================== PAGE MANIPULATION ====================
 
-    rotatePage(bookmarkId, chapterNum, filename, degrees = 90) {
-        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/rotate`, { filename, degrees });
+    // `version` is the URL of the chapter version on screen. The server uses
+    // it to edit the same folder the reader loaded; without it a chapter with
+    // several downloaded versions could get the edit applied to another one.
+    rotatePage(bookmarkId, chapterNum, filename, degrees = 90, version = null) {
+        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/rotate`, { filename, degrees, version });
     }
 
-    swapPages(bookmarkId, chapterNum, filenameA, filenameB) {
-        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/swap`, { filenameA, filenameB });
+    swapPages(bookmarkId, chapterNum, filenameA, filenameB, version = null) {
+        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/swap`, { filenameA, filenameB, version });
     }
 
-    splitPage(bookmarkId, chapterNum, filename) {
-        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/split`, { filename });
+    splitPage(bookmarkId, chapterNum, filename, version = null) {
+        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/split`, { filename, version });
     }
 
-    deletePage(bookmarkId, chapterNum, filename) {
-        return this.delete(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/${encodeURIComponent(filename)}`);
+    deletePage(bookmarkId, chapterNum, filename, version = null) {
+        const query = version ? `?version=${encodeURIComponent(version)}` : '';
+        return this.delete(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/pages/${encodeURIComponent(filename)}${query}`);
+    }
+
+    // ==================== VERSIONS ====================
+
+    // On-disk details (folder, page count) per downloaded version of a chapter
+    getChapterVersions(bookmarkId, chapterNum) {
+        return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/versions`);
     }
 
     // ==================== LINK MODE ====================
