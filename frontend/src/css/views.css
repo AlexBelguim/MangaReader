@@ -446,6 +446,16 @@
     display: none;
 }
 
+.version-meta.warn {
+    color: var(--warning, #f0a030);
+    font-weight: 600;
+}
+
+/* Folder on disk that no downloaded version claims (leftover) */
+.version-row.orphan {
+    border-left: 3px solid var(--warning, #f0a030);
+}
+
 .versions-btn {
     background: var(--accent-secondary) !important;
     color: white !important;
@@ -1162,6 +1172,38 @@ body.reader-active .category-fab {
 .version-item-meta {
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.55);
+}
+
+.version-item.current {
+    border-color: rgba(var(--accent-rgb), 0.9);
+    background: rgba(var(--accent-rgb), 0.3);
+}
+
+/* Row layout when a version entry also carries a "keep only" action */
+.version-item-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+.version-item-row .version-item {
+    flex: 1;
+}
+
+.version-item-keep {
+    padding: 8px 10px;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.version-item-keep:hover {
+    border-color: var(--warning, #f0a030);
+    color: var(--warning, #f0a030);
 }
 
 .version-cancel {

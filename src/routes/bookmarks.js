@@ -140,6 +140,23 @@ router.get('/:id', async (req, res) => {
             bookmark.downloadedPageCounts = {};
         }
 
+        // Per-chapter folders on disk paired with the downloaded version URLs
+        // ({ [number]: [{ folder, imageCount, url }] }). Lets the chapter list
+        // show page counts per version, flag versions that look incomplete,
+        // and surface leftover folders the DB no longer knows about.
+        try {
+            const folders = await downloader.getChapterFolders(bookmark.title, bookmark.alias);
+            bookmark.chapterFolders = {};
+            for (const [num, list] of Object.entries(folders)) {
+                bookmark.chapterFolders[num] = downloader
+                    .matchFoldersToUrls(list, bookmark.downloadedVersions?.[num] || [])
+                    .map(v => ({ folder: v.folder, imageCount: v.imageCount, url: v.url }));
+            }
+        } catch (e) {
+            console.warn(`Failed to list chapter folders for ${bookmark.title}: ${e.message}`);
+            bookmark.chapterFolders = {};
+        }
+
         res.json(bookmark);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -850,6 +867,36 @@ router.delete('/:id/chapters', async (req, res) => {
         }, req.user.id);
 
         res.json({ success: true, message: result.message || 'Chapter files deleted' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete one on-disk folder of a chapter that no downloaded version claims
+// (a leftover from a partial or old download). Folders that belong to a
+// downloaded version must go through the version delete above so the DB
+// stays in step.
+router.delete('/:id/chapters/:num/folders', async (req, res) => {
+    try {
+        const { folder } = req.body || {};
+        if (!folder || typeof folder !== 'string') {
+            return res.status(400).json({ error: 'folder is required' });
+        }
+        const bookmark = await bookmarkDb.getById(req.params.id, req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const chapterNum = parseFloat(req.params.num);
+        const onDisk = await downloader.getExistingVersions(bookmark.title, chapterNum, bookmark.alias);
+        const matched = downloader.matchFoldersToUrls(onDisk, bookmark.downloadedVersions?.[chapterNum] || []);
+        const target = matched.find(v => v.folder === folder);
+        if (!target) return res.status(404).json({ error: 'Folder not found for this chapter' });
+        if (target.url) {
+            return res.status(400).json({ error: 'This folder belongs to a downloaded version - delete the version instead' });
+        }
+
+        const result = await downloader.deleteChapterFolder(bookmark.title, chapterNum, bookmark.alias, folder);
+        if (!result.success) return res.status(500).json({ error: result.message });
+        res.json({ success: true, message: result.message });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

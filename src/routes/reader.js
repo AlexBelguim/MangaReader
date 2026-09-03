@@ -106,29 +106,9 @@ router.get('/:id/chapters/:num/versions', async (req, res) => {
         const chapterNum = parseFloat(req.params.num);
         const versions = await downloader.getExistingVersions(bookmark.title, chapterNum, bookmark.alias);
 
-        const downloadedVersions = bookmark.downloadedVersions?.[chapterNum] || [];
-        const urlList = Array.isArray(downloadedVersions) ? downloadedVersions : [downloadedVersions];
-
-        const versionDetails = versions.map(v => {
-            const hashMatch = v.folder.match(/ v([a-z0-9]+)$/i);
-            const folderHash = hashMatch ? hashMatch[1] : null;
-            let matchedUrl = null;
-            for (const url of urlList) {
-                const urlHash = downloader.getVersionTokenFromUrl(url);
-                if (folderHash && urlHash === folderHash) { matchedUrl = url; break; }
-            }
-            if (!matchedUrl && !v.isVersioned && urlList.length > 0) {
-                for (const url of urlList) {
-                    const urlHash = downloader.getVersionTokenFromUrl(url);
-                    const hasMatchingFolder = versions.some(ver => {
-                        const verHashMatch = ver.folder.match(/ v([a-z0-9]+)$/i);
-                        return verHashMatch && verHashMatch[1] === urlHash;
-                    });
-                    if (!hasMatchingFolder) { matchedUrl = url; break; }
-                }
-            }
-            return { folder: v.folder, imageCount: v.imageCount, isVersioned: v.isVersioned, hash: folderHash, url: matchedUrl };
-        });
+        const versionDetails = downloader
+            .matchFoldersToUrls(versions, bookmark.downloadedVersions?.[chapterNum] || [])
+            .map(v => ({ folder: v.folder, imageCount: v.imageCount, isVersioned: v.isVersioned, hash: v.version, url: v.url }));
 
         res.json({ versions: versionDetails });
     } catch (error) {

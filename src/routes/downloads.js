@@ -437,10 +437,11 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
             execute: async () => {
                 const task = activeDownloads.get(taskId);
                 if (!task) return;
+                let result;
                 try {
                     task.status = 'running';
                     const images = await scraper.getChapterImages(url);
-                    await downloader.downloadChapter(bookmark.title, chapterNumber, images, bookmark.alias, null, url);
+                    result = await downloader.downloadChapter(bookmark.title, chapterNumber, images, bookmark.alias, null, url);
                     await bookmarkDb.markChapterDownloaded(bookmark.id, chapterNumber, url);
                     // Explicitly downloading a version means the user wants it
                     // back; a lingering "hidden" flag would make the reader skip
@@ -448,12 +449,20 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
                     bookmarkDb.clearDeletedUrl(bookmark.id, url);
                     task.completed = 1;
                     task.completedChapters = [chapterNumber];
+                    task.pages = result.success + result.skipped;
+                    task.failedPages = result.failed;
                     task.status = 'complete';
                 } catch (error) {
                     task.status = 'error';
                     task.errors.push({ chapter: chapterNumber, error: error.message });
+                    setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
+                    // Rethrow so the queue history records the job as failed
+                    // with the reason, instead of a "completed" row for a
+                    // download that produced nothing.
+                    throw new Error(`Chapter ${chapterNumber}: ${error.message}`);
                 }
                 setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
+                return { downloaded: 1, pages: task.pages, failedPages: task.failedPages };
             }
         });
 
@@ -533,7 +542,7 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
         } catch (initErr) {
             task.status = 'error';
             task.errors.push({ chapter: 'init', error: 'Failed to initialize scraper: ' + initErr.message });
-            return;
+            throw new Error('Failed to initialize scraper: ' + initErr.message);
         }
     }
 
@@ -541,7 +550,7 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
     if (!scraper) {
         task.status = 'error';
         task.errors.push({ chapter: 'init', error: 'No scraper available for this URL' });
-        return;
+        throw new Error('No scraper available for this URL');
     }
 
     for (const chapterData of chaptersToDownload) {
@@ -562,8 +571,12 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
 
         try {
             const images = await scraper.getChapterImages(targetUrl);
-            await downloader.downloadChapter(bookmark.title, chapterNum, images, bookmark.alias, null, targetUrl);
+            const result = await downloader.downloadChapter(bookmark.title, chapterNum, images, bookmark.alias, null, targetUrl);
             await bookmarkDb.markChapterDownloaded(bookmark.id, chapterNum, targetUrl);
+            task.downloaded = (task.downloaded || 0) + 1;
+            if (result.failed > 0) {
+                task.errors.push({ chapter: chapterNum, error: `${result.failed} of ${images.length} pages failed to download`, partial: true });
+            }
         } catch (error) {
             task.errors.push({ chapter: chapterNum, error: error.message });
         }
@@ -578,6 +591,16 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
     task.status = 'complete';
     task.current = null;
     setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
+
+    // Job history: a run where nothing came down is a failure, not a
+    // "completed" row. Partial runs complete with the per-chapter errors
+    // attached so the queue page can show them.
+    const hardErrors = task.errors.filter(e => !e.partial);
+    if ((task.downloaded || 0) === 0 && hardErrors.length > 0) {
+        task.status = 'error';
+        throw new Error(hardErrors.map(e => `Chapter ${e.chapter}: ${e.error}`).join('; '));
+    }
+    return { downloaded: task.downloaded || 0, failed: hardErrors.length, errors: task.errors };
 }
 
 // ==================== LOCAL MANGA & SCAN ====================

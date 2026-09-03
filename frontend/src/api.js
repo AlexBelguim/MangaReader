@@ -634,6 +634,22 @@ class ApiClient {
         return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/versions`);
     }
 
+    // Delete a downloaded version (files + DB); url null = every version of the chapter
+    deleteChapterVersion(bookmarkId, chapterNumber, url) {
+        return this.request(`/bookmarks/${bookmarkId}/chapters`, {
+            method: 'DELETE',
+            body: JSON.stringify({ chapterNumber, url })
+        });
+    }
+
+    // Remove a leftover chapter folder on disk that no downloaded version claims
+    deleteChapterFolder(bookmarkId, chapterNum, folder) {
+        return this.request(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/folders`, {
+            method: 'DELETE',
+            body: JSON.stringify({ folder })
+        });
+    }
+
     // ==================== LINK MODE ====================
 
     getNextChapterPreview(bookmarkId, chapterNum) {

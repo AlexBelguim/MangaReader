@@ -212,6 +212,20 @@ function renderHistoryTask(task) {
     if (result.count !== undefined) {
       subtext = `<div class="task-subtext">Scanned ${result.count} local chapters</div>`;
     }
+  } else if (task.type === 'download') {
+    // Say what actually landed on disk. A failed row carries the reason
+    // (e.g. every page 403'd) so a chapter that "didn't download" is
+    // explained here instead of silently showing as done.
+    if (task.status === 'failed' && task.error) {
+      subtext = `<div class="task-subtext" style="color: var(--color-error, #e05555);">${task.error}</div>`;
+    } else if (result.downloaded !== undefined) {
+      const parts = [`${result.downloaded} chapter${result.downloaded === 1 ? '' : 's'} downloaded`];
+      if (result.pages) parts.push(`${result.pages} pages`);
+      if (result.failed) parts.push(`${result.failed} failed`);
+      const partial = (result.errors || []).filter(e => e.partial);
+      if (partial.length) parts.push(`${partial.length} with missing pages`);
+      subtext = `<div class="task-subtext" style="color: var(--text-secondary);">${parts.join(' · ')}</div>`;
+    }
   }
 
   return `

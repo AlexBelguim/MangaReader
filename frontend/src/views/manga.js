@@ -866,7 +866,18 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     return (bDownloaded ? 1 : 0) - (aDownloaded ? 1 : 0);
   });
 
-  const hasMultiple = displayVersions.length > 1;
+  // Folders on disk for this chapter, paired with version URLs by the
+  // server (url null = leftover folder no downloaded version claims).
+  const folders = manga.chapterFolders?.[num] || [];
+  const orphanFolders = folders.filter(f => !f.url);
+  const maxPages = folders.reduce((m, f) => Math.max(m, f.imageCount), 0);
+  // "Incomplete": almost nothing in it, or far fewer pages than another
+  // version of the same chapter - the 2-page leftovers of a download that
+  // mostly failed.
+  const looksIncomplete = (f) => f.imageCount < 3 || (maxPages >= 6 && f.imageCount < maxPages / 2);
+  const folderFor = (url) => folders.find(f => f.url === url) || null;
+  const incompleteDownloaded = folders.filter(f => f.url && looksIncomplete(f));
+  const hasMultiple = displayVersions.length > 1 || orphanFolders.length > 0;
 
   // Get the first version URL for single-version operations
   const firstVersionUrl = displayVersions[0]?.url ? encodeURIComponent(displayVersions[0].url) : null;
@@ -904,7 +915,12 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     return `
           <div class="version-row ${isVersionDownloaded ? 'downloaded' : ''}"
                data-version-url="${versionUrl}" data-num="${num}">
-            <span class="version-title" style="cursor: pointer; flex: 1;" title="${escapeAttr(v.url)}">${escapeHtml(label)}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}${meta ? `<span class="version-meta">${escapeHtml(meta)}</span>` : ''}${isVersionDownloaded ? `<span class="version-meta version-pages" data-url="${versionUrl}"></span>` : ''}</span>
+            <span class="version-title" style="cursor: pointer; flex: 1;" title="${escapeAttr(v.url)}">${escapeHtml(label)}${isLocalVersion ? ' <span class="badge badge-local" style="background: var(--color-info, #2196f3); color: white; font-size: 0.65em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle;">Local</span>' : ''}${meta ? `<span class="version-meta">${escapeHtml(meta)}</span>` : ''}${(() => {
+      const f = isVersionDownloaded ? folderFor(v.url) : null;
+      if (!f) return '';
+      const warn = looksIncomplete(f);
+      return `<span class="version-meta version-pages ${warn ? 'warn' : ''}" title="${escapeAttr(f.folder)}">${f.imageCount} pages${warn ? ' - incomplete?' : ''}</span>`;
+    })()}</span>
             <div class="version-actions">
               ${isVersionDownloaded
         ? `<button class="btn-icon small success" data-action="read-version" data-num="${num}" data-url="${versionUrl}">${icon('play', { title: 'Read' })}</button>
@@ -920,6 +936,13 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
           </div>
         `;
   }).join('')}
+      ${orphanFolders.map(f => `
+          <div class="version-row orphan" data-num="${num}">
+            <span class="version-title" title="${escapeAttr(f.folder)}">Leftover folder on disk<span class="version-meta">${escapeHtml(f.folder)} · ${f.imageCount} pages</span></span>
+            <div class="version-actions">
+              <button class="btn-icon small danger" data-action="delete-folder" data-num="${num}" data-folder="${encodeURIComponent(f.folder)}">${icon('trash-2', { title: 'Delete this folder from disk' })}</button>
+            </div>
+          </div>`).join('')}
     </div>
   ` : '';
 
@@ -932,6 +955,8 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
         <span class="chapter-title">
           ${displayVersions[0] ? (displayVersions[0].title !== `Chapter ${num}` ? displayVersions[0].title : '') : versions[0].title}
           ${isExcluded ? '<span class="badge badge-warning" style="margin-left:8px; font-size:0.7em">Excluded</span>' : ''}
+          ${incompleteDownloaded.length ? `<span class="badge badge-warning" style="margin-left:8px; font-size:0.7em" title="A downloaded version of this chapter has only ${incompleteDownloaded[0].imageCount} pages">${incompleteDownloaded[0].imageCount} pages</span>` : ''}
+          ${orphanFolders.length ? `<span class="badge badge-warning" style="margin-left:8px; font-size:0.7em" title="${orphanFolders.length} folder(s) on disk not linked to any downloaded version - open the versions list to delete">${orphanFolders.length} leftover folder${orphanFolders.length > 1 ? 's' : ''}</span>` : ''}
         </span>
         ${isExtra ? '<span class="chapter-tag">Extra</span>' : ''}
         <div class="chapter-actions">
@@ -1826,6 +1851,9 @@ export function setupListeners() {
         case 'keep-version':
           await keepOnlyVersion(num, url);
           break;
+        case 'delete-folder':
+          await deleteFolder(num, decodeURIComponent(btn.dataset.folder || ''));
+          break;
         case 'hide-version':
           await hideVersion(num, url);
           break;
@@ -1947,16 +1975,18 @@ async function downloadChapter(chapterNum) {
 
   try {
     showToast(`Downloading chapter ${chapterNum}...`, 'info');
+    let result;
     if (firstVersion) {
       // Use download-version to target the specific version URL
-      await api.post(`/bookmarks/${manga.id}/download-version`, {
+      result = await api.post(`/bookmarks/${manga.id}/download-version`, {
         chapterNumber: chapterNum,
         url: firstVersion.url
       });
     } else {
-      await api.post(`/bookmarks/${manga.id}/download`, { chapters: [chapterNum] });
+      result = await api.post(`/bookmarks/${manga.id}/download`, { chapters: [chapterNum] });
     }
     showToast('Download queued!', 'success');
+    watchDownload(result?.taskId, `Chapter ${chapterNum}`);
   } catch (error) {
     showToast('Failed: ' + error.message, 'error');
   }
@@ -1976,35 +2006,67 @@ function toggleVersions(chapterNum) {
   const dropdown = document.getElementById(`versions-${chapterNum}`);
   if (dropdown) {
     dropdown.classList.toggle('hidden');
-    if (!dropdown.classList.contains('hidden')) annotateVersionPages(chapterNum, dropdown);
   }
 }
 
 /**
- * Fill in the on-disk page count (and folder) for each downloaded version
- * row once the dropdown opens. Two versions of a chapter usually share a
- * title, so the page count is often the only thing that tells them apart
- * when deciding which one to keep.
+ * Delete a leftover chapter folder on disk (one no downloaded version claims)
  */
-async function annotateVersionPages(chapterNum, dropdown) {
+async function deleteFolder(chapterNum, folder) {
   const manga = state.manga;
-  const slots = dropdown.querySelectorAll('.version-pages');
-  if (!manga || slots.length === 0 || dropdown.dataset.annotated === '1') return;
-  dropdown.dataset.annotated = '1';
+  if (!folder) return;
+  if (!confirm(`Delete the folder "${folder}" from disk?`)) return;
   try {
-    const data = await api.getChapterVersions(manga.id, chapterNum);
-    const byUrl = new Map((data.versions || []).filter(v => v.url).map(v => [v.url, v]));
-    slots.forEach(slot => {
-      const url = decodeURIComponent(slot.dataset.url);
-      const v = byUrl.get(url);
-      if (v) {
-        slot.textContent = `${v.imageCount} pages`;
-        slot.title = v.folder;
-      }
-    });
-  } catch (e) {
-    dropdown.dataset.annotated = '';
+    await api.deleteChapterFolder(manga.id, chapterNum, folder);
+    showToast('Folder deleted', 'success');
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Failed: ' + error.message, 'error');
   }
+}
+
+/**
+ * Follow a queued download and report how it ended. "Download queued!" used
+ * to be the last thing you heard; a download whose every page failed just
+ * never showed up, with no hint why.
+ */
+function watchDownload(taskId, label) {
+  if (!taskId) return;
+  const mangaId = state.manga?.id;
+  const started = Date.now();
+  const poll = async () => {
+    if (Date.now() - started > 30 * 60 * 1000) return;
+    let task;
+    try {
+      task = await api.getDownloadProgress(taskId);
+    } catch (e) {
+      return; // task expired from the server's list
+    }
+    if (!task) return;
+    const done = ['complete', 'error', 'cancelled'].includes(task.status);
+    if (!done) {
+      setTimeout(poll, 3000);
+      return;
+    }
+    const errors = task.errors || [];
+    const gotSomething = (task.completedChapters || []).length > 0 && task.status !== 'error';
+    if (task.status === 'cancelled') {
+      showToast(`${label}: download cancelled`, 'info');
+    } else if (!gotSomething) {
+      showToast(`${label} failed: ${errors[0]?.error || 'unknown error'}`, 'error');
+    } else if (errors.length) {
+      showToast(`${label} downloaded with problems: ${errors[0].error}`, 'warning');
+    } else {
+      showToast(`${label} downloaded${task.pages ? ` (${task.pages} pages)` : ''}`, 'success');
+    }
+    // Refresh the list if this manga page is still open
+    if (state.manga?.id === mangaId && window.location.hash.startsWith(`#/manga/${mangaId}`)) {
+      await loadData(mangaId);
+      mount([mangaId]);
+    }
+  };
+  setTimeout(poll, 3000);
 }
 
 /**
@@ -2046,11 +2108,12 @@ async function downloadVersion(chapterNum, url) {
 
   try {
     showToast(`Downloading version...`, 'info');
-    await api.post(`/bookmarks/${manga.id}/download-version`, {
+    const result = await api.post(`/bookmarks/${manga.id}/download-version`, {
       chapterNumber: chapterNum,
       url: url
     });
     showToast('Download queued!', 'success');
+    watchDownload(result?.taskId, `Chapter ${chapterNum}`);
   } catch (error) {
     showToast('Failed: ' + error.message, 'error');
   }

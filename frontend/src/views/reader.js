@@ -62,10 +62,13 @@ function describeVersion(url, manga = state.manga) {
  * Label shown next to the chapter number when this chapter has more than
  * one downloaded version, so it is clear which one is on screen.
  */
+function downloadedVersionsOf(num) {
+    const v = state.manga?.downloadedVersions?.[num];
+    return Array.isArray(v) ? v : (v ? [v] : []);
+}
+
 function currentVersionLabel() {
-    const num = state.chapter?.number;
-    const versions = state.manga?.downloadedVersions?.[num];
-    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const list = downloadedVersionsOf(state.chapter?.number);
     if (list.length < 2 || !state.versionUrl) return '';
     return describeVersion(state.versionUrl) || `Version ${list.indexOf(state.versionUrl) + 1}`;
 }
@@ -159,6 +162,7 @@ export function render() {
     const displayName = state.manga.alias || state.manga.title;
     const chapterNum = state.chapter?.number;
     const versionLabel = state.isCollectionMode || state.isStreamingMode ? '' : currentVersionLabel();
+    const canSwitchVersion = !state.isCollectionMode && !state.isStreamingMode && downloadedVersionsOf(chapterNum).length > 1;
     const spreads = buildSpreads();
     const totalSpreads = spreads.length;
     const totalPages = state.images.length;
@@ -216,6 +220,7 @@ export function render() {
             <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">${icon('trophy')}</button>
             `}
           ` : ''}
+          ${canSwitchVersion ? `<button class="reader-bar-btn" id="version-btn" title="Switch version / keep only one">${icon('list', { title: 'Versions' })}</button>` : ''}
           <button class="reader-bar-btn" id="fullscreen-btn" title="Toggle fullscreen">${icon('maximize', { title: 'Toggle fullscreen' })}</button>
           <button class="reader-bar-btn" id="reader-settings-btn" title="Settings">${icon('settings', { title: 'Settings' })}</button>
         </div>
@@ -1139,6 +1144,11 @@ export function setupListeners() {
         showListPicker(pagesToFavorite);
     });
 
+    // Version switcher (chapters with more than one downloaded version)
+    document.getElementById('version-btn')?.addEventListener('click', () => {
+        openVersionSwitcher();
+    });
+
     // Fullscreen toggle
     document.getElementById('fullscreen-btn')?.addEventListener('click', () => {
         if (document.fullscreenElement) {
@@ -1414,14 +1424,18 @@ async function preloadNextChapter() {
  * versions endpoint) the on-disk page count, so the choices read as
  * "GroupName · 24 pages" rather than an anonymous "Version 1 / 2".
  */
-function showVersionSelector(versions, chapterNum, manga = state.manga, details = []) {
+/*
+ * opts.current marks the version on screen; opts.allowKeep adds a
+ * "Keep only" action per row that resolves { keep: url } instead of a url.
+ */
+function showVersionSelector(versions, chapterNum, manga = state.manga, details = [], opts = {}) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'version-modal-overlay';
         overlay.innerHTML = `
             <div class="version-modal">
                 <h3>Chapter ${chapterNum} has ${versions.length} versions</h3>
-                <p>Select which version to read:</p>
+                <p>${opts.allowKeep ? 'Switch version, or keep one and delete the rest:' : 'Select which version to read:'}</p>
                 <div class="version-list"></div>
                 <button class="version-cancel">Cancel</button>
             </div>
@@ -1430,7 +1444,9 @@ function showVersionSelector(versions, chapterNum, manga = state.manga, details 
         versions.forEach((url, idx) => {
             const btn = document.createElement('button');
             btn.className = 'version-item';
-            const label = describeVersion(url, manga) || `Version ${idx + 1}`;
+            const isCurrent = opts.current && opts.current === url;
+            if (isCurrent) btn.classList.add('current');
+            const label = (describeVersion(url, manga) || `Version ${idx + 1}`) + (isCurrent ? ' (reading)' : '');
             const detail = details.find(d => d.url === url);
             const meta = [];
             if (detail?.imageCount) meta.push(`${detail.imageCount} pages`);
@@ -1443,7 +1459,23 @@ function showVersionSelector(versions, chapterNum, manga = state.manga, details 
                 overlay.remove();
                 resolve(url);
             });
-            listEl.appendChild(btn);
+            if (!opts.allowKeep) {
+                listEl.appendChild(btn);
+                return;
+            }
+            const row = document.createElement('div');
+            row.className = 'version-item-row';
+            row.appendChild(btn);
+            const keep = document.createElement('button');
+            keep.className = 'version-item-keep';
+            keep.textContent = 'Keep only';
+            keep.title = 'Delete every other downloaded version of this chapter';
+            keep.addEventListener('click', () => {
+                overlay.remove();
+                resolve({ keep: url });
+            });
+            row.appendChild(keep);
+            listEl.appendChild(row);
         });
         overlay.querySelector('.version-cancel').addEventListener('click', () => {
             overlay.remove();
@@ -1457,6 +1489,65 @@ function showVersionSelector(versions, chapterNum, manga = state.manga, details 
         });
         document.body.appendChild(overlay);
     });
+}
+
+/**
+ * Reader toolbar: switch between the downloaded versions of this chapter,
+ * or keep just one of them and delete the rest.
+ */
+async function openVersionSwitcher() {
+    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode) return;
+    const num = state.chapter.number;
+    const versions = downloadedVersionsOf(num);
+    if (versions.length < 2) return;
+
+    let details = [];
+    try {
+        details = (await api.getChapterVersions(state.manga.id, num)).versions || [];
+    } catch (e) { /* page counts are optional */ }
+
+    const choice = await showVersionSelector(versions, num, state.manga, details, { current: state.versionUrl, allowKeep: true });
+    if (!choice) return;
+
+    if (typeof choice === 'string') {
+        if (choice !== state.versionUrl) {
+            await saveCurrentProgress();
+            router.go(`/read/${state.manga.id}/${num}?version=${encodeURIComponent(choice)}`);
+        }
+        return;
+    }
+    if (choice.keep) await keepOnlyVersionInReader(num, choice.keep, versions);
+}
+
+async function keepOnlyVersionInReader(num, keepUrl, versions) {
+    const others = versions.filter(u => u !== keepUrl);
+    const label = describeVersion(keepUrl) || 'this version';
+    if (!confirm(`Keep only "${label}" and delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${num}?`)) return;
+
+    const mangaId = state.manga.id;
+    let failed = 0;
+    for (const url of others) {
+        try {
+            await api.deleteChapterVersion(mangaId, num, url);
+        } catch (e) {
+            failed++;
+            showToast('Failed to delete a version: ' + e.message, 'error');
+        }
+    }
+    if (failed === 0) showToast('Other versions deleted', 'success');
+
+    // Refresh the bookmark so the toolbar reflects what is left
+    try {
+        const fresh = await api.getBookmark(mangaId);
+        if (state.manga?.id === mangaId) state.manga = fresh;
+    } catch (e) { /* toolbar just stays until the next open */ }
+
+    if (keepUrl !== state.versionUrl) {
+        // The version on screen is gone - open the one that was kept
+        router.go(`/read/${mangaId}/${num}?version=${encodeURIComponent(keepUrl)}`);
+    } else {
+        fullReRender();
+    }
 }
 
 /**

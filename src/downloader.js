@@ -72,6 +72,78 @@ class Downloader {
     return explicit ? explicit[1] : this.getVersionFromUrl(url);
   }
 
+  // Pair on-disk folders of one chapter with the version URLs the DB says
+  // are downloaded. A " vXXXX" folder matches the URL whose token is XXXX;
+  // the unversioned base folder belongs to the downloaded URL that has no
+  // versioned folder of its own (it was the first download). Folders that
+  // match nothing come back with url: null - leftovers from partial or
+  // deleted downloads that the UI should offer to remove.
+  matchFoldersToUrls(folders, urls) {
+    const urlList = Array.isArray(urls) ? urls : (urls ? [urls] : []);
+    const tokenOf = new Map(urlList.map(u => [u, this.getVersionTokenFromUrl(u)]));
+    const claimed = new Set();
+    const result = folders.map(f => {
+      let url = null;
+      if (f.version) {
+        url = urlList.find(u => tokenOf.get(u) === f.version) || null;
+      }
+      if (url) claimed.add(url);
+      return { folder: f.folder, imageCount: f.imageCount, isVersioned: f.isVersioned, version: f.version, url };
+    });
+    const base = result.find(r => !r.isVersioned);
+    if (base) {
+      const owner = urlList.find(u => !claimed.has(u) && !folders.some(f => f.version === tokenOf.get(u)));
+      if (owner) base.url = owner;
+    }
+    return result;
+  }
+
+  // Delete one chapter folder by name. Only folders that getExistingVersions
+  // reports for that chapter are accepted, so this can never reach outside
+  // the chapter's own folders.
+  async deleteChapterFolder(mangaTitle, chapterNumber, alias, folderName) {
+    const versions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
+    const target = versions.find(v => v.folder === folderName);
+    if (!target) return { success: false, message: 'Folder not found for this chapter' };
+    try {
+      await fs.remove(target.path);
+      return { success: true, message: `Deleted ${folderName}` };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  // Every chapter folder of a manga in one directory walk, grouped by
+  // chapter number: { [number]: [{ folder, imageCount, version, isVersioned }] }.
+  async getChapterFolders(mangaTitle, alias = null) {
+    const mangaDir = this.getMangaDir(mangaTitle, alias);
+    const byChapter = {};
+    if (!await fs.pathExists(mangaDir)) return byChapter;
+
+    const entries = await fs.readdir(mangaDir, { withFileTypes: true });
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.isDirectory() || !entry.name.startsWith('Chapter')) return;
+      const match = entry.name.match(/^Chapter\s*(\d+(?:\.\d+)?)/i);
+      if (!match) return;
+      const number = parseFloat(match[1]);
+      let imageCount = 0;
+      try {
+        const files = await fs.readdir(path.join(mangaDir, entry.name));
+        imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f)).length;
+      } catch (e) { /* unreadable folder counts as empty */ }
+      const versionMatch = entry.name.match(/ v([a-z0-9]+)$/i);
+      if (!byChapter[number]) byChapter[number] = [];
+      byChapter[number].push({
+        folder: entry.name,
+        imageCount,
+        version: versionMatch ? versionMatch[1] : null,
+        isVersioned: entry.name.includes(' v')
+      });
+    }));
+    for (const list of Object.values(byChapter)) list.sort((a, b) => a.folder.localeCompare(b.folder));
+    return byChapter;
+  }
+
   // Find existing version folders for a chapter
   async getExistingVersions(mangaTitle, chapterNumber, alias = null) {
     const mangaDir = this.getMangaDir(mangaTitle, alias);
@@ -236,7 +308,21 @@ class Downloader {
       }
 
       try {
-        await this.downloadImage(image.url, rawFilePath, image.headers || null);
+        // Image CDNs behind Cloudflare drop requests now and then; one bad
+        // response should not cost the page. Three attempts with a short
+        // backoff, no retry on a definite 404.
+        let attempt = 0;
+        for (;;) {
+          try {
+            await this.downloadImage(image.url, rawFilePath, image.headers || null);
+            break;
+          } catch (dlErr) {
+            attempt++;
+            const definite = /Failed to download: 404/.test(dlErr.message);
+            if (definite || attempt >= 3) throw dlErr;
+            await new Promise(r => setTimeout(r, 1500 * attempt));
+          }
+        }
 
         // Analyze image dimensions via buffer to prevent EBUSY locks on Windows
         const fileBuffer = await fs.readFile(rawFilePath);
@@ -293,6 +379,7 @@ class Downloader {
         await new Promise(r => setTimeout(r, CONFIG.delays.betweenImages));
       } catch (error) {
         results.failed++;
+        results.lastError = error.message;
         if (onProgress) onProgress(image.index, images.length, 'failed');
         console.error(`    Failed to download/process image ${image.index}: ${error.message}`);
         // Attempt cleanup of raw if failed during split
@@ -310,8 +397,8 @@ class Downloader {
         if (!(await this._dirHasImages(chapterDir))) await fs.remove(chapterDir);
       } catch (e) { }
       throw new Error(images.length === 0
-        ? 'No pages found for this chapter (scraper returned nothing)'
-        : `All ${results.failed} pages failed to download`);
+        ? 'No pages found for this chapter (the site returned no images)'
+        : `All ${results.failed} pages failed to download (${results.lastError || 'unknown error'})`);
     }
 
     return results;
