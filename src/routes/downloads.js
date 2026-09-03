@@ -12,6 +12,7 @@ import { trophyDb } from '../db/trophies.js';
 import { CONFIG } from '../config.js';
 import { scraperFactory } from '../scrapers/index.js';
 import { queue } from '../queue.js';
+import { isChallengeError } from '../scrapers/util/challenge.js';
 
 const router = express.Router();
 const taskQueue = queue;
@@ -455,6 +456,8 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
                 } catch (error) {
                     task.status = 'error';
                     task.errors.push({ chapter: chapterNumber, error: error.message });
+                    // Let the queue card offer the "open the site" action directly
+                    if (isChallengeError(error)) task.challenge = { site: error.site, url: error.challengeUrl };
                     setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
                     // Rethrow so the queue history records the job as failed
                     // with the reason, instead of a "completed" row for a
@@ -579,6 +582,12 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
             }
         } catch (error) {
             task.errors.push({ chapter: chapterNum, error: error.message });
+            if (isChallengeError(error)) {
+                task.challenge = { site: error.site, url: error.challengeUrl };
+                // Every further chapter would hit the same puzzle
+                task.errors.push({ chapter: 'stopped', error: `Stopped: ${error.site} is asking for a human verification check` });
+                break;
+            }
         }
         task.completed++;
         task.completedChapters = task.completedChapters || [];

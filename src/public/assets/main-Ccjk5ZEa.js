@@ -1,4 +1,4 @@
-import{a as i}from"./api-C-l2pzF4.js";import{s as n,a as r,b as h,r as p,S as s}from"./router-Bvx_gjQc.js";const c="site-challenge-banner",l=new Set;function m(t){let e=document.getElementById(c);e||(e=document.createElement("div"),e.id=c,e.className="site-challenge-banner",document.body.appendChild(e)),e.dataset.site=t.site,e.innerHTML=`
+import{a as i}from"./api-C-l2pzF4.js";import{s as n,a as r,b as h,r as p,S as s}from"./router-CXOijUGE.js";const c="site-challenge-banner",l=new Set;function m(t){let e=document.getElementById(c);e||(e=document.createElement("div"),e.id=c,e.className="site-challenge-banner",document.body.appendChild(e)),e.dataset.site=t.site,e.innerHTML=`
         <div class="site-challenge-text">
             <strong>${t.site}</strong> is asking for a human verification check.
             Downloads and update checks for this site are paused until it is completed.

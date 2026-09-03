@@ -137,6 +137,10 @@ function renderScheduledMangaCard(manga) {
   `;
 }
 
+function escapeText(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function renderDownloadCard(taskId, task) {
   const pct = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
   const isActive = task.status === 'running' || task.status === 'queued';
@@ -164,7 +168,14 @@ function renderDownloadCard(taskId, task) {
           <span class="progress-text">${task.completed} / ${task.total} chapters (${pct}%)</span>
         </div>
         ${task.current ? `<div class="task-current">Currently: Chapter ${task.current}</div>` : ''}
-        ${task.errors && task.errors.length > 0 ? `<div class="task-errors">${icon('triangle-alert')} ${task.errors.length} error(s)</div>` : ''}
+        ${task.errors && task.errors.length > 0 ? `
+          <div class="task-errors">${icon('triangle-alert')} ${task.errors.length} error(s)</div>
+          <ul class="task-error-list">${task.errors.slice(0, 5).map(e => `<li>${typeof e.chapter === 'number' ? `Ch. ${e.chapter}: ` : ''}${escapeText(e.error)}</li>`).join('')}</ul>` : ''}
+        ${task.challenge ? `
+          <div class="task-challenge">
+            <span>${task.challenge.site} wants a human verification check. Do it in your browser, then retry the download.</span>
+            <button class="btn btn-sm btn-primary" data-action="open-site" data-url="${escapeText(task.challenge.url || `https://${task.challenge.site}/`)}">Open ${task.challenge.site}</button>
+          </div>` : ''}
       </div>
     </div>
   `;
@@ -461,6 +472,11 @@ function setupListeners() {
       e.stopPropagation();
       const action = btn.dataset.action;
       const taskId = btn.dataset.task;
+      if (action === 'open-site') {
+        // The user completes the site's human check in their own browser tab
+        window.open(btn.dataset.url, '_blank', 'noopener');
+        return;
+      }
       try {
         if (action === 'pause') {
           await api.pauseDownload(taskId);

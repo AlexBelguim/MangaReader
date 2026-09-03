@@ -2966,3 +2966,22 @@ body.demo-mode #app {
 .site-challenge-close:hover {
     color: var(--text-primary);
 }
+
+.task-error-list {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.task-challenge {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-top: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--warning, #f0a030);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+}

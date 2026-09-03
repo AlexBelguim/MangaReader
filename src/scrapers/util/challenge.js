@@ -9,7 +9,32 @@
  * and broadcasts the state to connected clients.
  */
 
+import path from 'path';
+import fs from 'fs-extra';
 import { emitToAll } from '../../services/socketService.js';
+import { CONFIG } from '../../config.js';
+
+// Persisted so a container restart (a redeploy, for instance) does not
+// forget that a site is blocked - the banner and the auto-check pause
+// must survive until the user clears it or the cooldown passes.
+const STATE_FILE = path.join(CONFIG.dataDir, 'site-challenges.json');
+
+function loadState() {
+  try {
+    const raw = fs.readJsonSync(STATE_FILE);
+    return new Map(Object.entries(raw || {}));
+  } catch (e) {
+    return new Map();
+  }
+}
+
+function saveState(map) {
+  try {
+    fs.writeJsonSync(STATE_FILE, Object.fromEntries(map), { spaces: 2 });
+  } catch (e) {
+    console.warn(`[Challenge] Could not persist state: ${e.message}`);
+  }
+}
 
 export const SITE_CHALLENGE_EVENT = 'site:challenge';
 export const SITE_CHALLENGE_CLEARED_EVENT = 'site:challenge-cleared';
@@ -29,7 +54,7 @@ export class SiteChallengeError extends Error {
 }
 
 // site -> { site, url, firstSeen, lastSeen, count }
-const challenges = new Map();
+const challenges = loadState();
 
 export function reportChallenge(site, challengeUrl) {
   const now = new Date().toISOString();
@@ -38,6 +63,7 @@ export function reportChallenge(site, challengeUrl) {
     ? { ...existing, url: challengeUrl || existing.url, lastSeen: now, count: existing.count + 1 }
     : { site, url: challengeUrl, firstSeen: now, lastSeen: now, count: 1 };
   challenges.set(site, entry);
+  saveState(challenges);
   console.warn(`[Challenge] ${site} is showing a human verification check (${challengeUrl})`);
   emitToAll(SITE_CHALLENGE_EVENT, entry);
   return new SiteChallengeError(site, challengeUrl);
@@ -45,6 +71,7 @@ export function reportChallenge(site, challengeUrl) {
 
 export function clearChallenge(site) {
   if (!challenges.delete(site)) return false;
+  saveState(challenges);
   console.log(`[Challenge] ${site} check cleared`);
   emitToAll(SITE_CHALLENGE_CLEARED_EVENT, { site });
   return true;
