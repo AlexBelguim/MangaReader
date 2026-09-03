@@ -816,10 +816,10 @@ export function setupListeners() {
             state.singlePageMode = true;
             state.currentPage = spread ? spread[0] : 0;
         }
-        // Persist both globally (the default for a fresh chapter) and per
-        // chapter (so the next chapter inherits it via applyChapterSettings).
+        // One/two page view is a global preference (how you want to read
+        // right now), not a per-chapter setting like first-page-single or
+        // link-to-next, so it lives only in localStorage.
         localStorage.setItem('reader_single_page', state.singlePageMode ? '1' : '0');
-        if (state.manga?.id && state.chapter?.number) saveSettings();
         fullReRender();
     });
 
@@ -2488,8 +2488,7 @@ function hasChapterSettings(s) {
         s.mode !== undefined ||
         s.direction !== undefined ||
         s.firstPageSingle !== undefined ||
-        s.lastPageSingle !== undefined ||
-        s.singlePageMode !== undefined
+        s.lastPageSingle !== undefined
     );
 }
 
@@ -2500,7 +2499,6 @@ function applyChapterSettings(s) {
     if (s.direction) state.direction = s.direction;
     if (s.firstPageSingle !== undefined) state.firstPageSingle = s.firstPageSingle;
     if (s.lastPageSingle !== undefined) state.lastPageSingle = s.lastPageSingle;
-    if (s.singlePageMode !== undefined) state.singlePageMode = s.singlePageMode;
 }
 
 /** Capture the reader settings for the open chapter (see progressSnapshot). */
@@ -2513,11 +2511,7 @@ function settingsSnapshot() {
             mode: state.mode,
             direction: state.direction,
             firstPageSingle: state.firstPageSingle,
-            lastPageSingle: state.lastPageSingle,
-            // Included so the single/double choice carries to the next chapter
-            // like every other reader setting. Without this it was the one
-            // control that reset on every chapter change.
-            singlePageMode: state.singlePageMode
+            lastPageSingle: state.lastPageSingle
         }
     };
 }

@@ -189,7 +189,6 @@ export function initDatabase() {
       locked INTEGER DEFAULT 0,
       reading_mode TEXT,
       direction TEXT,
-      single_page_mode INTEGER,
       PRIMARY KEY (bookmark_id, chapter_number),
       FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
     );
@@ -462,13 +461,6 @@ export function initDatabase() {
   try {
     db.prepare('ALTER TABLE chapter_settings ADD COLUMN direction TEXT').run();
     console.log('📦 Added direction column to chapter_settings');
-  } catch (e) { }
-
-  // Per-chapter single/double page choice. Nullable on purpose: NULL means
-  // "never saved" so the reader can tell an inherited default from a choice.
-  try {
-    db.prepare('ALTER TABLE chapter_settings ADD COLUMN single_page_mode INTEGER').run();
-    console.log('📦 Added single_page_mode column to chapter_settings');
   } catch (e) { }
 
   console.log('📦 Database initialized:', DB_PATH);

@@ -7,7 +7,7 @@ import { getDb } from './connection.js';
 // never-opened chapter report firstPageSingle/lastPageSingle = false instead
 // of inheriting from the previous chapter.
 function hasReaderSettings(row) {
-    return row.reading_mode != null || row.direction != null || row.single_page_mode != null;
+    return row.reading_mode != null || row.direction != null;
 }
 
 function rowToSettings(row) {
@@ -17,12 +17,11 @@ function rowToSettings(row) {
         settings.lastPageSingle = !!row.last_page_single;
         if (row.reading_mode != null) settings.mode = row.reading_mode;
         if (row.direction != null) settings.direction = row.direction;
-        if (row.single_page_mode != null) settings.singlePageMode = !!row.single_page_mode;
     }
     return settings;
 }
 
-const COLUMNS = 'bookmark_id, chapter_number, first_page_single, last_page_single, locked, reading_mode, direction, single_page_mode';
+const COLUMNS = 'bookmark_id, chapter_number, first_page_single, last_page_single, locked, reading_mode, direction';
 
 function toRowValues(bookmarkId, chapterNumber, settings) {
     return [
@@ -32,10 +31,7 @@ function toRowValues(bookmarkId, chapterNumber, settings) {
         settings.lastPageSingle ? 1 : 0,
         settings.locked ? 1 : 0,
         settings.mode || null,
-        settings.direction || null,
-        settings.singlePageMode === undefined || settings.singlePageMode === null
-            ? null
-            : (settings.singlePageMode ? 1 : 0)
+        settings.direction || null
     ];
 }
 
@@ -64,7 +60,7 @@ export const chapterSettingsDb = {
 
         db.prepare(`
       INSERT OR REPLACE INTO chapter_settings (${COLUMNS})
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(...toRowValues(bookmarkId, chapterNumber, settings));
 
         return { success: true };
@@ -75,7 +71,7 @@ export const chapterSettingsDb = {
 
         db.prepare('DELETE FROM chapter_settings').run();
 
-        const insert = db.prepare(`INSERT INTO chapter_settings (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        const insert = db.prepare(`INSERT INTO chapter_settings (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`);
 
         db.transaction(() => {
             for (const [mangaId, chapters] of Object.entries(settingsData)) {

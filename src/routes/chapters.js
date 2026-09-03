@@ -411,8 +411,7 @@ router.post('/:bookmarkId/:chapterNumber/settings', async (req, res) => {
             lastPageSingle: settings.lastPageSingle !== undefined ? !!settings.lastPageSingle : existing.lastPageSingle,
             locked: settings.locked !== undefined ? !!settings.locked : existing.locked,
             mode: settings.mode !== undefined ? settings.mode : existing.mode,
-            direction: settings.direction !== undefined ? settings.direction : existing.direction,
-            singlePageMode: settings.singlePageMode !== undefined ? !!settings.singlePageMode : existing.singlePageMode
+            direction: settings.direction !== undefined ? settings.direction : existing.direction
         };
 
         chapterSettingsDb.save(bookmarkId, chapterNum, newSettings);
