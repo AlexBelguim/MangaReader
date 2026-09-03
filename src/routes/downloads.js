@@ -12,10 +12,36 @@ import { trophyDb } from '../db/trophies.js';
 import { CONFIG } from '../config.js';
 import { scraperFactory } from '../scrapers/index.js';
 import { queue } from '../queue.js';
-import { isChallengeError } from '../scrapers/util/challenge.js';
+import { isChallengeError, clearChallenge } from '../scrapers/util/challenge.js';
 
 const router = express.Router();
 const taskQueue = queue;
+
+// Queue one download task for a list of { number, url } chapter versions.
+// Both the bulk route and the single-version route go through here so a
+// failed task can be retried the same way (see /downloads/:taskId/retry).
+function queueChapterDownloads(bookmark, chaptersToDownload, userId, description = null) {
+    const taskId = `${bookmark.id}-${Date.now()}`;
+    activeDownloads.set(taskId, {
+        bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
+        total: chaptersToDownload.length,
+        chapters: chaptersToDownload.map(c => c.number), // numbers for the UI
+        chapterUrls: chaptersToDownload,                 // what a retry needs
+        completedChapters: [], completed: 0, current: null, status: 'queued', errors: [],
+        userId
+    });
+
+    taskQueue.addAsync({
+        type: 'download',
+        description: description || `Download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
+        mangaId: bookmark.id,
+        mangaTitle: bookmark.alias || bookmark.title,
+        userId,
+        execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
+    });
+
+    return taskId;
+}
 const activeDownloads = new Map();
 
 // Per-user download-task visibility: admins see/control all tasks, other
@@ -385,22 +411,7 @@ router.post('/bookmarks/:id/download', async (req, res) => {
             return res.json({ message: 'No chapters to download', status: 'complete' });
         }
 
-        const taskId = `${bookmark.id}-${Date.now()}`;
-        activeDownloads.set(taskId, {
-            bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
-            total: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number), // Keep numbers for UI tracking easily
-            completedChapters: [], completed: 0, current: null, status: 'queued', errors: [],
-            userId: req.user.id
-        });
-
-        taskQueue.addAsync({
-            type: 'download',
-            description: `Download ${chaptersToDownload.length} chapters for ${bookmark.alias || bookmark.title}`,
-            mangaId: bookmark.id,
-            mangaTitle: bookmark.alias || bookmark.title,
-            userId: req.user.id,
-            execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
-        });
+        const taskId = queueChapterDownloads(bookmark, chaptersToDownload, req.user.id);
 
         res.json({ taskId, chaptersCount: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number) });
     } catch (error) {
@@ -421,53 +432,10 @@ router.post('/bookmarks/:id/download-version', async (req, res) => {
         const scraper = scraperFactory.getScraperForUrl(bookmark.url);
         if (!scraper) return res.status(400).json({ error: 'No scraper available for this URL' });
 
-        const taskId = `${bookmark.id}-${Date.now()}`;
-        activeDownloads.set(taskId, {
-            bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
-            total: 1, chapters: [chapterNumber], completedChapters: [],
-            completed: 0, current: chapterNumber, status: 'queued', errors: [], versionUrl: url,
-            userId: req.user.id
-        });
-
-        taskQueue.addAsync({
-            type: 'download',
-            description: `Download chapter ${chapterNumber} (version) for ${bookmark.alias || bookmark.title}`,
-            mangaId: bookmark.id,
-            mangaTitle: bookmark.alias || bookmark.title,
-            userId: req.user.id,
-            execute: async () => {
-                const task = activeDownloads.get(taskId);
-                if (!task) return;
-                let result;
-                try {
-                    task.status = 'running';
-                    const images = await scraper.getChapterImages(url);
-                    result = await downloader.downloadChapter(bookmark.title, chapterNumber, images, bookmark.alias, null, url);
-                    await bookmarkDb.markChapterDownloaded(bookmark.id, chapterNumber, url);
-                    // Explicitly downloading a version means the user wants it
-                    // back; a lingering "hidden" flag would make the reader skip
-                    // it when picking which downloaded version to open.
-                    bookmarkDb.clearDeletedUrl(bookmark.id, url);
-                    task.completed = 1;
-                    task.completedChapters = [chapterNumber];
-                    task.pages = result.success + result.skipped;
-                    task.failedPages = result.failed;
-                    task.status = 'complete';
-                } catch (error) {
-                    task.status = 'error';
-                    task.errors.push({ chapter: chapterNumber, error: error.message });
-                    // Let the queue card offer the "open the site" action directly
-                    if (isChallengeError(error)) task.challenge = { site: error.site, url: error.challengeUrl };
-                    setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
-                    // Rethrow so the queue history records the job as failed
-                    // with the reason, instead of a "completed" row for a
-                    // download that produced nothing.
-                    throw new Error(`Chapter ${chapterNumber}: ${error.message}`);
-                }
-                setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
-                return { downloaded: 1, pages: task.pages, failedPages: task.failedPages };
-            }
-        });
+        const taskId = queueChapterDownloads(
+            bookmark, [{ number: chapterNumber, url }], req.user.id,
+            `Download chapter ${chapterNumber} (version) for ${bookmark.alias || bookmark.title}`
+        );
 
         res.json({ taskId, chapters: [chapterNumber] });
     } catch (error) {
@@ -492,6 +460,38 @@ router.get('/downloads', (req, res) => {
             if (canAccessTask(task, req.user)) downloads[taskId] = task;
         });
         res.json(downloads);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Retry a finished task: re-queue the chapters that failed or were never
+// reached. If the task stopped on a site's human-verification check, the
+// user presumably completed it by now, so the site's pause is lifted first.
+router.post('/downloads/:taskId/retry', async (req, res) => {
+    try {
+        const task = activeDownloads.get(req.params.taskId);
+        if (!task || !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
+        if (['running', 'queued', 'paused'].includes(task.status)) {
+            return res.status(400).json({ error: 'This download is still running' });
+        }
+
+        const failed = new Set(task.errors.filter(e => typeof e.chapter === 'number').map(e => e.chapter));
+        const attempted = new Set(task.completedChapters || []);
+        const remaining = (task.chapterUrls || []).filter(c => failed.has(c.number) || !attempted.has(c.number));
+        if (remaining.length === 0) return res.status(400).json({ error: 'Nothing left to retry' });
+
+        const bookmark = await bookmarkDb.getById(task.bookmarkId, task.userId ?? req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        if (task.challenge) clearChallenge(task.challenge.site);
+        activeDownloads.delete(req.params.taskId);
+
+        const taskId = queueChapterDownloads(
+            bookmark, remaining, task.userId ?? req.user.id,
+            `Retry: ${remaining.length} chapter${remaining.length === 1 ? '' : 's'} for ${bookmark.alias || bookmark.title}`
+        );
+        res.json({ taskId, chapters: remaining.map(c => c.number) });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -576,7 +576,11 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
             const images = await scraper.getChapterImages(targetUrl);
             const result = await downloader.downloadChapter(bookmark.title, chapterNum, images, bookmark.alias, null, targetUrl);
             await bookmarkDb.markChapterDownloaded(bookmark.id, chapterNum, targetUrl);
+            // Explicitly downloading a version means the user wants it back;
+            // a lingering "hidden" flag would make the reader skip it.
+            bookmarkDb.clearDeletedUrl(bookmark.id, targetUrl);
             task.downloaded = (task.downloaded || 0) + 1;
+            task.pages = (task.pages || 0) + result.success + result.skipped;
             if (result.failed > 0) {
                 task.errors.push({ chapter: chapterNum, error: `${result.failed} of ${images.length} pages failed to download`, partial: true });
             }
@@ -609,7 +613,7 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
         task.status = 'error';
         throw new Error(hardErrors.map(e => `Chapter ${e.chapter}: ${e.error}`).join('; '));
     }
-    return { downloaded: task.downloaded || 0, failed: hardErrors.length, errors: task.errors };
+    return { downloaded: task.downloaded || 0, pages: task.pages || 0, failed: hardErrors.length, errors: task.errors };
 }
 
 // ==================== LOCAL MANGA & SCAN ====================

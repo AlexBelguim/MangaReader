@@ -444,6 +444,11 @@ class ApiClient {
         return this.post(`/downloads/${taskId}/cancel`);
     }
 
+    // Re-queue the failed / unreached chapters of a finished download task
+    retryDownload(taskId) {
+        return this.post(`/downloads/${taskId}/retry`);
+    }
+
     // ==================== AUTO-CHECK ====================
 
     getAutoCheckStatus() {

@@ -145,6 +145,8 @@ function renderDownloadCard(taskId, task) {
   const pct = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
   const isActive = task.status === 'running' || task.status === 'queued';
   const isPaused = task.status === 'paused';
+  const hasErrors = task.errors && task.errors.length > 0;
+  const canRetry = !isActive && !isPaused && hasErrors && (task.chapterUrls || []).length > 0;
 
   return `
     <div class="queue-card task-card" data-task-id="${taskId}">
@@ -173,9 +175,13 @@ function renderDownloadCard(taskId, task) {
           <ul class="task-error-list">${task.errors.slice(0, 5).map(e => `<li>${typeof e.chapter === 'number' ? `Ch. ${e.chapter}: ` : ''}${escapeText(e.error)}</li>`).join('')}</ul>` : ''}
         ${task.challenge ? `
           <div class="task-challenge">
-            <span>${task.challenge.site} wants a human verification check. Do it in your browser, then retry the download.</span>
-            <button class="btn btn-sm btn-primary" data-action="open-site" data-url="${escapeText(task.challenge.url || `https://${task.challenge.site}/`)}">Open ${task.challenge.site}</button>
-          </div>` : ''}
+            <span>${task.challenge.site} wants a human verification check. Open it, complete the check, then retry here.</span>
+            <button class="btn btn-sm btn-primary" data-action="open-site" data-url="${escapeText(task.challenge.url || `https://${task.challenge.site}/`)}">1. Open ${task.challenge.site}</button>
+            <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">2. Retry download</button>
+          </div>` : (canRetry ? `
+          <div class="task-challenge">
+            <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">Retry failed chapters</button>
+          </div>` : '')}
       </div>
     </div>
   `;
@@ -489,6 +495,9 @@ function setupListeners() {
             await api.cancelDownload(taskId);
             showToast('Download cancelled', 'info');
           }
+        } else if (action === 'retry') {
+          const result = await api.retryDownload(taskId);
+          showToast(`Retrying ${result.chapters.length} chapter${result.chapters.length === 1 ? '' : 's'}`, 'info');
         }
         await loadData();
         refresh();
