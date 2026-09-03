@@ -129,7 +129,9 @@ export const SocketEvents = {
     DOWNLOAD_FAILED: 'download:failed',
     QUEUE_UPDATED: 'queue:updated',
     ACTION_RECORDED: 'action:recorded',
-    ACTION_UNDONE: 'action:undone'
+    ACTION_UNDONE: 'action:undone',
+    SITE_CHALLENGE: 'site:challenge',
+    SITE_CHALLENGE_CLEARED: 'site:challenge-cleared'
 };
 
 // Export singleton instance

@@ -38,6 +38,8 @@ import usersRouter from './routes/users.js';
 
 import { queue } from './queue.js';
 import { auth, guardPermissions } from './middleware/auth.js';
+import { isChallenged } from './scrapers/util/challenge.js';
+import { setIO } from './services/socketService.js';
 import { login, me, demoLogin } from './controllers/auth_controller.js';
 import { runMigrations } from './db/migrations.js';
 import { usersDb } from './db/users.js';
@@ -483,6 +485,15 @@ async function runAutoCheck(forceAll = false, userId = null) {
         continue;
       }
 
+      // A site that is showing a human-verification puzzle would answer
+      // every check with the puzzle. Checking anyway only feeds the block;
+      // leave it alone until the user clears it or the cooldown passes.
+      if (isChallenged(scraper.websiteName)) {
+        console.log(`[Auto-Check] Skipping ${manga.alias || manga.title}: ${scraper.websiteName} is showing a verification check`);
+        results.skipped = (results.skipped || 0) + 1;
+        continue;
+      }
+
       const bookmark = bookmarkDb.getById(manga.id, manga.user_id);
       const knownUrls = (bookmark.chapters || []).map(c => c.url);
 
@@ -620,6 +631,11 @@ async function start() {
   await scraperFactory.init();
 
   scheduleAutoCheck();
+
+  // Hand the io instance to the emitter service. Without this every
+  // emitToAll/emitToGlobal call in the backend was a silent no-op, so live
+  // events (downloads, site challenges) never reached the UI.
+  setIO(io);
 
   // Socket.io connection handling
   io.on('connection', (socket) => {

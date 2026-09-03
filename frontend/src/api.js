@@ -630,6 +630,16 @@ class ApiClient {
     // ==================== VERSIONS ====================
 
     // On-disk details (folder, page count) per downloaded version of a chapter
+    // ==================== SITE STATUS ====================
+
+    getSiteStatus() {
+        return this.get('/site-status');
+    }
+
+    clearSiteChallenge(site) {
+        return this.post('/site-status/clear', { site });
+    }
+
     getChapterVersions(bookmarkId, chapterNum) {
         return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/versions`);
     }

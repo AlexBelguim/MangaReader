@@ -7,6 +7,7 @@ import { api } from './api.js';
 import { socket, SocketEvents } from './socket.js';
 import { router } from './router.js';
 import { setSessionUser } from './session.js';
+import { initSiteChallengeBanner } from './site-challenge.js';
 
 class App {
     constructor() {
@@ -42,6 +43,9 @@ class App {
 
         // Setup global socket event listeners
         this.setupSocketListeners();
+
+        // "This site wants a human check" banner (live events + current state)
+        initSiteChallengeBanner();
 
         // Initialize router
         router.init();

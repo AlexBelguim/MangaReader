@@ -2919,3 +2919,50 @@ body.demo-mode #app {
     display: none;
   }
 }
+
+/* ==================== Site verification banner ==================== */
+.site-challenge-banner {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 10001;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-md);
+    max-width: min(920px, calc(100vw - 32px));
+    padding: var(--space-md) var(--space-lg);
+    background: var(--surface-primary, #1f1f1f);
+    border: 1px solid var(--warning, #f0a030);
+    border-left-width: 4px;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.site-challenge-text {
+    flex: 1 1 320px;
+    line-height: 1.4;
+}
+
+.site-challenge-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.site-challenge-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.site-challenge-close:hover {
+    color: var(--text-primary);
+}

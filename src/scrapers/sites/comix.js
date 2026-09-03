@@ -3,6 +3,18 @@ import { fetchPage, toPuppeteerCookies } from '../util/flaresolverr.js';
 import { deduplicateChapters } from '../util/chapters.js';
 import { extractChapterImages } from '../features/chapter-images.js';
 import { search } from '../features/search.js';
+import { reportChallenge, clearChallenge, isChallengeError } from '../util/challenge.js';
+
+const SITE = 'comix.to';
+const CHALLENGE_PATH = '/@waf/challenge';
+
+// comix.to answers automated traffic with its own "Verify you're human"
+// puzzle at /@waf/challenge (a redirect from whatever page was requested).
+// Nothing here can solve it; detect it, record it, and fail with a message
+// that says what to do instead of reporting "no chapters" or "no pages".
+function throwIfChallenge(url) {
+  if (url && url.includes(CHALLENGE_PATH)) throw reportChallenge(SITE, url);
+}
 
 const DOMAIN = '.comix.to';
 const BASE_URL = 'https://comix.to';
@@ -59,6 +71,7 @@ async function setupFlareSolverr(url, page) {
   try {
     console.log(`  [COMIX] Getting FlareSolverr cookies...`);
     const fsResult = await fetchPage(url);
+    throwIfChallenge(fsResult.url);
     const fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
     fsUserAgent = fsResult.userAgent;
     if (fsCookies.length > 0) {
@@ -67,6 +80,7 @@ async function setupFlareSolverr(url, page) {
     }
     if (fsUserAgent) await page.setUserAgent(fsUserAgent);
   } catch (error) {
+    if (isChallengeError(error)) throw error;
     console.log(`  [COMIX] FlareSolverr failed: ${error.message}, continuing without cookies...`);
   }
   return fsUserAgent;
@@ -94,6 +108,7 @@ export class ComixScraper extends BaseScraper {
     try {
       await setupFlareSolverr(url, this.page);
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      throwIfChallenge(this.page.url());
       await this.randomDelay(500, 1000);
       await this.page.waitForSelector('ul.mchap-list a[href*="chapter-"]', { timeout: 15000 }).catch(() => { });
 
@@ -109,6 +124,7 @@ export class ComixScraper extends BaseScraper {
         ? Math.max(...allChapters.map(c => c.number)) : null;
 
       console.log(`  Found ${allChapters.length} chapters across pages, ${newChapters.length} new`);
+      if (allChapters.length > 0) clearChallenge(SITE);
       return { hasUpdates: newChapters.length > 0, latestChapter, newChapters, firstPageChapters: allChapters };
     } finally {
       await this.closePage();
@@ -183,6 +199,7 @@ export class ComixScraper extends BaseScraper {
 
       console.log(`  Navigating to: ${url}`);
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      throwIfChallenge(this.page.url());
       await this.randomDelay(1000, 2000);
       await this.page.waitForSelector('ul.mchap-list a[href*="chapter-"]', { timeout: 15000 }).catch(() => { });
       await this.randomDelay(500, 1000);
@@ -436,9 +453,11 @@ export class ComixScraper extends BaseScraper {
     try {
       console.log(`  [COMIX] Fetching homepage via FlareSolverr to get Cloudflare cookies...`);
       const fsResult = await fetchPage(BASE_URL);
+      throwIfChallenge(fsResult.url);
       fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
       fsUserAgent = fsResult.userAgent;
     } catch (error) {
+      if (isChallengeError(error)) throw error;
       console.log(`  FlareSolverr cookie fetch failed: ${error.message}, trying direct...`);
     }
 
@@ -461,6 +480,7 @@ export class ComixScraper extends BaseScraper {
         waitUntil: 'networkidle2',
         timeout: 60000
       });
+      throwIfChallenge(this.page.url());
 
       // Wait for initial render
       await new Promise(r => setTimeout(r, 3000));
@@ -518,6 +538,7 @@ export class ComixScraper extends BaseScraper {
       }
 
       console.log(`  Found ${images.length} images (DOM & Canvas-borrowed extraction)`);
+      if (images.length > 0) clearChallenge(SITE);
 
       // Extract headers for authenticated downloads
       const cookies = await this.page.cookies();

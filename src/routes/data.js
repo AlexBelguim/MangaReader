@@ -5,8 +5,23 @@
 import express from 'express';
 import { bookmarkDb, chapterSettingsDb, trophyDb, readerSettingsDb, getDb } from '../database.js';
 import { getPrimaryAdminId } from '../db/connection.js';
+import { getChallenges, clearChallenge } from '../scrapers/util/challenge.js';
 
 const router = express.Router();
+
+// ==================== SITE STATUS ====================
+
+// Sites currently showing a human-verification check (see scrapers/util/challenge.js)
+router.get('/site-status', (req, res) => {
+    res.json({ challenges: getChallenges() });
+});
+
+// The user completed the check in their browser: resume automated checks
+router.post('/site-status/clear', (req, res) => {
+    const { site } = req.body || {};
+    if (!site) return res.status(400).json({ error: 'site is required' });
+    res.json({ success: true, cleared: clearChallenge(site) });
+});
 
 // ==================== VOLUMES (whole library) ====================
 
