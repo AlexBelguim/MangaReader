@@ -53,12 +53,21 @@ export class MangaHereScraper extends BaseScraper {
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
       await this.randomDelay(1000, 2000);
 
+      // Desktop (www.) and mobile (newm.) layouts name things differently:
+      // title is .detail-info-right-title-font vs .detail-top-bar-info-title.
       const info = await this.page.evaluate(() => {
-        const titleEl = document.querySelector('h1') || document.querySelector('.detail-info-right-title-font');
-        const title = titleEl ? titleEl.textContent.trim() : 'Unknown Title';
-        const coverEl = document.querySelector('img.detail-info-cover-img') || document.querySelector('.detail-top-bar-cover img');
+        const titleEl = document.querySelector('h1')
+          || document.querySelector('.detail-info-right-title-font')
+          || document.querySelector('.detail-top-bar-info-title');
+        let title = titleEl ? titleEl.textContent.trim() : '';
+        if (!title) title = document.title.replace(/\s*-\s*MangaHere.*$/i, '').replace(/\s+Manga\s*$/i, '').trim() || 'Unknown Title';
+        const coverEl = document.querySelector('img.detail-info-cover-img')
+          || document.querySelector('.detail-top-bar-cover img')
+          || [...document.querySelectorAll('img')].find(i => /\/store\/manga\/\d+\/cover\./i.test(i.src));
         const cover = coverEl ? coverEl.src : null;
-        const descEl = document.querySelector('.fullcontent') || document.querySelector('.detail-info-right-content');
+        const descEl = document.querySelector('.fullcontent')
+          || document.querySelector('.detail-info-right-content')
+          || document.querySelector('[class*="summary"]');
         const description = descEl ? descEl.textContent.replace(/Show less/i, '').trim() : '';
         return { title, cover, description };
       });
@@ -139,7 +148,9 @@ export class MangaHereScraper extends BaseScraper {
 
       // Current reader loads pages on demand via chapterfun.ashx (packed JS
       // that defines `d`, an array whose first entry is the page image).
-      // Pull the page list ourselves: chapterid + page count from the pager.
+      // Pull the page list ourselves: chapterid, plus the page count. The
+      // desktop layout (www.) renders a pager; the mobile layout (newm.) has
+      // no pager but sets window.imagecount, so take whichever is present.
       const meta = await this.page.evaluate(() => {
         const cid = typeof window.chapterid !== 'undefined' ? window.chapterid : null;
         const key = document.querySelector('#dm5_key')?.value || '';
@@ -148,6 +159,7 @@ export class MangaHereScraper extends BaseScraper {
           const n = parseInt(a.getAttribute('data-page'), 10);
           if (Number.isFinite(n) && n > total) total = n;
         });
+        if (total === 0 && Number.isFinite(Number(window.imagecount))) total = Number(window.imagecount);
         return { cid, key, total };
       });
 
