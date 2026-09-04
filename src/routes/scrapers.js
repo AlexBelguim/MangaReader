@@ -111,8 +111,17 @@ router.get('/search', async (req, res) => {
       results = rawResults.map(r => ({ ...r, website: actualScraper.websiteName }));
     }
     
-    // Sort results by chapter count descending
-    results.sort((a, b) => (b.chapterCount || 0) - (a.chapterCount || 0));
+    // Merge the sites' lists by each site's own relevance rank (first hits
+    // of every site first), with chapter count as the tiebreak. Sorting by
+    // count alone buried sites whose listings carry no count at all.
+    const rankWithinSite = new Map();
+    const rankOf = new Map();
+    for (const r of results) {
+      const n = rankWithinSite.get(r.website) || 0;
+      rankOf.set(r, n);
+      rankWithinSite.set(r.website, n + 1);
+    }
+    results.sort((a, b) => rankOf.get(a) - rankOf.get(b) || (b.chapterCount || 0) - (a.chapterCount || 0));
     
     // Download covers in parallel for results that don't already have local paths
     // (comix scraper captures covers directly via Puppeteer screenshots)
@@ -155,6 +164,7 @@ router.get('/list', (req, res) => {
       supportsSearch: s.supportsSearch,
       supportsBrowse: s.supportsBrowse,
       supportsSession: s.supportsSession === true,
+      browseOptions: s.supportsBrowse ? s.browseOptions : null,
       urlPatterns: s.urlPatterns
     }));
     

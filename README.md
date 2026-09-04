@@ -11,6 +11,7 @@ A powerful, self-hosted Manga Scraper and Reader. Built with a Node.js/Express b
 - 📥 **Background Downloader** - Queue chapters and download them reliably in the background without keeping the page open.
 - 🐳 **Docker Support** - Easily deployable to a home server, NAS, or Seedbox.
 - 🔌 **Modular Scrapers** - Easily write and plug in new scrapers for different manga sites.
+- 🌐 **Supported sites** - comix.to, mangahere.cc, weebcentral.com, nhentai.net and chained-soldier.live. The Scrapers page can search across them and browse the catalogs of mangahere, weebcentral and nhentai with each site's own sort options.
 
 ## 🚀 Getting Started
 

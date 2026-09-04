@@ -57,7 +57,9 @@ class ScraperFactory {
     this.initPromise = (async () => {
       try {
         if (!this.browser) {
-          const userDataDir = path.join(os.tmpdir(), 'puppeteer_main_profile');
+          // Overridable so test scripts can run side by side without
+          // fighting over one Chrome profile (its singleton lock).
+          const userDataDir = process.env.PUPPETEER_PROFILE_DIR || path.join(os.tmpdir(), 'puppeteer_main_profile');
           
           // Ensure directory exists
           if (!fs.existsSync(userDataDir)) {

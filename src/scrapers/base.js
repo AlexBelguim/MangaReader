@@ -32,6 +32,19 @@ export class BaseScraper {
     return false;
   }
 
+  // How the browse UI should present this scraper: the sort choices it
+  // understands (values are what `browse()` receives) and what the query
+  // box means for it. Override alongside `browse()`.
+  get browseOptions() {
+    return {
+      sorts: [{ value: 'popular', label: 'Popular' }],
+      defaultSort: 'popular',
+      defaultQuery: '',
+      queryLabel: 'Search',
+      queryPlaceholder: 'Optional: title to search for'
+    };
+  }
+
   // Whether this scraper can take over a session (cookies + user agent) the
   // user handed over after completing the site's human-verification check.
   // Scrapers that return true apply the saved session on every page and

@@ -182,6 +182,21 @@ export class NhentaiScraper extends BaseScraper {
   get supportsSearch() { return true; }
   get supportsBrowse() { return true; }
 
+  get browseOptions() {
+    return {
+      sorts: [
+        { value: 'popular-today', label: 'Popular today' },
+        { value: 'popular-week', label: 'Popular this week' },
+        { value: 'popular', label: 'Popular all time' },
+        { value: 'date', label: 'Latest' }
+      ],
+      defaultSort: 'popular-today',
+      defaultQuery: 'english',
+      queryLabel: 'Query / tags',
+      queryPlaceholder: 'e.g. english, parody, etc.'
+    };
+  }
+
   /**
    * Search for galleries by query
    */

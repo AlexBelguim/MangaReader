@@ -35,8 +35,8 @@ class ScraperView {
     // Browse State
     this.viewMode = 'main'; // 'main' | 'browse'
     this.browseScraper = null;
-    this.browseQuery = 'english'; // Default for nhentai
-    this.browseSort = 'popular-today';
+    this.browseQuery = ''; // per-scraper defaults come from browseOptions
+    this.browseSort = 'popular';
     this.browsePage = 1;
     this.browseTotalPages = 1;
     this.isBrowsing = false;
@@ -64,10 +64,11 @@ class ScraperView {
     const deepQuery = qs.get('q');
 
     if (browseTarget) {
+      // Defaults (sort, query) come from the scraper list, which is not
+      // loaded yet; set them properly once it is.
       this.browseScraper = browseTarget;
       this.viewMode = 'browse';
-      this.browseQuery = deepQuery || this.browseQuery;
-      this.browseSort = 'popular';
+      this.browseQuery = deepQuery || '';
       this.browsePage = 1;
       this.browseResults = [];
       this.browseTotalPages = 1;
@@ -86,6 +87,10 @@ class ScraperView {
 
     // If we're in browse mode (deep link, or returning from reader), fetch results
     if (this.viewMode === 'browse' && this.browseScraper) {
+      if (browseTarget) {
+        this.startBrowse(browseTarget, { query: deepQuery || null });
+        this.updateView();
+      }
       this.performBrowse();
     } else if (deepQuery) {
       // Cross-site search deep link
@@ -140,6 +145,33 @@ class ScraperView {
 
   sessionFor(site) {
     return (this.siteStatus.sessions || []).find(s => s.site === site) || null;
+  }
+
+  // What the browse controls mean for the scraper being browsed: its own
+  // sort choices and query semantics (served by /scrapers/list). Falls back
+  // to a single "popular" sort until the list has loaded.
+  browseConfig(name = this.browseScraper) {
+    const s = this.scrapers.find(x => x.name === name);
+    const o = s && s.browseOptions;
+    return {
+      sorts: (o && o.sorts && o.sorts.length) ? o.sorts : [{ value: 'popular', label: 'Popular' }],
+      defaultSort: (o && o.defaultSort) || 'popular',
+      defaultQuery: (o && o.defaultQuery) || '',
+      queryLabel: (o && o.queryLabel) || 'Search',
+      queryPlaceholder: (o && o.queryPlaceholder) || 'Optional: title to search for'
+    };
+  }
+
+  // Reset the browse state to a scraper's defaults (entering its catalog)
+  startBrowse(name, { query = null, sort = null } = {}) {
+    const cfg = this.browseConfig(name);
+    this.browseScraper = name;
+    this.viewMode = 'browse';
+    this.browseQuery = query ?? cfg.defaultQuery;
+    this.browseSort = sort && cfg.sorts.some(s => s.value === sort) ? sort : cfg.defaultSort;
+    this.browsePage = 1;
+    this.browseResults = [];
+    this.browseTotalPages = 1;
   }
 
   challengeFor(site) {
@@ -205,12 +237,7 @@ class ScraperView {
 
     document.querySelectorAll('.scraper-browse-card-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        const scraperName = e.currentTarget.dataset.scraper;
-        this.browseScraper = scraperName;
-        this.viewMode = 'browse';
-        this.browsePage = 1;
-        this.browseResults = [];
-        this.browseTotalPages = 1;
+        this.startBrowse(e.currentTarget.dataset.scraper);
         this.updateView();
         this.performBrowse();
       });
@@ -323,16 +350,13 @@ class ScraperView {
 
         <div class="browse-controls-box">
           <div class="browse-form-group" style="flex: 1; min-width: 200px;">
-            <label>Query / Filters</label>
-            <input type="text" id="browse-query" class="browse-input" value="${this.browseQuery}" placeholder="e.g. english, parody, etc.">
+            <label>${esc(this.browseConfig().queryLabel)}</label>
+            <input type="text" id="browse-query" class="browse-input" value="${esc(this.browseQuery)}" placeholder="${esc(this.browseConfig().queryPlaceholder)}">
           </div>
           <div class="browse-form-group" style="min-width: 150px;">
             <label>Sort By</label>
             <select id="browse-sort" class="browse-select">
-              <option value="popular-today" ${this.browseSort === 'popular-today' ? 'selected' : ''}>Popular Today</option>
-              <option value="popular-week" ${this.browseSort === 'popular-week' ? 'selected' : ''}>Popular This Week</option>
-              <option value="popular" ${this.browseSort === 'popular' ? 'selected' : ''}>Popular All Time</option>
-              <option value="date" ${this.browseSort === 'date' ? 'selected' : ''}>Latest</option>
+              ${this.browseConfig().sorts.map(s => `<option value="${esc(s.value)}" ${this.browseSort === s.value ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
             </select>
           </div>
           <div class="browse-actions" style="display: flex; gap: 8px;">
@@ -928,7 +952,12 @@ class ScraperView {
        const data = await api.get(`/scrapers/info?url=${encodeURIComponent(result.url)}`, { signal });
        if (data.success && data.info) {
           this.previewInfo = { ...this.previewInfo, ...data.info };
-          
+          // Multi-chapter sites: "Read Now" opens the first chapter, since
+          // the title page itself has no pages to stream.
+          if (Array.isArray(data.info.chapters) && data.info.chapters.length > 1 && data.info.chapters[0]?.url) {
+             this.previewInfo.readUrl = data.info.chapters[0].url;
+          }
+
           let tagsHtml = '';
           if (data.info.tags && data.info.tags.length > 0) {
              tagsHtml = `
@@ -999,7 +1028,7 @@ class ScraperView {
 
   async openTempReader() {
     if (!this.previewInfo || (!this.previewInfo.url && !this.previewInfo.galleryId)) return;
-    const url = this.previewInfo.url || `https://nhentai.net/g/${this.previewInfo.galleryId}/`;
+    const url = this.previewInfo.readUrl || this.previewInfo.url || `https://nhentai.net/g/${this.previewInfo.galleryId}/`;
     
     // Check if we have a specific scraper configured for browse
     const scraperName = this.browseScraper || this.previewInfo.website;

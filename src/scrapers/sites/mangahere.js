@@ -1,8 +1,23 @@
 import { BaseScraper } from '../base.js';
 import { quickCheck } from '../features/quick-check.js';
 import { search } from '../features/search.js';
+import { browse } from '../features/browse.js';
+import { deduplicateChapters } from '../util/chapters.js';
 
 const ADULT_COOKIE = { name: 'isAdult', value: '1', domain: '.mangahere.cc' };
+
+// Catalog browsing uses the desktop host: www. renders the directory as a
+// 70-per-page cover grid with a numbered pager and five sort links, while the
+// mobile host (newm.) shows /directory/ as a bare genre chooser.
+const DESKTOP_URL = 'https://www.mangahere.cc';
+
+// Directory sorts are a bare query suffix on /directory/<page>.htm ('' = the
+// default popularity order). The search endpoint takes numeric sort codes
+// instead, and only two of them match a directory sort (1 = A-Z, 4 = latest
+// chapter update); 0 is the site's default order and codes 2/3 are ascending
+// orders nobody wants (least popular / least recently updated first).
+const DIRECTORY_SORT = { popular: '', latest: 'latest', rating: 'rating', news: 'news', az: 'az' };
+const SEARCH_SORT = { latest: 4, az: 1 };
 
 /**
  * Scraper for mangahere.cc website
@@ -16,10 +31,14 @@ async function extractChaptersFromPage(page) {
     const chapters = [];
     const links = document.querySelectorAll('ul.detail-main-list > li > a, a[href*="/c"]');
     const seenUrls = new Set();
+    // The desktop layout also lists other series' latest chapters in its
+    // sidebars; only links under this manga's own path are its chapters.
+    const ownPath = location.pathname.replace(/\/+$/, '') + '/';
 
     links.forEach(link => {
       const href = link.href;
       if (!href || !href.includes('.html')) return;
+      if (!link.pathname.startsWith(ownPath)) return;
       if (seenUrls.has(href)) return;
       seenUrls.add(href);
 
@@ -42,6 +61,82 @@ export class MangaHereScraper extends BaseScraper {
   get urlPatterns() { return ['mangahere.cc', 'newm.mangahere.cc']; }
   get supportsQuickCheck() { return true; }
   get supportsSearch() { return true; }
+  get supportsBrowse() { return true; }
+
+  get browseOptions() {
+    return {
+      sorts: [
+        { value: 'popular', label: 'Most popular' },
+        { value: 'latest', label: 'Latest chapters' },
+        { value: 'rating', label: 'Top rated' },
+        { value: 'news', label: 'Newest series' },
+        { value: 'az', label: 'A to Z' }
+      ],
+      defaultSort: 'popular',
+      defaultQuery: '',
+      queryLabel: 'Search',
+      queryPlaceholder: 'Optional: title to search for (site order unless Latest / A to Z)'
+    };
+  }
+
+  // ── Browse ──
+
+  /**
+   * Empty query: the directory in the chosen sort. Non-empty query: a title
+   * search, sorted when the search endpoint knows the sort (see SEARCH_SORT),
+   * otherwise in the site's default order.
+   */
+  async browse(sort = 'popular', page = 1, query = '', refresh = false, options = {}) {
+    if (!Object.hasOwn(DIRECTORY_SORT, sort)) sort = 'popular';
+    return browse(this, sort, page, query, {
+      cacheTtl: 3 * 60 * 60 * 1000,
+      timeout: 45000,
+      buildBrowseUrl: (s, p, q) => {
+        const title = (q || '').trim();
+        if (title) {
+          const code = SEARCH_SORT[s];
+          return `${DESKTOP_URL}/search?title=${encodeURIComponent(title)}&page=${p}${code ? `&sort=${code}` : ''}`;
+        }
+        const suffix = DIRECTORY_SORT[s];
+        return `${DESKTOP_URL}/directory/${p}.htm${suffix ? `?${suffix}` : ''}`;
+      },
+      setupPage: async (p) => {
+        await p.setCookie(ADULT_COOKIE);
+        // The listing is fully server-rendered. With scripts on, the ad
+        // loaders delay networkidle2 and each cover's inline onerror swaps a
+        // slow-loading image for the site's nopicture placeholder, losing
+        // the real URL.
+        await p.setJavaScriptEnabled(false);
+      },
+      extractResults: async (p) => p.evaluate(() => {
+        // Directory items are manga-list-1-*, search items manga-list-4-*;
+        // both keep the same inner structure (cover img, item-title, one
+        // chapter link), so match on the class suffix.
+        const results = [];
+        document.querySelectorAll('ul.manga-list-1-list > li, ul.manga-list-4-list > li').forEach(li => {
+          const a = li.querySelector('p[class$="-item-title"] > a');
+          if (!a) return;
+          const title = a.textContent.trim() || a.title;
+          const img = li.querySelector('img[class$="-cover"]');
+          const cover = img ? (img.src || img.dataset.src || null) : null;
+          // "Vol.98 Ch.1192" / "Ch.238" — take the chapter, not the volume.
+          const chapterLink = li.querySelector('a[href*="/c"][href$=".html"]');
+          const chMatch = chapterLink?.textContent.match(/Ch\.?\s*(\d+(?:\.\d+)?)/i);
+          const chapterCount = chMatch ? parseFloat(chMatch[1]) : 0;
+          results.push({ title, url: a.href, cover, chapterCount });
+        });
+
+        // The pager is numbered anchors, the active page included (as
+        // <a class="active">), so the largest number seen is the last page.
+        let totalPages = 1;
+        document.querySelectorAll('.pager-list-left a').forEach(a => {
+          const n = parseInt(a.textContent.trim(), 10);
+          if (Number.isFinite(n) && n > totalPages) totalPages = n;
+        });
+        return { results, totalPages };
+      })
+    }, refresh, options);
+  }
 
   // ── Get Manga Info ──
 
@@ -72,13 +167,14 @@ export class MangaHereScraper extends BaseScraper {
         return { title, cover, description };
       });
 
-      const chapters = await extractChaptersFromPage(this.page);
-      chapters.sort((a, b) => a.number - b.number);
+      // The site occasionally lists a chapter number twice (e.g. One Piece
+      // 1.1 under two volumes); keep both as versions like the other sites.
+      const { chapters, duplicateChapters, uniqueCount } = deduplicateChapters(await extractChaptersFromPage(this.page));
 
       return {
         url, website: this.websiteName, title: info.title,
-        totalChapters: chapters.length, uniqueChapters: chapters.length,
-        chapters, duplicateChapters: [],
+        totalChapters: chapters.length, uniqueChapters: uniqueCount,
+        chapters, duplicateChapters,
         cover: info.cover, description: info.description
       };
     } finally {
