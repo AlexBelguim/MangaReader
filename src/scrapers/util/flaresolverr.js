@@ -43,7 +43,7 @@ export async function fetchPage(url, maxTimeout = 60000, waitTime = 0) {
     url: url,
     maxTimeout: maxTimeout
   };
-  // Add wait parameter if specified - FlareSolverr will wait this many ms 
+  // Add wait parameter if specified - FlareSolverr will wait this many ms
   // after the challenge is solved before capturing the page HTML
   if (waitTime > 0) {
     body.wait = waitTime;
@@ -54,7 +54,10 @@ export async function fetchPage(url, maxTimeout = 60000, waitTime = 0) {
     response = await fetch(FLARESOLVERR_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      // FlareSolverr enforces maxTimeout itself; this only covers a host
+      // that never answers, which would otherwise hang the scrape.
+      signal: AbortSignal.timeout(maxTimeout + 10000)
     });
   } catch (fetchErr) {
     throw new Error(`FlareSolverr connection failed: ${fetchErr.message}`);

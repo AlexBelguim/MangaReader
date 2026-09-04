@@ -645,6 +645,19 @@ class ApiClient {
         return this.post('/site-status/clear', { site });
     }
 
+    // Hand a site the cookies (and browser identity) from the browser the
+    // user completed its human check in. `cookies` is the pasted text.
+    importSiteSession(site, cookies, userAgent) {
+        return this.post('/site-status/session', { site, cookies, userAgent });
+    }
+
+    forgetSiteSession(site) {
+        return this.request('/site-status/session', {
+            method: 'DELETE',
+            body: JSON.stringify({ site })
+        });
+    }
+
     getChapterVersions(bookmarkId, chapterNum) {
         return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNum}/versions`);
     }

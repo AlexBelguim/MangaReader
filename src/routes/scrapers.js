@@ -154,6 +154,7 @@ router.get('/list', (req, res) => {
       name: s.websiteName,
       supportsSearch: s.supportsSearch,
       supportsBrowse: s.supportsBrowse,
+      supportsSession: s.supportsSession === true,
       urlPatterns: s.urlPatterns
     }));
     

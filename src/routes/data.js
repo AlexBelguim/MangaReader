@@ -6,14 +6,24 @@ import express from 'express';
 import { bookmarkDb, chapterSettingsDb, trophyDb, readerSettingsDb, getDb } from '../database.js';
 import { getPrimaryAdminId } from '../db/connection.js';
 import { getChallenges, clearChallenge } from '../scrapers/util/challenge.js';
+import {
+    parseCookieInput, sanitiseUserAgent, setSiteSession, clearSiteSession, markSiteSessionStale,
+    listSiteSessions, purgeSiteCookiesFromBrowser
+} from '../scrapers/util/site-session.js';
+import { scraperFactory } from '../scrapers/index.js';
+import { requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // ==================== SITE STATUS ====================
 
-// Sites currently showing a human-verification check (see scrapers/util/challenge.js)
+// Sites currently showing a human-verification check (see
+// scrapers/util/challenge.js) and the sessions an admin handed over for
+// sites (scrapers/util/site-session.js). Never cookie values; cookie names
+// and the admin's browser user agent only for admins.
 router.get('/site-status', (req, res) => {
-    res.json({ challenges: getChallenges() });
+    const detailed = req.user?.role === 'admin';
+    res.json({ challenges: getChallenges(), sessions: listSiteSessions({ detailed }) });
 });
 
 // The user completed the check in their browser: resume automated checks
@@ -21,6 +31,122 @@ router.post('/site-status/clear', (req, res) => {
     const { site } = req.body || {};
     if (!site) return res.status(400).json({ error: 'site is required' });
     res.json({ success: true, cleared: clearChallenge(site) });
+});
+
+// Only sites we scrape can have a session; the name is also used as a key
+// in the store, so it must be one of ours rather than free text.
+function findScraper(site) {
+    return scraperFactory.scrapers.find(s => s.websiteName === site) || null;
+}
+
+// One access probe per site at a time. A second import while one is running
+// queues behind it (rather than sharing its result, which would judge the
+// new cookies by the old paste), so each import gets its own verdict.
+const probesInFlight = new Map();
+function probeSite(scraper) {
+    const site = scraper.websiteName;
+    const previous = probesInFlight.get(site) || Promise.resolve();
+    const run = previous.catch(() => { }).then(async () => {
+        if (!scraperFactory.browser) await scraperFactory.init();
+        return scraper.checkAccess();
+    });
+    probesInFlight.set(site, run);
+    run.finally(() => {
+        if (probesInFlight.get(site) === run) probesInFlight.delete(site);
+    }).catch(() => { });
+    return run;
+}
+
+// The user completed the site's check in their own browser and pasted that
+// browser's cookies (and, usually, its user agent). Save them for the
+// scrapers, then load the site once to see whether it accepts them.
+// Admin only: the cookies act for every user's downloads and are stored on
+// the server.
+router.post('/site-status/session', requireAdmin, async (req, res) => {
+    try {
+        const { site, cookies, userAgent, probe = true } = req.body || {};
+        if (!site || typeof site !== 'string') return res.status(400).json({ error: 'site is required' });
+        const scraper = findScraper(site);
+        if (!scraper || !scraper.supportsSession) {
+            return res.status(400).json({ error: `${site} does not take a handed-over session` });
+        }
+        if (cookies === undefined || cookies === null || cookies === '') {
+            return res.status(400).json({ error: 'cookies are required' });
+        }
+        if (typeof cookies === 'string' && cookies.length > 200_000) {
+            return res.status(400).json({ error: 'That is too much text to be a cookie export' });
+        }
+
+        const parsed = parseCookieInput(cookies, site);
+        if (parsed.cookies.length === 0) {
+            const { foreign, expired, invalid } = parsed.ignored;
+            let why = 'No cookies recognised in the pasted text. Paste a Cookie-Editor export (JSON or Header String), a cookies.txt, or name=value pairs.';
+            if (foreign && !expired && !invalid) {
+                why = foreign === 1
+                    ? `That cookie belongs to another site, not ${site}. Export from the ${site} tab.`
+                    : `Those ${foreign} cookies belong to other sites; none are for ${site}. Export from the ${site} tab.`;
+            }
+            else if (expired && !foreign && !invalid) why = `Every ${site} cookie in the paste has already expired. Complete the check again and export right away.`;
+            return res.status(400).json({ error: why, ignored: parsed.ignored, format: parsed.format });
+        }
+
+        // The shared browser's profile may still hold this site's cookies
+        // from earlier scrapes (FlareSolverr's Cloudflare clearance, bound
+        // to another identity). Clear them so the page presents only the
+        // handed-over identity, and nothing foreign gets merged back into
+        // the saved session later.
+        if (scraperFactory.browser) await purgeSiteCookiesFromBrowser(scraperFactory.browser, site);
+
+        const session = setSiteSession(site, {
+            cookies: parsed.cookies,
+            userAgent: sanitiseUserAgent(userAgent),
+            source: `import:${parsed.format}`
+        });
+
+        let probeResult = null;
+        if (probe && typeof scraper.checkAccess === 'function') {
+            probeResult = await probeSite(scraper);
+            if (probeResult.ok) {
+                clearChallenge(site);
+            } else if (probeResult.blocked) {
+                // The site saw the cookies and still asked for the check:
+                // say so everywhere the session is shown, not just here.
+                markSiteSessionStale(site, 'The site showed its check to the server right after these cookies were saved');
+            }
+            // Otherwise (load error, Cloudflare not cleared, HTTP error)
+            // nothing is known about the cookies yet; the session stays as is.
+        }
+
+        // The probe may have flagged the session; report its current state.
+        const current = listSiteSessions().find(s => s.site === site) || session;
+        res.json({ success: true, session: current, ignored: parsed.ignored, format: parsed.format, probe: probeResult });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Forget a site's saved session, and scrub its cookies from the shared browser
+router.delete('/site-status/session', requireAdmin, async (req, res) => {
+    try {
+        const { site } = req.body || {};
+        if (!site || typeof site !== 'string') return res.status(400).json({ error: 'site is required' });
+        if (!findScraper(site)) return res.status(400).json({ error: `Unknown site: ${site}` });
+        const cleared = clearSiteSession(site);
+        // The cookies also sit in the shared browser's profile; take them out
+        // of there too (start it if needed so the purge can run).
+        if (!scraperFactory.browser) {
+            await scraperFactory.init().catch(e => console.warn(`[SiteSession] Browser unavailable for purge: ${e.message}`));
+        }
+        const purged = await purgeSiteCookiesFromBrowser(scraperFactory.browser, site);
+        res.json({
+            success: true,
+            cleared,
+            purged,
+            warning: purged === null ? 'Cookies may remain in the scraper browser until it restarts' : undefined
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ==================== VOLUMES (whole library) ====================

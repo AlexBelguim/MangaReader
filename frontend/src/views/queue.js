@@ -8,6 +8,8 @@ import { socket, SocketEvents } from '../socket.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
+import { openCookieImportModal, openSite } from '../site-challenge.js';
+import { session } from '../session.js';
 
 let state = {
   downloads: {},
@@ -173,12 +175,21 @@ function renderDownloadCard(taskId, task) {
         ${task.errors && task.errors.length > 0 ? `
           <div class="task-errors">${icon('triangle-alert')} ${task.errors.length} error(s)</div>
           <ul class="task-error-list">${task.errors.slice(0, 5).map(e => `<li>${typeof e.chapter === 'number' ? `Ch. ${e.chapter}: ` : ''}${escapeText(e.error)}</li>`).join('')}</ul>` : ''}
-        ${task.challenge ? `
+        ${task.challenge ? (() => {
+          const site = escapeText(task.challenge.site);
+          const url = escapeText(task.challenge.url || `https://${task.challenge.site}/`);
+          const admin = session.isAdmin;
+          const text = task.challenge.sessionStale
+            ? `${site} no longer accepts the cookies handed over earlier. Complete its check again, paste fresh cookies, then retry.`
+            : `${site} wants a human verification check. Complete it in your browser, hand over its cookies, then retry here.`;
+          return `
           <div class="task-challenge">
-            <span>${task.challenge.site} wants a human verification check. Open it, complete the check, then retry here.</span>
-            <button class="btn btn-sm btn-primary" data-action="open-site" data-url="${escapeText(task.challenge.url || `https://${task.challenge.site}/`)}">1. Open ${task.challenge.site}</button>
-            <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">2. Retry download</button>
-          </div>` : (canRetry ? `
+            <span>${text}${admin ? '' : ' (An admin has to hand the cookies over.)'}</span>
+            <button class="btn btn-sm btn-primary" data-action="open-site" data-site="${site}" data-url="${url}">${admin ? '1. ' : ''}Open ${site}</button>
+            ${admin ? `<button class="btn btn-sm btn-primary" data-action="import-cookies" data-site="${site}" data-url="${url}" data-stale="${task.challenge.sessionStale ? '1' : ''}">2. Paste cookies</button>` : ''}
+            <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">${admin ? '3. ' : ''}Retry download</button>
+          </div>`;
+        })() : (canRetry ? `
           <div class="task-challenge">
             <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">Retry failed chapters</button>
           </div>` : '')}
@@ -480,7 +491,12 @@ function setupListeners() {
       const taskId = btn.dataset.task;
       if (action === 'open-site') {
         // The user completes the site's human check in their own browser tab
-        window.open(btn.dataset.url, '_blank', 'noopener');
+        openSite(btn.dataset.site, btn.dataset.url);
+        return;
+      }
+      if (action === 'import-cookies') {
+        // ...then hands that browser's cookies to the scraper
+        openCookieImportModal({ site: btn.dataset.site, url: btn.dataset.url, stale: btn.dataset.stale === '1' });
         return;
       }
       try {

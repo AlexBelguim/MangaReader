@@ -4,6 +4,8 @@ import { deduplicateChapters } from '../util/chapters.js';
 import { extractChapterImages } from '../features/chapter-images.js';
 import { search } from '../features/search.js';
 import { reportChallenge, clearChallenge, isChallengeError } from '../util/challenge.js';
+import { applySiteSession, refreshSiteSession, cookieDomainMatchesSite } from '../util/site-session.js';
+import { waitForCloudflare } from '../util/cloudflare.js';
 
 const SITE = 'comix.to';
 const CHALLENGE_PATH = '/@waf/challenge';
@@ -12,12 +14,21 @@ const CHALLENGE_PATH = '/@waf/challenge';
 // puzzle at /@waf/challenge (a redirect from whatever page was requested).
 // Nothing here can solve it; detect it, record it, and fail with a message
 // that says what to do instead of reporting "no chapters" or "no pages".
-function throwIfChallenge(url) {
-  if (url && url.includes(CHALLENGE_PATH)) throw reportChallenge(SITE, url);
+function isChallengeUrl(url) {
+  return !!url && url.includes(CHALLENGE_PATH);
 }
+
+// `usedSession`: the page was carrying the user's handed-over cookies, so
+// the check showing up means the site stopped accepting them.
+function throwIfChallenge(url, usedSession = false) {
+  if (isChallengeUrl(url)) throw reportChallenge(SITE, url, { usedSession });
+}
+
+const CF_TITLE_RE = /just a moment|checking your browser|even geduld/i;
 
 const DOMAIN = '.comix.to';
 const BASE_URL = 'https://comix.to';
+const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // ─── HTML Parsing Helpers ────────────────────────────────────────────
 
@@ -63,27 +74,79 @@ async function extractChaptersFromDom(page) {
   });
 }
 
-// ─── FlareSolverr page setup helper ──────────────────────────────────
+// ─── Page setup: saved session + FlareSolverr ────────────────────────
 
-/** Get FlareSolverr cookies and set them on a Puppeteer page */
-async function setupFlareSolverr(url, page) {
-  let fsUserAgent = '';
+/**
+ * Get a Puppeteer page ready to load comix.to.
+ *
+ * With a saved session (cookies + user agent from the browser the user
+ * completed the site's human check in) the page presents exactly that:
+ * same cookies, same identity, nothing else. Both the site's own check and
+ * Cloudflare tie their cookies to the browser identity, so FlareSolverr's
+ * cookies and user agent would only get in the way - it is skipped. Without
+ * a session, FlareSolverr supplies Cloudflare clearance as before, and the
+ * human check showing up there is reported straight away.
+ *
+ * @returns {Promise<{ userAgent: string, session: object|null }>}
+ *   the user agent the page now carries (needed for image download headers)
+ */
+async function prepareComixPage(url, page) {
+  const session = await applySiteSession(page, SITE);
+  if (session) return { userAgent: session.userAgent || '', session };
+
+  let userAgent = '';
   try {
     console.log(`  [COMIX] Getting FlareSolverr cookies...`);
     const fsResult = await fetchPage(url);
     throwIfChallenge(fsResult.url);
     const fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
-    fsUserAgent = fsResult.userAgent;
     if (fsCookies.length > 0) {
       await page.setCookie(...fsCookies);
       console.log(`  [COMIX] Set ${fsCookies.length} cookies from FlareSolverr`);
     }
-    if (fsUserAgent) await page.setUserAgent(fsUserAgent);
+    if (fsResult.userAgent) {
+      await page.setUserAgent(fsResult.userAgent);
+      userAgent = fsResult.userAgent;
+    }
   } catch (error) {
     if (isChallengeError(error)) throw error;
-    console.log(`  [COMIX] FlareSolverr failed: ${error.message}, continuing without cookies...`);
+    console.log(`  [COMIX] FlareSolverr failed: ${error.message}, continuing without its cookies...`);
   }
-  return fsUserAgent;
+  return { userAgent, session: null };
+}
+
+/**
+ * After a navigation: give a Cloudflare interstitial (which the stealth
+ * browser usually passes on its own) a moment, then fail clearly if the
+ * page is still that interstitial or is the site's human check. Scraping
+ * an interstitial would otherwise "succeed" with no chapters or pages.
+ */
+async function settleLanding(page, session = null) {
+  const title = await page.title().catch(() => '');
+  if (CF_TITLE_RE.test(title)) {
+    const passed = await waitForCloudflare(page, { maxWait: 30000 });
+    if (!passed) {
+      throw new Error(session
+        ? 'comix.to: the Cloudflare check did not clear in the headless browser while it was using the saved cookies (FlareSolverr is skipped then). Complete the check in your browser again and paste cookies exported right after it, or forget the saved session on the Scrapers page.'
+        : 'comix.to: the Cloudflare check did not clear in the headless browser.');
+    }
+  }
+  throwIfChallenge(page.url(), !!session);
+}
+
+/**
+ * A page load got real content: the site is not blocking us. Lift any
+ * recorded block and, when a saved session is in use, keep whatever
+ * cookies the site rotated so it stays valid.
+ */
+async function noteAccessOk(page, session) {
+  clearChallenge(SITE);
+  if (!session) return;
+  try {
+    refreshSiteSession(SITE, await page.cookies());
+  } catch (e) {
+    console.warn(`  [COMIX] Could not refresh saved session: ${e.message}`);
+  }
 }
 
 // ─── Scraper ─────────────────────────────────────────────────────────
@@ -93,6 +156,7 @@ export class ComixScraper extends BaseScraper {
   get urlPatterns() { return ['comix.to']; }
   get supportsQuickCheck() { return true; }
   get supportsSearch() { return true; }
+  get supportsSession() { return true; }
 
   // ── Quick Check ──
 
@@ -106,9 +170,9 @@ export class ComixScraper extends BaseScraper {
 
     await this.createPage();
     try {
-      await setupFlareSolverr(url, this.page);
+      const { session } = await prepareComixPage(url, this.page);
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      throwIfChallenge(this.page.url());
+      await settleLanding(this.page, session);
       await this.randomDelay(500, 1000);
       await this.page.waitForSelector('ul.mchap-list a[href*="chapter-"]', { timeout: 15000 }).catch(() => { });
 
@@ -124,10 +188,51 @@ export class ComixScraper extends BaseScraper {
         ? Math.max(...allChapters.map(c => c.number)) : null;
 
       console.log(`  Found ${allChapters.length} chapters across pages, ${newChapters.length} new`);
-      if (allChapters.length > 0) clearChallenge(SITE);
+      if (allChapters.length > 0) await noteAccessOk(this.page, session);
       return { hasUpdates: newChapters.length > 0, latestChapter, newChapters, firstPageChapters: allChapters };
     } finally {
       await this.closePage();
+    }
+  }
+
+  /**
+   * Can the headless browser reach comix.to right now (with the saved
+   * session, if any)? Used right after the user hands cookies over, to tell
+   * them whether the site accepted them. Loads the lightweight home page
+   * only. Three outcomes: `ok` (real content), `blocked` (redirected to the
+   * human check: the cookies are not accepted), or neither with `error`
+   * (the site could not be loaded or answered with an error, so nothing is
+   * known about the cookies yet).
+   * @returns {Promise<{ ok: boolean, blocked: boolean, finalUrl: string, status?: number, error?: string }>}
+   */
+  async checkAccess() {
+    const page = await this.browser.newPage();
+    try {
+      await page.setUserAgent(DEFAULT_UA);
+      const session = await applySiteSession(page, SITE);
+      const response = await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // The block is a server-side redirect; a Cloudflare interstitial in
+      // between needs a moment to clear.
+      let cfPassed = true;
+      const title = await page.title().catch(() => '');
+      if (CF_TITLE_RE.test(title)) cfPassed = await waitForCloudflare(page, { maxWait: 30000 });
+
+      const finalUrl = page.url();
+      const blocked = isChallengeUrl(finalUrl);
+      const status = response ? response.status() : undefined;
+      let error;
+      if (!blocked && !cfPassed) error = 'The Cloudflare check did not clear in the headless browser';
+      else if (!blocked && status !== undefined && status >= 400) error = `The site answered HTTP ${status}`;
+      const ok = !blocked && !error;
+
+      if (ok) await noteAccessOk(page, session);
+      console.log(`  [COMIX] Access check: ${ok ? 'reachable' : blocked ? 'blocked by the human check' : `not testable (${error})`} (${finalUrl})`);
+      return { ok, blocked, finalUrl, status, error };
+    } catch (error) {
+      console.warn(`  [COMIX] Access check failed: ${error.message}`);
+      return { ok: false, blocked: false, finalUrl: '', error: error.message };
+    } finally {
+      await page.close().catch(() => { });
     }
   }
 
@@ -195,11 +300,11 @@ export class ComixScraper extends BaseScraper {
     await this.createPage();
 
     try {
-      const fsUserAgent = await setupFlareSolverr(url, this.page);
+      const { session } = await prepareComixPage(url, this.page);
 
       console.log(`  Navigating to: ${url}`);
       await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      throwIfChallenge(this.page.url());
+      await settleLanding(this.page, session);
       await this.randomDelay(1000, 2000);
       await this.page.waitForSelector('ul.mchap-list a[href*="chapter-"]', { timeout: 15000 }).catch(() => { });
       await this.randomDelay(500, 1000);
@@ -238,6 +343,7 @@ export class ComixScraper extends BaseScraper {
       // Deduplicate
       const { chapters, duplicateChapters, uniqueCount } = deduplicateChapters(allChapters);
       console.log(`  Found ${chapters.length} total chapters (${uniqueCount} unique, ${duplicateChapters.length} have duplicates)`);
+      if (chapters.length > 0) await noteAccessOk(this.page, session);
 
       return {
         url, website: this.websiteName, title,
@@ -253,20 +359,8 @@ export class ComixScraper extends BaseScraper {
   // ── Search ──
 
   async search(query) {
-    // Get FlareSolverr cookies ahead of time for the search page
-    let fsCookies = [];
-    let fsUserAgent = '';
     const searchUrl = `${BASE_URL}/browser?keyword=${encodeURIComponent(query)}&order=relevance%3Adesc&genres_mode=and`;
-
-    try {
-      console.log(`  [COMIX] Getting CF cookies via FlareSolverr...`);
-      const fsResult = await fetchPage(searchUrl);
-      fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
-      fsUserAgent = fsResult.userAgent;
-      console.log(`  [COMIX] Got ${fsCookies.length} cookies from FlareSolverr`);
-    } catch (error) {
-      console.log(`  [COMIX] FlareSolverr failed: ${error.message}`);
-    }
+    let session = null; // set in setupPage, read in waitForResults
 
     try {
       return await search(this, query, {
@@ -276,8 +370,9 @@ export class ComixScraper extends BaseScraper {
 
         setupPage: async (page) => {
           await page.setViewport({ width: 1920, height: 1080 });
-          if (fsCookies.length > 0) await page.setCookie(...fsCookies);
-          if (fsUserAgent) await page.setUserAgent(fsUserAgent);
+          // Saved session, or FlareSolverr cookies. A human check reported
+          // here ends the search with the same clear error as elsewhere.
+          ({ session } = await prepareComixPage(searchUrl, page));
 
           // Strip comix.to's hardcoded default genre exclusions from API calls
           await page.setRequestInterception(true);
@@ -296,13 +391,9 @@ export class ComixScraper extends BaseScraper {
         },
 
         waitForResults: async (page) => {
-          // Handle Cloudflare challenge page
-          const pageTitle = await page.title();
-          if (pageTitle.includes('moment') || pageTitle.includes('Checking')) {
-            console.log(`  [COMIX] CF challenge, waiting...`);
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-            await new Promise(r => setTimeout(r, 3000));
-          }
+          // Cloudflare interstitial (waits, then fails if it never clears)
+          // and the site's human check, same handling as the other flows.
+          await settleLanding(page, session);
 
           // Wait for React to render items
           await new Promise(r => setTimeout(r, 5000));
@@ -439,6 +530,8 @@ export class ComixScraper extends BaseScraper {
         },
       });
     } catch (e) {
+      // A human check is not "no results": let the caller show it.
+      if (isChallengeError(e)) throw e;
       console.error(`  [COMIX] Search failed: ${e.message}`);
       return [];
     }
@@ -447,20 +540,6 @@ export class ComixScraper extends BaseScraper {
   // ── Chapter Images ──
 
   async getChapterImages(chapterUrl) {
-    // Get FlareSolverr cookies first using the lightweight homepage to avoid double-loading chapter pages
-    let fsCookies = [];
-    let fsUserAgent = '';
-    try {
-      console.log(`  [COMIX] Fetching homepage via FlareSolverr to get Cloudflare cookies...`);
-      const fsResult = await fetchPage(BASE_URL);
-      throwIfChallenge(fsResult.url);
-      fsCookies = toPuppeteerCookies(fsResult.cookies, DOMAIN);
-      fsUserAgent = fsResult.userAgent;
-    } catch (error) {
-      if (isChallengeError(error)) throw error;
-      console.log(`  FlareSolverr cookie fetch failed: ${error.message}, trying direct...`);
-    }
-
     await this.createPageClean();
 
     // Bypasses canvas anti-scraping monkey-patches by saving pristine toDataURL reference
@@ -468,19 +547,19 @@ export class ComixScraper extends BaseScraper {
       window.__cleanToDataURL = HTMLCanvasElement.prototype.toDataURL;
     });
 
-    if (fsCookies.length > 0) {
-      await this.page.setCookie(...fsCookies);
-      console.log(`  Set ${fsCookies.length} cookies from FlareSolverr`);
-    }
-    if (fsUserAgent) await this.page.setUserAgent(fsUserAgent);
-
+    let session = null;
+    let userAgent = '';
     try {
+      // Cookies/identity first. FlareSolverr fetches the lightweight home
+      // page rather than the chapter, to avoid loading the reader twice.
+      ({ session, userAgent } = await prepareComixPage(BASE_URL, this.page));
+
       console.log(`  Loading chapter: ${chapterUrl}`);
       await this.page.goto(chapterUrl, {
         waitUntil: 'networkidle2',
         timeout: 60000
       });
-      throwIfChallenge(this.page.url());
+      await settleLanding(this.page, session);
 
       // Wait for initial render
       await new Promise(r => setTimeout(r, 3000));
@@ -538,21 +617,24 @@ export class ComixScraper extends BaseScraper {
       }
 
       console.log(`  Found ${images.length} images (DOM & Canvas-borrowed extraction)`);
-      if (images.length > 0) clearChallenge(SITE);
+      if (images.length > 0) await noteAccessOk(this.page, session);
 
-      // Extract headers for authenticated downloads
+      // Extract headers for authenticated downloads - the same cookies and
+      // identity the page used, so image requests look like the same browser.
+      // Cookies only go to comix.to hosts, as a browser would do; an image
+      // host elsewhere never sees them.
       const cookies = await this.page.cookies();
       const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      const ua = fsUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+      const ua = userAgent || DEFAULT_UA;
+      const isSiteHost = (imgUrl) => {
+        try { return cookieDomainMatchesSite(new URL(imgUrl).hostname, SITE); } catch (e) { return false; }
+      };
 
-      return images.map(img => ({
-        ...img,
-        headers: {
-          'Cookie': cookieString,
-          'Referer': chapterUrl,
-          'User-Agent': ua
-        }
-      }));
+      return images.map(img => {
+        const headers = { 'Referer': chapterUrl, 'User-Agent': ua };
+        if (cookieString && isSiteHost(img.url)) headers['Cookie'] = cookieString;
+        return { ...img, headers };
+      });
 
     } finally {
       await this.closePage();

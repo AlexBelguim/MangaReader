@@ -42,6 +42,20 @@ If you want to run it directly on your machine:
 
    The backend API runs on port 3000, and the Vite frontend will usually run on port 5173 (check your console output).
 
+## 🛂 Sites that ask for a human check
+
+comix.to sometimes stops serving automated browsers and shows a "verify you're human" puzzle instead (`/@waf/challenge`). The app cannot solve it, and nothing in a web page can read another site's cookies, so the hand-off works like this:
+
+1. The scraper notices the puzzle, pauses automatic update checks for that site (for up to six hours, or until cleared), stops the running download at that chapter, and shows a banner (also on the task card in the queue).
+2. **Open the site** from the banner and complete the check in your own browser.
+3. **Paste cookies** (admin only): export the site's cookies from that browser (the Cookie-Editor extension's *Export → JSON* or *Header String*, or a Netscape `cookies.txt`; the console's `document.cookie` misses the HttpOnly cookie that matters) and paste them into the dialog. The dialog is prefilled with your browser's user agent; keep it, because the site ties its cookie to the browser identity. If you did the check on another device, paste that browser's user agent instead.
+4. The server stores the cookies, loads the site once with them and tells you whether it is reachable again. Downloads that stopped on the check are retried from their task card in the queue (kept for a day, or until the server restarts).
+
+Notes:
+- The cookies (and user agent) are saved in plain text in `DATA_DIR/site-sessions.json` and re-applied on every scrape, so they survive restarts. While a session is saved, FlareSolverr is skipped for that site (its own browser identity would not match the cookies). The site keeps renewing the cookies during successful scrapes; the app saves the renewed values.
+- If the site starts showing the puzzle again, the banner says the saved cookies were rejected: complete the check again and paste fresh ones. The site may also tie the cookie to the IP address, so do the check from a device on the same network as the server when possible.
+- The **Scrapers** page shows which sites have a saved session and lets an admin forget it. The scraper's browser profile (in the container's temp dir) holds a second copy of the cookies while they are in use; forgetting removes them from there too, and says so if it could not.
+
 ## 🏗️ Architecture & Stack
 
 - **Database:** SQLite (`better-sqlite3`)

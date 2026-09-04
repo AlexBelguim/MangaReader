@@ -587,7 +587,7 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
         } catch (error) {
             task.errors.push({ chapter: chapterNum, error: error.message });
             if (isChallengeError(error)) {
-                task.challenge = { site: error.site, url: error.challengeUrl };
+                task.challenge = { site: error.site, url: error.challengeUrl, sessionStale: !!error.sessionStale };
                 // Every further chapter would hit the same puzzle
                 task.errors.push({ chapter: 'stopped', error: `Stopped: ${error.site} is asking for a human verification check` });
                 break;
@@ -603,7 +603,10 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
 
     task.status = 'complete';
     task.current = null;
-    setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
+    // A task that stopped on a site's human check stays on the queue page
+    // long enough for the user to complete it, hand the cookies over and
+    // press Retry; everything else clears after a few minutes.
+    setTimeout(() => activeDownloads.delete(taskId), task.challenge ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000);
 
     // Job history: a run where nothing came down is a failure, not a
     // "completed" row. Partial runs complete with the per-chapter errors

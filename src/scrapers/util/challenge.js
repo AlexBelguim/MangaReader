@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { emitToAll } from '../../services/socketService.js';
 import { CONFIG } from '../../config.js';
+import { hasSiteSession, markSiteSessionStale } from './site-session.js';
 
 // Persisted so a container restart (a redeploy, for instance) does not
 // forget that a site is blocked - the banner and the auto-check pause
@@ -44,29 +45,44 @@ export const SITE_CHALLENGE_CLEARED_EVENT = 'site:challenge-cleared';
 export const CHALLENGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 export class SiteChallengeError extends Error {
-  constructor(site, challengeUrl) {
-    super(`${site} is asking for a human verification check. Open ${site} in your browser, complete it, then retry.`);
+  constructor(site, challengeUrl, { sessionStale = false } = {}) {
+    super(sessionStale
+      ? `${site} no longer accepts the saved cookies. Open ${site} in your browser, complete its verification check again, then paste fresh cookies.`
+      : `${site} is asking for a human verification check. Open ${site} in your browser, complete it, then paste its cookies here (or retry).`);
     this.name = 'SiteChallengeError';
     this.code = 'SITE_CHALLENGE';
     this.site = site;
     this.challengeUrl = challengeUrl;
+    this.sessionStale = sessionStale;
   }
 }
 
-// site -> { site, url, firstSeen, lastSeen, count }
+// site -> { site, url, firstSeen, lastSeen, count, sessionStale }
 const challenges = loadState();
 
-export function reportChallenge(site, challengeUrl) {
+/**
+ * Record that a site answered with its human check.
+ * @param {string} site
+ * @param {string} challengeUrl
+ * @param {{ usedSession?: boolean }} [opts] - whether the page that hit the
+ *   check was presenting the user's handed-over cookies. Only then does the
+ *   check mean those cookies stopped working; a session-less page (or one
+ *   prepared before the import) says nothing about them.
+ */
+export function reportChallenge(site, challengeUrl, { usedSession = false } = {}) {
   const now = new Date().toISOString();
+  const sessionStale = usedSession && hasSiteSession(site);
+  if (sessionStale) markSiteSessionStale(site);
+
   const existing = challenges.get(site);
   const entry = existing
-    ? { ...existing, url: challengeUrl || existing.url, lastSeen: now, count: existing.count + 1 }
-    : { site, url: challengeUrl, firstSeen: now, lastSeen: now, count: 1 };
+    ? { ...existing, url: challengeUrl || existing.url, lastSeen: now, count: existing.count + 1, sessionStale }
+    : { site, url: challengeUrl, firstSeen: now, lastSeen: now, count: 1, sessionStale };
   challenges.set(site, entry);
   saveState(challenges);
-  console.warn(`[Challenge] ${site} is showing a human verification check (${challengeUrl})`);
+  console.warn(`[Challenge] ${site} is showing a human verification check (${challengeUrl})${sessionStale ? ' - saved cookies rejected' : ''}`);
   emitToAll(SITE_CHALLENGE_EVENT, entry);
-  return new SiteChallengeError(site, challengeUrl);
+  return new SiteChallengeError(site, challengeUrl, { sessionStale });
 }
 
 export function clearChallenge(site) {

@@ -2985,3 +2985,112 @@ body.demo-mode #app {
     border-radius: var(--radius-sm);
     font-size: 0.85rem;
 }
+
+.task-challenge > span {
+    flex: 1 1 100%;
+}
+
+/* ---- Cookie hand-off dialog (site-challenge.js) ---- */
+.site-cookie-modal {
+    z-index: 10002; /* above the fixed banner */
+}
+
+.site-cookie-modal .modal-content {
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+}
+
+.site-cookie-body {
+    padding: var(--space-md) var(--space-lg);
+    overflow-y: auto;
+}
+
+.site-cookie-steps {
+    margin: 0 0 var(--space-md);
+    padding-left: 20px;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.site-cookie-steps li {
+    margin-bottom: 6px;
+}
+
+.site-cookie-steps .btn {
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+.site-cookie-steps code {
+    font-size: 0.85em;
+}
+
+.site-cookie-body textarea {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    resize: vertical;
+    min-height: 110px;
+}
+
+.site-cookie-ua input {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+.site-cookie-ua small {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+
+.site-cookie-result a {
+    color: var(--accent-primary);
+}
+
+.site-cookie-result {
+    margin-top: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--border-strong);
+    border-left-width: 4px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+.site-cookie-result.ok { border-color: var(--success); }
+.site-cookie-result.warn { border-color: var(--warning); }
+.site-cookie-result.error { border-color: var(--error); }
+
+.site-cookie-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-sm);
+    padding: var(--space-md) var(--space-lg);
+    border-top: 1px solid var(--border-strong);
+}
+
+/* Session row on the scraper cards */
+.scraper-session-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.scraper-session-forget {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.scraper-session-forget:hover {
+    color: var(--text-primary);
+}

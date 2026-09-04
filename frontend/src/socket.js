@@ -131,7 +131,8 @@ export const SocketEvents = {
     ACTION_RECORDED: 'action:recorded',
     ACTION_UNDONE: 'action:undone',
     SITE_CHALLENGE: 'site:challenge',
-    SITE_CHALLENGE_CLEARED: 'site:challenge-cleared'
+    SITE_CHALLENGE_CLEARED: 'site:challenge-cleared',
+    SITE_SESSION: 'site:session'
 };
 
 // Export singleton instance

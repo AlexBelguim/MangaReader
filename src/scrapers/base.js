@@ -32,6 +32,14 @@ export class BaseScraper {
     return false;
   }
 
+  // Whether this scraper can take over a session (cookies + user agent) the
+  // user handed over after completing the site's human-verification check.
+  // Scrapers that return true apply the saved session on every page and
+  // implement `checkAccess()` (see sites/comix.js).
+  get supportsSession() {
+    return false;
+  }
+
   // Check if this scraper can handle the given URL
   canHandle(url) {
     return this.urlPatterns.some(pattern => url.includes(pattern));

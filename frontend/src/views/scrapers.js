@@ -1,11 +1,32 @@
 import { api } from '../api.js';
 import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { icon, placeholder, coverImg } from '../icons.js';
+import { socket, SocketEvents } from '../socket.js';
+import { showToast } from '../utils/toast.js';
+import { openCookieImportModal } from '../site-challenge.js';
+import { session } from '../session.js';
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 class ScraperView {
   constructor() {
     this.container = null;
     this.scrapers = [];
+    // Sites showing a human check + sessions the user handed over (from /site-status)
+    this.siteStatus = { challenges: [], sessions: [] };
+    this.onSiteStatusChange = null;
     this.currentQuery = '';
     this.currentTarget = 'all';
     this.isSearching = false;
@@ -54,6 +75,12 @@ class ScraperView {
 
     this.updateView();
 
+    // Keep the per-site session row live while the page is open
+    this.onSiteStatusChange = () => this.loadSiteStatus();
+    socket.on(SocketEvents.SITE_SESSION, this.onSiteStatusChange);
+    socket.on(SocketEvents.SITE_CHALLENGE, this.onSiteStatusChange);
+    socket.on(SocketEvents.SITE_CHALLENGE_CLEARED, this.onSiteStatusChange);
+
     // Fetch available scrapers
     await this.loadScrapers();
 
@@ -73,13 +100,23 @@ class ScraperView {
       this.infoAbortController.abort();
       this.infoAbortController = null;
     }
+    if (this.onSiteStatusChange) {
+      socket.off(SocketEvents.SITE_SESSION, this.onSiteStatusChange);
+      socket.off(SocketEvents.SITE_CHALLENGE, this.onSiteStatusChange);
+      socket.off(SocketEvents.SITE_CHALLENGE_CLEARED, this.onSiteStatusChange);
+      this.onSiteStatusChange = null;
+    }
     this.container.innerHTML = '';
     document.body.className = '';
   }
 
   async loadScrapers() {
     try {
-      const data = await api.get('/scrapers/list');
+      const [data, status] = await Promise.all([
+        api.get('/scrapers/list'),
+        api.getSiteStatus().catch(() => ({ challenges: [], sessions: [] }))
+      ]);
+      this.siteStatus = status || { challenges: [], sessions: [] };
       if (data.success) {
         this.scrapers = data.scrapers;
         this.updateView();
@@ -87,6 +124,124 @@ class ScraperView {
     } catch (e) {
       console.error('Failed to load scrapers', e);
     }
+  }
+
+  // Re-read challenge/session state and redraw just the cards
+  async loadSiteStatus() {
+    try {
+      this.siteStatus = await api.getSiteStatus();
+    } catch (e) {
+      return;
+    }
+    if (!document.getElementById('scraper-cards-list')) return;
+    this.renderScraperList();
+    this.bindCardEvents();
+  }
+
+  sessionFor(site) {
+    return (this.siteStatus.sessions || []).find(s => s.site === site) || null;
+  }
+
+  challengeFor(site) {
+    return (this.siteStatus.challenges || []).find(c => c.site === site) || null;
+  }
+
+  renderSessionRow(s) {
+    if (!s.supportsSession) return '';
+    const saved = this.sessionFor(s.name);
+    const challenge = this.challengeFor(s.name);
+    let pill;
+    if (saved && saved.stale) {
+      pill = `<span class="capability-pill capability-soon" title="${esc(saved.staleReason || 'The site showed its check again')}">${icon('triangle-alert')} Rejected, paste fresh</span>`;
+    } else if (saved && saved.cookieCount === 0) {
+      pill = `<span class="capability-pill capability-soon" title="Every saved cookie has expired">${icon('triangle-alert')} Expired, paste fresh</span>`;
+    } else if (saved) {
+      const when = timeAgo(saved.updatedAt || saved.importedAt);
+      // Names and identity are admin-only detail (the server masks them for others)
+      const detail = session.isAdmin ? `${(saved.cookieNames || []).join(', ')}${saved.userAgent ? `\n${saved.userAgent}` : ''}` : '';
+      pill = `<span class="capability-pill capability-yes" title="${esc(detail)}">✓ ${saved.cookieCount} cookie${saved.cookieCount === 1 ? '' : 's'}${when ? ` · ${when}` : ''}</span>`;
+    } else if (challenge) {
+      pill = `<span class="capability-pill capability-soon">${icon('triangle-alert')} Check pending</span>`;
+    } else {
+      pill = '<span class="capability-pill capability-no">None</span>';
+    }
+    return `
+      <div class="capability-row">
+        <span class="capability-label" title="Cookies from a browser that completed the site's human check">${icon('lock-open')} Session</span>
+        <span class="scraper-session-cell">
+          ${pill}
+          ${saved && session.isAdmin ? `<button type="button" class="scraper-session-forget" data-scraper="${esc(s.name)}" title="Forget these cookies">Forget</button>` : ''}
+        </span>
+      </div>`;
+  }
+
+  // Listeners on the scraper cards. renderScraperList() replaces the cards'
+  // markup, so this runs after every render of them (initial and live).
+  bindCardEvents() {
+    document.querySelectorAll('.scraper-search-card-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const scraperName = e.currentTarget.dataset.scraper;
+        this.currentTarget = scraperName;
+
+        const queryInput = document.getElementById('scraper-query');
+        // Save current query if user was typing
+        if (queryInput) {
+          this.currentQuery = queryInput.value.trim();
+        }
+
+        this.updateView();
+
+        const updatedQueryInput = document.getElementById('scraper-query');
+        if (updatedQueryInput) {
+           updatedQueryInput.focus();
+           window.scrollTo({ top: 0, behavior: 'smooth' });
+
+           if (this.currentQuery) {
+             this.performSearch();
+           }
+        }
+      });
+    });
+
+    document.querySelectorAll('.scraper-browse-card-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const scraperName = e.currentTarget.dataset.scraper;
+        this.browseScraper = scraperName;
+        this.viewMode = 'browse';
+        this.browsePage = 1;
+        this.browseResults = [];
+        this.browseTotalPages = 1;
+        this.updateView();
+        this.performBrowse();
+      });
+    });
+
+    document.querySelectorAll('.scraper-session-card-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const site = e.currentTarget.dataset.scraper;
+        const challenge = this.challengeFor(site);
+        const saved = this.sessionFor(site);
+        const stale = !!saved && (saved.stale || saved.cookieCount === 0);
+        openCookieImportModal({ site, url: challenge?.url, stale, onImported: () => this.loadSiteStatus() });
+      });
+    });
+    document.querySelectorAll('.scraper-session-forget').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const site = e.currentTarget.dataset.scraper;
+        if (!confirm(`Forget the saved ${site} cookies? The scraper goes back to its own identity.`)) return;
+        try {
+          const res = await api.forgetSiteSession(site);
+          if (res.purged === null) {
+            showToast(`${site}: cookies forgotten, but they may stay in the scraper browser until it restarts`, 'warning');
+          } else {
+            showToast(`${site}: saved cookies forgotten`, 'info');
+          }
+          await this.loadSiteStatus();
+        } catch (err) {
+          showToast(`Failed: ${err.message}`, 'error');
+        }
+      });
+    });
   }
 
   updateView() {
@@ -289,6 +444,7 @@ class ScraperView {
                 ? '<span class="capability-pill capability-yes">✓ Supported</span>'
                 : `<span class="capability-pill capability-soon">${icon('traffic-cone')} Coming soon</span>`}
             </div>
+            ${this.renderSessionRow(s)}
           </div>
 
           <div class="scraper-card-footer">
@@ -304,6 +460,12 @@ class ScraperView {
               ${!s.canBrowse ? 'disabled' : ''}
               title="${s.canBrowse ? `Browse ${s.name}` : 'Browsing coming soon'}"
             >${icon('book-open')} Browse</button>
+            ${s.supportsSession && session.isAdmin ? `
+            <button
+              class="btn btn-secondary scraper-session-card-btn"
+              data-scraper="${esc(s.name)}"
+              title="Hand over cookies from a browser that completed ${esc(s.name)}'s human check"
+            >${icon('lock-open')} Cookies</button>` : ''}
           </div>
 
         </div>
@@ -350,43 +512,7 @@ class ScraperView {
       });
     }
 
-      document.querySelectorAll('.scraper-search-card-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const scraperName = e.target.dataset.scraper;
-        this.currentTarget = scraperName;
-        
-        const queryInput = document.getElementById('scraper-query');
-        // Save current query if user was typing
-        if (queryInput) {
-          this.currentQuery = queryInput.value.trim();
-        }
-
-        this.updateView();
-
-        const updatedQueryInput = document.getElementById('scraper-query');
-        if (updatedQueryInput) {
-           updatedQueryInput.focus();
-           window.scrollTo({ top: 0, behavior: 'smooth' });
-           
-           if (this.currentQuery) {
-             this.performSearch();
-           }
-        }
-      });
-    });
-
-    document.querySelectorAll('.scraper-browse-card-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const scraperName = e.target.dataset.scraper;
-        this.browseScraper = scraperName;
-        this.viewMode = 'browse';
-        this.browsePage = 1;
-        this.browseResults = [];
-        this.browseTotalPages = 1;
-        this.updateView();
-        this.performBrowse();
-      });
-    });
+    this.bindCardEvents();
 
     // Browse Events
     const exitBrowseBtn = document.getElementById('exit-browse-btn');

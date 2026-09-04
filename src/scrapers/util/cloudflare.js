@@ -35,14 +35,20 @@ export async function waitForCloudflare(page, { maxWait = 30000, delayFn } = {})
   const startTime = Date.now();
 
   while (Date.now() - startTime < maxWait) {
-    const isChallenge = await page.evaluate(() => {
-      const title = document.title.toLowerCase();
-      const body = document.body?.innerText?.toLowerCase() || '';
-      return title.includes('just a moment') ||
-        title.includes('checking your browser') ||
-        body.includes('checking your browser') ||
-        body.includes('ray id');
-    });
+    let isChallenge = true;
+    try {
+      isChallenge = await page.evaluate(() => {
+        const title = document.title.toLowerCase();
+        const body = document.body?.innerText?.toLowerCase() || '';
+        return title.includes('just a moment') ||
+          title.includes('checking your browser') ||
+          body.includes('checking your browser') ||
+          body.includes('ray id');
+      });
+    } catch (e) {
+      // The interstitial clears by navigating; an evaluate caught mid-way
+      // rejects with "execution context was destroyed". Just poll again.
+    }
 
     if (!isChallenge) {
       console.log('  Cloudflare check passed');

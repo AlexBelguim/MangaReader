@@ -184,7 +184,7 @@ class Downloader {
     return versions;
   }
 
-  async downloadImage(url, filePath, customHeaders = null) {
+  async downloadImage(url, filePath, customHeaders = null, redirectsLeft = 5) {
     if (url.startsWith('data:')) {
       const match = url.match(/^data:([^;]+);base64,(.+)$/);
       if (!match) {
@@ -214,7 +214,31 @@ class Downloader {
       const request = protocol.get(fullUrl, { headers }, (response) => {
         // Handle redirects
         if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          this.downloadImage(response.headers.location, filePath, customHeaders)
+          if (redirectsLeft <= 0) {
+            reject(new Error('Too many redirects'));
+            return;
+          }
+          let next;
+          try {
+            next = new URL(response.headers.location, fullUrl);
+          } catch (e) {
+            reject(new Error(`Invalid redirect location: ${response.headers.location}`));
+            return;
+          }
+          // The Cookie header was meant for the host we asked; a redirect to
+          // another host (or down to plain http) must not carry it along.
+          let nextHeaders = customHeaders;
+          if (customHeaders && customHeaders.Cookie) {
+            const from = new URL(fullUrl);
+            const sameSite = next.hostname === from.hostname
+              || next.hostname.endsWith('.' + from.hostname)
+              || from.hostname.endsWith('.' + next.hostname);
+            if (!sameSite || (from.protocol === 'https:' && next.protocol !== 'https:')) {
+              nextHeaders = { ...customHeaders };
+              delete nextHeaders.Cookie;
+            }
+          }
+          this.downloadImage(next.href, filePath, nextHeaders, redirectsLeft - 1)
             .then(resolve)
             .catch(reject);
           return;
