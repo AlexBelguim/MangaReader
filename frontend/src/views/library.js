@@ -205,7 +205,7 @@ function renderFilterControl(shownCount) {
   const groups = filterGroups().filter(g => g.options.length > 0);
   return `
     <div class="library-filter" id="library-filter">
-      <button type="button" class="filter-btn ${active ? 'has-filter' : ''}" id="library-filter-btn" aria-haspopup="true" aria-expanded="false">
+      <button type="button" class="library-filter-btn ${active ? 'has-filter' : ''}" id="library-filter-btn" aria-haspopup="true" aria-expanded="false">
         ${icon('sliders')} Filter${active ? ` · ${active}` : ''}
       </button>
       <div class="library-filter-menu hidden" id="library-filter-menu" role="menu">

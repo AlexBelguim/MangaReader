@@ -29,6 +29,11 @@ let state = {
   activeVolumeId: null,
   cbzFiles: [],
   manageChapters: false,
+  // "Combine chapters" mode: pick downloaded chapters, give them one number
+  mergeMode: false,
+  mergeSelection: new Set(),
+  mergeTargetTouched: false,
+  mergeTitleTouched: false,
   offlineChapters: new Set(),
   isAutoOffline: false,
   // Collapsed by default once a library gets large enough for it to matter;
@@ -403,9 +408,15 @@ export function render() {
               <button class="filter-btn ${state.filter === 'hidden' ? 'active' : ''}" data-filter="hidden">
                 Hidden
               </button>
+              ${!state.activeVolume && session.canEdit ? `
+              <button class="filter-btn merge-mode-btn ${state.mergeMode ? 'active' : ''}" id="merge-mode-btn" title="Combine downloaded chapters into one, e.g. 12.1 + 12.2 + 12.3 into chapter 12">
+                ${icon('link')} Combine
+              </button>` : ''}
             </div>
           </div>
-          
+
+          ${state.mergeMode ? renderMergeBar(manga) : ''}
+
           ${totalPages > 1 ? renderPagination(totalPages) : ''}
           
           <div class="chapter-list">
@@ -810,10 +821,44 @@ function getVersionDisplayTitle(versions, num) {
   return versions[0].title !== `Chapter ${num}` ? versions[0].title : '';
 }
 
+/**
+ * Suggested number for a combined chapter: the whole number the smallest
+ * picked chapter belongs to (12.1 -> 12), unless that number is already a
+ * different chapter; then the smallest picked number itself.
+ */
+function suggestMergeTarget(manga, picked) {
+  if (picked.length === 0) return '';
+  const min = Math.min(...picked);
+  const floor = Math.floor(min);
+  const exists = (manga.chapters || []).some(c => c.number === floor);
+  return (!exists || picked.includes(floor)) ? floor : min;
+}
+
+function renderMergeBar(manga) {
+  const picked = [...state.mergeSelection].sort((a, b) => a - b);
+  const target = suggestMergeTarget(manga, picked);
+  return `
+    <div class="merge-bar" id="merge-bar">
+      <div class="merge-bar-text">
+        <strong>Combine chapters</strong>
+        <span id="merge-picked">${picked.length ? `Picked in page order: ${picked.map(n => `Ch. ${n}`).join(', ')}` : 'Tick the downloaded chapters to combine (pages follow chapter order).'}</span>
+      </div>
+      <div class="merge-bar-fields">
+        <label>Into chapter <input type="number" step="any" min="0" id="merge-target" value="${target}"></label>
+        <label>Title <input type="text" id="merge-title" value="${target !== '' ? `Chapter ${target}` : ''}" placeholder="Chapter ${target || 'N'}"></label>
+        <label class="merge-check"><input type="checkbox" id="merge-delete-sources"> Remove the original folders</label>
+        <button class="btn btn-primary btn-sm" id="merge-submit" ${picked.length ? '' : 'disabled'}>Combine</button>
+        <button class="btn btn-secondary btn-sm" id="merge-cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderChapterItem(num, versions, downloadedChapters, readChapters, manga) {
   const isDownloaded = downloadedChapters.has(num);
   const isRead = readChapters.has(num);
   const isExtra = !Number.isInteger(num);
+  const merge = manga.mergedChapters?.[num] || null;
   // moved hasMultiple down
 
   // Get downloaded versions for this chapter
@@ -947,10 +992,12 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
   ` : '';
 
   const isExcluded = (manga.excludedChapters || []).includes(num);
+  const canPick = state.mergeMode && isDownloaded && !isExcluded && !merge;
 
   return `
     <div class="chapter-group" data-chapter="${num}">
       <div class="${classes}" data-num="${num}" style="${isExcluded ? 'opacity: 0.7' : ''}">
+        ${state.mergeMode ? `<input type="checkbox" class="merge-pick" data-num="${num}" ${state.mergeSelection.has(num) ? 'checked' : ''} ${canPick ? '' : 'disabled'} title="${canPick ? 'Combine this chapter' : (merge ? 'Already a combined chapter' : 'Only downloaded chapters can be combined')}">` : ''}
         <span class="chapter-number">Ch. ${num}</span>
         <span class="chapter-title">
           ${displayVersions[0] ? (displayVersions[0].title !== `Chapter ${num}` ? displayVersions[0].title : '') : versions[0].title}
@@ -958,8 +1005,9 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
           ${incompleteDownloaded.length ? `<span class="badge badge-warning" style="margin-left:8px; font-size:0.7em" title="A downloaded version of this chapter has only ${incompleteDownloaded[0].imageCount} pages">${incompleteDownloaded[0].imageCount} pages</span>` : ''}
           ${orphanFolders.length ? `<span class="badge badge-warning" style="margin-left:8px; font-size:0.7em" title="${orphanFolders.length} folder(s) on disk not linked to any downloaded version - open the versions list to delete">${orphanFolders.length} leftover folder${orphanFolders.length > 1 ? 's' : ''}</span>` : ''}
         </span>
-        ${isExtra ? '<span class="chapter-tag">Extra</span>' : ''}
+        ${merge ? `<span class="chapter-tag merged" title="Combined from ${merge.sources.map(n => `Ch. ${n}`).join(', ')}">Combined</span>` : (isExtra ? '<span class="chapter-tag">Extra</span>' : '')}
         <div class="chapter-actions">
+          ${merge && !isExcluded ? `<button class="btn-icon small" data-action="split-chapter" data-num="${num}" title="Split back into ${merge.sources.map(n => `Ch. ${n}`).join(', ')}">${icon('scissors', { title: 'Split' })}</button>` : ''}
           ${isExcluded
       ? `<button class="btn-icon small warning" data-action="restore-chapter" data-num="${num}" title="Restore Chapter">${icon('undo-2', { title: 'Restore chapter' })}</button>`
       : (isVolumeMode
@@ -1770,13 +1818,15 @@ export function setupListeners() {
   });
 
   // Chapter filters
-  app.querySelectorAll('.filter-btn').forEach(btn => {
+  app.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.filter = btn.dataset.filter;
       state.currentPage = 0;
       mount([manga.id]);
     });
   });
+
+  setupMergeListeners(app, manga);
 
   // Pagination
   app.querySelectorAll('[data-page]').forEach(btn => {
@@ -1871,6 +1921,9 @@ export function setupListeners() {
           break;
         case 'unhide-chapter':
           await unhideChapter(num, url);
+          break;
+        case 'split-chapter':
+          await splitChapter(num);
           break;
       }
     });
@@ -2234,6 +2287,109 @@ async function unhideChapter(chapterNum, url) {
     mount([manga.id]);
   } catch (error) {
     showToast('Failed to unhide chapter: ' + error.message, 'error');
+  }
+}
+
+// ==================== COMBINE CHAPTERS ====================
+
+function setupMergeListeners(app, manga) {
+  const modeBtn = app.querySelector('#merge-mode-btn');
+  if (modeBtn) {
+    modeBtn.addEventListener('click', () => {
+      state.mergeMode = !state.mergeMode;
+      state.mergeSelection = new Set();
+      state.mergeTargetTouched = false;
+      state.mergeTitleTouched = false;
+      mount([manga.id]);
+    });
+  }
+  if (!state.mergeMode) return;
+
+  // Ticking chapters updates the bar in place; the list itself stays put
+  app.querySelectorAll('.merge-pick').forEach(box => {
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const num = parseFloat(box.dataset.num);
+      if (box.checked) state.mergeSelection.add(num); else state.mergeSelection.delete(num);
+      updateMergeBar(manga);
+    });
+  });
+
+  const targetInput = app.querySelector('#merge-target');
+  const titleInput = app.querySelector('#merge-title');
+  targetInput?.addEventListener('input', () => {
+    state.mergeTargetTouched = true;
+    if (!state.mergeTitleTouched && titleInput) titleInput.value = targetInput.value !== '' ? `Chapter ${targetInput.value}` : '';
+  });
+  titleInput?.addEventListener('input', () => { state.mergeTitleTouched = true; });
+
+  app.querySelector('#merge-cancel')?.addEventListener('click', () => {
+    state.mergeMode = false;
+    state.mergeSelection = new Set();
+    mount([manga.id]);
+  });
+
+  app.querySelector('#merge-submit')?.addEventListener('click', async () => {
+    const sources = [...state.mergeSelection].sort((a, b) => a - b);
+    const target = parseFloat(targetInput?.value);
+    if (sources.length === 0) return showToast('Tick the chapters to combine first', 'info');
+    if (!Number.isFinite(target)) return showToast('Give the combined chapter a number', 'error');
+    const title = titleInput?.value.trim() || `Chapter ${target}`;
+    const deleteSources = !!app.querySelector('#merge-delete-sources')?.checked;
+    if (deleteSources && !confirm(`Remove the original folders of ${sources.map(n => `Ch. ${n}`).join(', ')} after combining? Splitting later will need them downloaded again.`)) return;
+
+    const btn = app.querySelector('#merge-submit');
+    btn.disabled = true;
+    btn.textContent = 'Combining…';
+    try {
+      const result = await api.mergeChapters(manga.id, { sources, target, title, deleteSources });
+      showToast(`Chapter ${result.target}: ${result.pageCount} pages from ${sources.length} chapter${sources.length === 1 ? '' : 's'}`, 'success');
+      state.mergeMode = false;
+      state.mergeSelection = new Set();
+      await loadData(manga.id);
+      mount([manga.id]);
+    } catch (error) {
+      showToast('Combine failed: ' + error.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Combine';
+    }
+  });
+}
+
+function updateMergeBar(manga) {
+  const picked = [...state.mergeSelection].sort((a, b) => a - b);
+  const pickedEl = document.getElementById('merge-picked');
+  if (pickedEl) {
+    pickedEl.textContent = picked.length
+      ? `Picked in page order: ${picked.map(n => `Ch. ${n}`).join(', ')}`
+      : 'Tick the downloaded chapters to combine (pages follow chapter order).';
+  }
+  const submit = document.getElementById('merge-submit');
+  if (submit) submit.disabled = picked.length === 0;
+  const target = suggestMergeTarget(manga, picked);
+  const targetInput = document.getElementById('merge-target');
+  const titleInput = document.getElementById('merge-title');
+  if (targetInput && !state.mergeTargetTouched) targetInput.value = target;
+  if (titleInput && !state.mergeTitleTouched) titleInput.value = target !== '' ? `Chapter ${target}` : '';
+}
+
+async function splitChapter(num) {
+  const manga = state.manga;
+  const merge = manga?.mergedChapters?.[num];
+  if (!merge) return;
+  const sources = merge.sources.map(n => `Ch. ${n}`).join(', ');
+  const ownPagesGone = merge.sources.includes(num)
+    ? ` Chapter ${num}'s own pages were folded into the combined folder, so it will need downloading again.`
+    : '';
+  if (!confirm(`Split chapter ${num} back into ${sources}? The combined folder is deleted; the other originals come back as they are on disk.${ownPagesGone}`)) return;
+  try {
+    await api.unmergeChapter(manga.id, num);
+    showToast(`Chapter ${num} split into ${sources}`, 'success');
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Split failed: ' + error.message, 'error');
   }
 }
 

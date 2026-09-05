@@ -447,9 +447,10 @@ router.delete('/', async (req, res) => {
 
         const chapterNum = parseFloat(chapterNumber);
 
-        // Record action for undo
+        // Record action for undo (ActionTypes has no DELETE_VERSION; the
+        // undefined value used to fail the NOT NULL constraint and 500 here)
         actionHistoryService.record({
-            actionType: ActionTypes.DELETE_VERSION,
+            actionType: ActionTypes.DELETE_CHAPTER,
             entityType: EntityTypes.VERSION,
             entityId: url,
             bookmarkId,
@@ -482,6 +483,115 @@ router.delete('/', async (req, res) => {
         await downloader.deleteChapter(bookmark.title, chapterNum, bookmark.alias, url);
 
         res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ==================== COMBINED CHAPTERS ====================
+
+/**
+ * Combine downloaded chapters into one. Body: { sources: [12.1, 12.2],
+ * target: 12, title?: 'Chapter 12', deleteSources?: false }. Pages are
+ * concatenated in the given order into the target's folder; the sources are
+ * excluded from the list (they stay under "hidden" and can be restored by
+ * splitting the combined chapter again).
+ */
+router.post('/:bookmarkId/merge', async (req, res) => {
+    try {
+        const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const { sources: rawSources, target: rawTarget, title: rawTitle, deleteSources = false } = req.body || {};
+        const sources = Array.isArray(rawSources) ? rawSources.map(Number) : [];
+        const target = Number(rawTarget);
+        if (sources.length === 0 || sources.some(n => !Number.isFinite(n))) {
+            return res.status(400).json({ error: 'Pick at least one downloaded chapter to combine' });
+        }
+        if (new Set(sources).size !== sources.length) return res.status(400).json({ error: 'A chapter is listed twice' });
+        if (!Number.isFinite(target) || target < 0) return res.status(400).json({ error: 'Chapter number must be a number' });
+
+        const known = new Set(bookmark.chapters.map(c => c.number));
+        const downloaded = new Set(bookmark.downloadedChapters || []);
+        for (const n of sources) {
+            if (!known.has(n)) return res.status(400).json({ error: `Chapter ${n} is not in this manga` });
+            if (!downloaded.has(n)) return res.status(400).json({ error: `Chapter ${n} is not downloaded; download it first` });
+        }
+        if (known.has(target) && !sources.includes(target)) {
+            return res.status(400).json({ error: `Chapter ${target} already exists; include it in the selection or pick another number` });
+        }
+        if (bookmarkDb.getMergedChapters(bookmark.id)[target]) {
+            return res.status(400).json({ error: `Chapter ${target} is already a combined chapter; split it first` });
+        }
+
+        const title = (typeof rawTitle === 'string' && rawTitle.trim()) ? rawTitle.trim().slice(0, 200) : `Chapter ${target}`;
+        // Use the version the reader would open for each source
+        const versionOf = (n) => {
+            const list = bookmark.downloadedVersions?.[n];
+            return Array.isArray(list) ? list[0] || null : (list || null);
+        };
+        const built = await downloader.buildMergedChapter(
+            bookmark.title, bookmark.alias,
+            sources.map(n => ({ number: n, url: versionOf(n) })),
+            target
+        );
+        bookmarkDb.createMergedChapter(bookmark.id, req.user.id, { target, title, sources });
+
+        // The combined folder holds every page now; optionally drop the originals
+        let removed = 0;
+        if (deleteSources) {
+            const db = getDb();
+            for (const n of sources) {
+                if (n === target) continue;
+                await downloader.deleteAllChapterFolders(bookmark.title, n, bookmark.alias).catch(() => { });
+                db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ?').run(bookmark.id, n);
+                db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(bookmark.id, n);
+                removed++;
+            }
+        }
+
+        // Informational only (a combine is undone with "split", not the undo
+        // button); never let the history row fail the request.
+        try {
+            actionHistoryService.record({
+                actionType: ActionTypes.MERGE_CHAPTERS || 'merge_chapters',
+                entityType: EntityTypes.CHAPTER || 'chapter',
+                entityId: `${bookmark.id}:${target}`,
+                bookmarkId: bookmark.id,
+                beforeState: { sources },
+                afterState: { target, title, pages: built.pageCount },
+                description: `Combined chapters ${sources.join(', ')} into chapter ${target}`,
+                canUndo: false
+            });
+        } catch (e) {
+            console.warn(`[Chapters] Could not record combine in history: ${e.message}`);
+        }
+
+        res.json({ success: true, target, title, pageCount: built.pageCount, parts: built.parts, removedSources: removed });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Split a combined chapter again: its folder and row go, the sources come back
+router.post('/:bookmarkId/:chapterNumber/unmerge', async (req, res) => {
+    try {
+        const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+        const target = parseFloat(req.params.chapterNumber);
+        const merge = bookmarkDb.getMergedChapters(bookmark.id)[target];
+        if (!merge) return res.status(404).json({ error: `Chapter ${target} is not a combined chapter` });
+
+        // A target that was itself a source (12 + 12.5 -> 12) keeps its
+        // number but its original pages are gone; it comes back undownloaded.
+        await downloader.deleteAllChapterFolders(bookmark.title, target, bookmark.alias).catch(() => { });
+        const result = bookmarkDb.removeMergedChapter(bookmark.id, target);
+        if (merge.sources.includes(target)) {
+            const db = getDb();
+            db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ?').run(bookmark.id, target);
+            db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(bookmark.id, target);
+        }
+        res.json({ success: true, target, sources: result?.sources || merge.sources });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

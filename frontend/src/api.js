@@ -349,6 +349,16 @@ class ApiClient {
         return this.post(`/bookmarks/${bookmarkId}/exclude-chapter`, { chapterNumber });
     }
 
+    // Combine downloaded chapters (e.g. 12.1, 12.2) into one chapter
+    mergeChapters(bookmarkId, { sources, target, title, deleteSources }) {
+        return this.post(`/chapters/${bookmarkId}/merge`, { sources, target, title, deleteSources });
+    }
+
+    // Undo a combine: the combined chapter goes, its sources come back
+    unmergeChapter(bookmarkId, chapterNumber) {
+        return this.post(`/chapters/${bookmarkId}/${chapterNumber}/unmerge`, {});
+    }
+
     unexcludeChapter(bookmarkId, chapterNumber) {
         return this.post(`/bookmarks/${bookmarkId}/unexclude-chapter`, { chapterNumber });
     }

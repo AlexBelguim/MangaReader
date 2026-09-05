@@ -98,6 +98,13 @@ class Downloader {
     return result;
   }
 
+  // Remove every folder of a chapter (base and versioned alike)
+  async deleteAllChapterFolders(mangaTitle, chapterNumber, alias = null) {
+    const versions = await this.getExistingVersions(mangaTitle, chapterNumber, alias);
+    for (const v of versions) await fs.remove(v.path);
+    return versions.length;
+  }
+
   // Delete one chapter folder by name. Only folders that getExistingVersions
   // reports for that chapter are accepted, so this can never reach outside
   // the chapter's own folders.
@@ -517,6 +524,56 @@ class Downloader {
   async getLocalChapterImages(mangaTitle, chapterNumber, alias = null, chapterUrl = null) {
     const chapterDir = await this.resolveChapterDir(mangaTitle, chapterNumber, alias, chapterUrl);
     return chapterDir ? await this._getImagesFromDir(chapterDir) : null;
+  }
+
+  // Image files of a chapter folder in reading order (same order the reader uses)
+  async _listImageFiles(chapterDir) {
+    const files = await fs.readdir(chapterDir);
+    return files
+      .filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+      .sort((a, b) => parseInt(a.match(/^(\d+)/)?.[1] || '0') - parseInt(b.match(/^(\d+)/)?.[1] || '0'));
+  }
+
+  /**
+   * Build one chapter folder out of several downloaded chapters, pages
+   * renumbered in the given order (12.1's pages, then 12.2's, ...). Built in
+   * a temp folder first so a failure leaves nothing half-made; only then is
+   * the target folder swapped in. The target may be one of the sources
+   * (12 + 12.5 -> 12): its old folder is replaced by the combined one.
+   *
+   * @param {Array<{ number: number, url?: string|null }>} sources - in page order
+   * @returns {{ dir: string, pageCount: number, parts: Array<{ number: number, pages: number }> }}
+   */
+  async buildMergedChapter(mangaTitle, alias, sources, targetNumber) {
+    const parts = [];
+    for (const src of sources) {
+      const dir = await this.resolveChapterDir(mangaTitle, src.number, alias, src.url || null);
+      if (!dir) throw new Error(`Chapter ${src.number} has no downloaded pages`);
+      const files = await this._listImageFiles(dir);
+      if (files.length === 0) throw new Error(`Chapter ${src.number} has no downloaded pages`);
+      parts.push({ number: src.number, dir, files });
+    }
+
+    const targetDir = this.getChapterDir(mangaTitle, targetNumber, alias);
+    const isSource = parts.some(p => path.resolve(p.dir) === path.resolve(targetDir));
+    if (!isSource && await this._dirHasImages(targetDir)) {
+      throw new Error(`Chapter ${targetNumber} already has pages on disk; delete them first or pick another number`);
+    }
+
+    const tempDir = `${targetDir}.merging`;
+    await fs.remove(tempDir);
+    await fs.ensureDir(tempDir);
+    let index = 0;
+    for (const part of parts) {
+      for (const file of part.files) {
+        index++;
+        await fs.copy(path.join(part.dir, file), path.join(tempDir, `${String(index).padStart(3, '0')}${path.extname(file).toLowerCase()}`));
+      }
+    }
+
+    if (isSource) await fs.remove(targetDir);
+    await fs.move(tempDir, targetDir, { overwrite: true });
+    return { dir: targetDir, pageCount: index, parts: parts.map(p => ({ number: p.number, pages: p.files.length })) };
   }
 
   async _getImagesFromDir(chapterDir) {

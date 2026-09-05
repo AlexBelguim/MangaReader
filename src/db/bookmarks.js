@@ -260,6 +260,9 @@ export const bookmarkDb = {
             'SELECT chapter_number FROM excluded_chapters WHERE bookmark_id = ?'
         ).all(id).map(r => r.chapter_number);
 
+        // Combined chapters (their titles override the row titles below)
+        const mergedChapters = this.getMergedChapters(id);
+
         // Get updated chapters
         const updatedChapters = db.prepare(
             'SELECT chapter_number, old_url, new_urls, type, detected_at FROM updated_chapters WHERE bookmark_id = ?'
@@ -298,7 +301,9 @@ export const bookmarkDb = {
             updatedAt: bookmark.updated_at,
             chapters: chapters.map(c => ({
                 number: c.number,
-                title: c.title,
+                // A combined chapter's chosen name applies to every row of
+                // that number (12 + 12.5 -> 12 keeps 12's remote row too).
+                title: mergedChapters[c.number]?.title || c.title,
                 url: c.url,
                 version: c.version,
                 totalVersions: c.total_versions,
@@ -320,6 +325,7 @@ export const bookmarkDb = {
             categories,
             excludedChapters,
             chapterSettings,
+            mergedChapters,
             autoCheck: !!bookmark.auto_check,
             autoDownload: !!bookmark.auto_download,
             checkSchedule: bookmark.check_schedule || null,
@@ -550,6 +556,114 @@ export const bookmarkDb = {
             .all(bookmarkId).map(r => r.chapter_number);
     },
 
+    // ==================== COMBINED CHAPTERS ====================
+
+    // { [chapterNumber]: { title, sources: [numbers in page order], createdAt } }
+    getMergedChapters(bookmarkId) {
+        const db = getDb();
+        const out = {};
+        for (const r of db.prepare('SELECT chapter_number, title, source_numbers, created_at FROM chapter_merges WHERE bookmark_id = ?').all(bookmarkId)) {
+            let sources = [];
+            try { sources = JSON.parse(r.source_numbers) || []; } catch (e) { /* unreadable row: treat as no sources */ }
+            out[r.chapter_number] = { title: r.title, sources, createdAt: r.created_at };
+        }
+        return out;
+    },
+
+    mergedChapterUrl(bookmarkId, chapterNumber) {
+        return `local://${bookmarkId}/merged-${chapterNumber}`;
+    },
+
+    /**
+     * Register a combined chapter after its folder was built: a local://
+     * chapter row that is downloaded, the sources excluded (still listed under
+     * "hidden", never re-added as new by a re-scrape), volume membership
+     * carried over, and read state carried over when every source was read.
+     */
+    createMergedChapter(bookmarkId, userId, { target, title, sources }) {
+        const db = getDb();
+        const url = this.mergedChapterUrl(bookmarkId, target);
+        const now = new Date().toISOString();
+        const run = db.transaction(() => {
+            db.prepare(`
+                INSERT OR REPLACE INTO chapters (bookmark_id, number, title, url, version, total_versions, original_number, removed_from_remote, is_old_version, url_changed, release_group, uploaded_at)
+                VALUES (?, ?, ?, ?, 1, 1, NULL, 0, 0, 0, '', '')
+            `).run(bookmarkId, target, title, url);
+            db.prepare('INSERT OR IGNORE INTO downloaded_chapters (bookmark_id, chapter_number) VALUES (?, ?)').run(bookmarkId, target);
+            db.prepare('INSERT OR IGNORE INTO downloaded_versions (bookmark_id, chapter_number, url) VALUES (?, ?, ?)').run(bookmarkId, target, url);
+            db.prepare('DELETE FROM deleted_chapter_urls WHERE bookmark_id = ? AND url = ?').run(bookmarkId, url);
+            // 12 + 12.5 -> 12: chapter 12's own pages were folded into the
+            // combined folder, so its remote version is no longer a separate
+            // download (it can be fetched again as another version later).
+            if (sources.includes(target)) {
+                db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ? AND url != ?').run(bookmarkId, target, url);
+            }
+            db.prepare(`
+                INSERT OR REPLACE INTO chapter_merges (bookmark_id, chapter_number, title, source_numbers, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            `).run(bookmarkId, target, title, JSON.stringify(sources), now);
+
+            const exclude = db.prepare('INSERT OR REPLACE INTO excluded_chapters (bookmark_id, chapter_number, excluded_at) VALUES (?, ?, ?)');
+            for (const n of sources) {
+                if (n !== target) exclude.run(bookmarkId, n, now);
+            }
+
+            // Keep it in the volume its sources were in
+            const volumeRow = db.prepare(`
+                SELECT vc.volume_id FROM volume_chapters vc
+                JOIN volumes v ON v.id = vc.volume_id
+                WHERE v.bookmark_id = ? AND vc.chapter_number IN (${sources.map(() => '?').join(',')})
+                LIMIT 1
+            `).get(bookmarkId, ...sources);
+            if (volumeRow) {
+                db.prepare('INSERT OR IGNORE INTO volume_chapters (volume_id, chapter_number) VALUES (?, ?)').run(volumeRow.volume_id, target);
+            }
+
+            if (userId) {
+                const readCount = db.prepare(`
+                    SELECT COUNT(*) AS n FROM read_chapters
+                    WHERE bookmark_id = ? AND user_id = ? AND chapter_number IN (${sources.map(() => '?').join(',')})
+                `).get(bookmarkId, userId, ...sources).n;
+                if (readCount === sources.length) {
+                    db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)').run(bookmarkId, target, userId);
+                }
+            }
+            db.prepare('UPDATE bookmarks SET updated_at = ? WHERE id = ?').run(now, bookmarkId);
+        });
+        run();
+        return { url };
+    },
+
+    /** Undo createMergedChapter in the database (the folder is the caller's job). */
+    removeMergedChapter(bookmarkId, target) {
+        const db = getDb();
+        const merge = this.getMergedChapters(bookmarkId)[target];
+        if (!merge) return null;
+        const url = this.mergedChapterUrl(bookmarkId, target);
+        const run = db.transaction(() => {
+            db.prepare('DELETE FROM chapters WHERE bookmark_id = ? AND url = ?').run(bookmarkId, url);
+            db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND url = ?').run(bookmarkId, url);
+            // Only a merged chapter that was nothing but the merge loses its
+            // downloaded flag (the target may also be a real chapter, 12 + 12.5 -> 12).
+            const otherVersions = db.prepare('SELECT COUNT(*) AS n FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ?').get(bookmarkId, target).n;
+            if (otherVersions === 0) {
+                db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, target);
+                db.prepare('DELETE FROM read_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, target);
+                db.prepare('DELETE FROM reading_progress WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, target);
+                db.prepare(`
+                    DELETE FROM volume_chapters WHERE chapter_number = ?
+                    AND volume_id IN (SELECT id FROM volumes WHERE bookmark_id = ?)
+                `).run(target, bookmarkId);
+            }
+            const unexclude = db.prepare('DELETE FROM excluded_chapters WHERE bookmark_id = ? AND chapter_number = ?');
+            for (const n of merge.sources) unexclude.run(bookmarkId, n);
+            db.prepare('DELETE FROM chapter_merges WHERE bookmark_id = ? AND chapter_number = ?').run(bookmarkId, target);
+            db.prepare('UPDATE bookmarks SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), bookmarkId);
+        });
+        run();
+        return { url, sources: merge.sources };
+    },
+
     add(mangaInfo, userId) {
         const db = getDb();
         if (userId === undefined || userId === null) {
@@ -702,9 +816,11 @@ export const bookmarkDb = {
             }
 
             // Mark chapters not in new scrape as "removed_from_remote" but DON'T delete them.
-            // Locked chapters are exempt - their state must not change.
+            // Locked chapters are exempt - their state must not change. So are
+            // local:// rows (extracted files, combined chapters): they were
+            // never on the remote to begin with.
             for (const existing of existingChapters) {
-                if (!newUrls.has(existing.url) && !lockedNumbers.has(existing.number)) {
+                if (!newUrls.has(existing.url) && !lockedNumbers.has(existing.number) && !String(existing.url).startsWith('local://')) {
                     updateRemoved.run(id, existing.url);
                     console.log(`[DB Update] Marked chapter ${existing.number} as removed_from_remote (preserving data)`);
                 }

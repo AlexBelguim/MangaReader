@@ -176,7 +176,8 @@ body {
 .chip,
 .badge,
 .tab-btn,
-.filter-btn {
+.filter-btn,
+.library-filter-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
@@ -515,7 +516,7 @@ header {
   position: relative;
 }
 
-.filter-btn {
+.library-filter-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -531,18 +532,18 @@ header {
   transition: border-color var(--transition-fast), color var(--transition-fast);
 }
 
-.filter-btn:hover,
-.filter-btn:focus-visible {
+.library-filter-btn:hover,
+.library-filter-btn:focus-visible {
   outline: none;
   border-color: var(--accent-primary);
 }
 
-.filter-btn.has-filter {
+.library-filter-btn.has-filter {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
 }
 
-.filter-btn .icon {
+.library-filter-btn .icon {
   width: 1rem;
   height: 1rem;
 }

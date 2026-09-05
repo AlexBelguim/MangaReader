@@ -167,6 +167,21 @@ export function initDatabase() {
       FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
     );
 
+    -- Chapters combined by hand out of several downloaded chapters (a
+    -- scanlation's 12.1 / 12.2 / 12.3 becoming chapter 12). The combined
+    -- chapter is a local:// row in chapters with its own folder; the
+    -- sources stay in chapters but are excluded, so a re-scrape neither
+    -- re-lists them nor treats them as new.
+    CREATE TABLE IF NOT EXISTS chapter_merges (
+      bookmark_id TEXT NOT NULL,
+      chapter_number REAL NOT NULL,
+      title TEXT,
+      source_numbers TEXT NOT NULL, -- JSON array of chapter numbers, in page order
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (bookmark_id, chapter_number),
+      FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
+    );
+
     -- Trophy pages (per user)
     CREATE TABLE IF NOT EXISTS trophy_pages (
       bookmark_id TEXT NOT NULL,

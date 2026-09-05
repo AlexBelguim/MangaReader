@@ -362,6 +362,87 @@
     font-weight: 600;
 }
 
+.chapter-tag.merged {
+    background: var(--info);
+    color: var(--text-primary);
+}
+
+/* ---- Combine chapters (manga page) ---- */
+.merge-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm) var(--space-md);
+    margin: var(--space-sm) 0;
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--accent-primary);
+    border-left-width: 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    font-size: 0.85rem;
+}
+
+.merge-bar-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--text-secondary);
+    min-width: 200px;
+    flex: 1 1 260px;
+}
+
+.merge-bar-text strong {
+    color: var(--text-primary);
+}
+
+.merge-bar-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.merge-bar-fields label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.merge-bar-fields input[type="number"],
+.merge-bar-fields input[type="text"] {
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.merge-bar-fields input[type="number"] {
+    width: 90px;
+}
+
+.merge-bar-fields input[type="text"] {
+    width: 180px;
+}
+
+.merge-bar-fields input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.merge-pick {
+    margin-right: var(--space-sm);
+}
+
+.merge-pick:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
 .chapter-actions {
     display: flex;
     gap: var(--space-xs);
