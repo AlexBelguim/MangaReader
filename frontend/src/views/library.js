@@ -13,6 +13,19 @@ import { showToast } from '../utils/toast.js';
 import { icon, placeholder, coverImg } from '../icons.js';
 import { session } from '../session.js';
 
+// Library filter menu: one choice per group ("any" = no restriction).
+// Declared before the state it seeds.
+const FILTER_DEFAULTS = { series: 'any', downloads: 'any', reading: 'any', source: 'any', monitor: 'any' };
+
+function loadFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('library_filters') || '{}');
+    return { ...FILTER_DEFAULTS, ...(saved && typeof saved === 'object' ? saved : {}) };
+  } catch (e) {
+    return { ...FILTER_DEFAULTS };
+  }
+}
+
 // View state
 let state = {
   bookmarks: [],
@@ -27,6 +40,7 @@ let state = {
   // The browse-capable source the author came from (drives the card's target).
   searchAuthorSource: localStorage.getItem('library_search_author_source') || null,
   sortBy: localStorage.getItem('library_sort') || 'updated',
+  filters: loadFilters(),
   viewMode: 'manga', // 'manga' or 'series'
   loading: true
 };
@@ -34,6 +48,87 @@ let state = {
 // Event handler reference for cleanup
 let viewModeHandler = null;
 let storeUnsubs = [];
+let filterOutsideClickHandler = null;
+
+// ==================== LIBRARY FILTERS ====================
+// Groups combine with AND. Tests get the manga plus its counts from mangaStats().
+
+function saveFilters() {
+  localStorage.setItem('library_filters', JSON.stringify(state.filters));
+}
+
+// Chapter counts the way the card shows them: excluded chapters don't count.
+function mangaStats(m) {
+  const excluded = new Set(m.excludedChapters || []);
+  const total = new Set((m.chapters || []).filter(c => !excluded.has(c.number)).map(c => c.number)).size || m.uniqueChapters || 0;
+  const downloaded = m.downloadedCount ?? m.downloadedChapters?.length ?? 0;
+  const read = m.readCount ?? m.readChapters?.length ?? 0;
+  const updates = (m.updatedCount ?? m.updatedChapters?.length ?? 0) > 0;
+  return { total, downloaded, read, updates };
+}
+
+const FILTER_GROUPS = [
+  {
+    key: 'series', label: 'Series', options: [
+      { value: 'none', label: 'Not in a series', test: m => !m.series },
+      { value: 'in', label: 'In a series', test: m => !!m.series }
+    ]
+  },
+  {
+    key: 'downloads', label: 'Downloads', options: [
+      { value: 'none', label: 'Nothing downloaded', test: (m, s) => s.downloaded === 0 },
+      { value: 'partial', label: 'Partly downloaded', test: (m, s) => s.downloaded > 0 && s.downloaded < s.total },
+      { value: 'complete', label: 'Fully downloaded', test: (m, s) => s.total > 0 && s.downloaded >= s.total }
+    ]
+  },
+  {
+    key: 'reading', label: 'Reading', options: [
+      { value: 'unread', label: 'Not started', test: (m, s) => s.read === 0 },
+      { value: 'progress', label: 'In progress', test: (m, s) => s.read > 0 && s.read < s.total },
+      { value: 'finished', label: 'Finished', test: (m, s) => s.total > 0 && s.read >= s.total },
+      { value: 'updates', label: 'New chapters', test: (m, s) => s.updates }
+    ]
+  },
+  {
+    key: 'source', label: 'Source', options: [] // filled from the library itself, see sourceOptions()
+  },
+  {
+    key: 'monitor', label: 'Auto-check', options: [
+      { value: 'on', label: 'On', test: m => !!m.autoCheck },
+      { value: 'off', label: 'Off', test: m => !m.autoCheck }
+    ]
+  }
+];
+
+// Local files plus every site present in the library, as source choices
+function sourceOptions() {
+  const sites = [...new Set(state.bookmarks.filter(m => m.source !== 'local' && m.website).map(m => m.website))].sort();
+  const options = sites.map(site => ({ value: `site:${site}`, label: site, test: m => m.source !== 'local' && m.website === site }));
+  if (state.bookmarks.some(m => m.source === 'local')) {
+    options.unshift({ value: 'local', label: 'Local files', test: m => m.source === 'local' });
+  }
+  return options;
+}
+
+function filterGroups() {
+  return FILTER_GROUPS.map(g => g.key === 'source' ? { ...g, options: sourceOptions() } : g);
+}
+
+function activeFilterCount() {
+  return Object.values(state.filters).filter(v => v && v !== 'any').length;
+}
+
+function applyLibraryFilters(list) {
+  const groups = filterGroups();
+  const active = groups
+    .map(g => ({ g, option: g.options.find(o => o.value === state.filters[g.key]) }))
+    .filter(x => x.option);
+  if (active.length === 0) return list;
+  return list.filter(m => {
+    const stats = mangaStats(m);
+    return active.every(({ option }) => option.test(m, stats));
+  });
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -96,7 +191,66 @@ function getFilteredBookmarks() {
     );
   }
 
+  // Filter menu (series / downloads / reading / source / auto-check)
+  filtered = applyLibraryFilters(filtered);
+
   return sortBookmarks(filtered);
+}
+
+/**
+ * The Filter button and its menu in the library toolbar.
+ */
+function renderFilterControl(shownCount) {
+  const active = activeFilterCount();
+  const groups = filterGroups().filter(g => g.options.length > 0);
+  return `
+    <div class="library-filter" id="library-filter">
+      <button type="button" class="filter-btn ${active ? 'has-filter' : ''}" id="library-filter-btn" aria-haspopup="true" aria-expanded="false">
+        ${icon('sliders')} Filter${active ? ` · ${active}` : ''}
+      </button>
+      <div class="library-filter-menu hidden" id="library-filter-menu" role="menu">
+        <div class="library-filter-header">
+          <span>Filter library</span>
+          <button type="button" class="library-filter-reset" id="library-filter-reset" ${active ? '' : 'hidden'}>Reset</button>
+        </div>
+        ${groups.map(g => `
+          <div class="library-filter-group">
+            <div class="library-filter-group-title">${g.label}</div>
+            <div class="library-filter-options">
+              <button type="button" class="filter-chip ${state.filters[g.key] === 'any' || !state.filters[g.key] ? 'active' : ''}" data-group="${g.key}" data-value="any">Any</button>
+              ${g.options.map(o => `<button type="button" class="filter-chip ${state.filters[g.key] === o.value ? 'active' : ''}" data-group="${g.key}" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</button>`).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <span class="library-count" id="library-count" title="Shown / in library">${shownCount} / ${state.bookmarks.length}</span>
+  `;
+}
+
+// Re-apply the filters without rebuilding the page, so the menu stays open
+// while the user combines choices.
+function refreshFilteredGrid() {
+  const grid = document.getElementById('library-grid');
+  if (!grid) return;
+  const filtered = getFilteredBookmarks();
+  grid.innerHTML = filtered.map(renderMangaCard).join('') || renderEmptyState();
+
+  const count = document.getElementById('library-count');
+  if (count) count.textContent = `${filtered.length} / ${state.bookmarks.length}`;
+
+  const active = activeFilterCount();
+  const btn = document.getElementById('library-filter-btn');
+  if (btn) {
+    btn.classList.toggle('has-filter', active > 0);
+    btn.innerHTML = `${icon('sliders')} Filter${active ? ` · ${active}` : ''}`;
+  }
+  const reset = document.getElementById('library-filter-reset');
+  if (reset) reset.hidden = active === 0;
+  document.querySelectorAll('#library-filter-menu .filter-chip').forEach(chip => {
+    const current = state.filters[chip.dataset.group] || 'any';
+    chip.classList.toggle('active', chip.dataset.value === current);
+  });
 }
 
 /**
@@ -278,6 +432,7 @@ export function render() {
           <option value="lastread" ${state.sortBy === 'lastread' ? 'selected' : ''}>Last Read</option>
           <option value="chapters" ${state.sortBy === 'chapters' ? 'selected' : ''}>Most Chapters</option>
         </select>
+        ${renderFilterControl(filtered.length)}
       </div>
       ${state.artistFilter ? `
         <div class="artist-filter-badge" id="artist-filter-badge">
@@ -450,12 +605,55 @@ function handleClearFilters() {
   state.searchQuery = '';
   state.searchAuthor = null;
   state.searchAuthorSource = null;
+  state.filters = { ...FILTER_DEFAULTS };
   localStorage.removeItem('library_active_category');
   localStorage.removeItem('library_artist_filter');
   localStorage.removeItem('library_search');
   localStorage.removeItem('library_search_author');
   localStorage.removeItem('library_search_author_source');
+  localStorage.removeItem('library_filters');
   mount();
+}
+
+/**
+ * Filter button: open/close the menu, pick a choice per group, reset.
+ */
+function setupFilterListeners() {
+  const btn = document.getElementById('library-filter-btn');
+  const menu = document.getElementById('library-filter-menu');
+  if (!btn || !menu) return;
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = menu.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+  });
+
+  menu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const chip = e.target.closest('.filter-chip');
+    if (chip) {
+      state.filters[chip.dataset.group] = chip.dataset.value;
+      saveFilters();
+      refreshFilteredGrid();
+      return;
+    }
+    if (e.target.closest('#library-filter-reset')) {
+      state.filters = { ...FILTER_DEFAULTS };
+      localStorage.removeItem('library_filters');
+      refreshFilteredGrid();
+    }
+  });
+
+  // Click anywhere else closes the menu
+  if (filterOutsideClickHandler) document.removeEventListener('click', filterOutsideClickHandler);
+  filterOutsideClickHandler = (e) => {
+    if (!menu.classList.contains('hidden') && !e.target.closest('#library-filter')) {
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  };
+  document.addEventListener('click', filterOutsideClickHandler);
 }
 
 /**
@@ -714,6 +912,8 @@ export function setupListeners() {
       mount();
     });
   }
+
+  setupFilterListeners();
 
   // Global Clear Filters (from Logo click)
   // Remove first to prevent duplicates if cleanup failed
@@ -997,6 +1197,12 @@ export function unmount() {
 
   // Remove clearFilters listener
   window.removeEventListener('clearFilters', handleClearFilters);
+
+  // Filter menu's outside-click listener
+  if (filterOutsideClickHandler) {
+    document.removeEventListener('click', filterOutsideClickHandler);
+    filterOutsideClickHandler = null;
+  }
 
   // Unsubscribe from store
   storeUnsubs.forEach(fn => fn());

@@ -112,6 +112,16 @@ export const bookmarkDb = {
             artistsMap.get(r.bookmark_id).push(r.name);
         });
 
+        // Bulk: the series each bookmark belongs to (the library filters on it)
+        const seriesMap = new Map();
+        db.prepare(`
+            SELECT se.bookmark_id, s.id AS series_id, COALESCE(s.alias, s.title) AS name
+            FROM series_entries se
+            JOIN series s ON s.id = se.series_id
+        `).all().forEach(r => {
+            if (!seriesMap.has(r.bookmark_id)) seriesMap.set(r.bookmark_id, { id: r.series_id, name: r.name });
+        });
+
         return bookmarks.map(b => ({
             id: b.id,
             url: b.url,
@@ -141,6 +151,7 @@ export const bookmarkDb = {
             excludedChapters: excludedMap.get(b.id) || [],
             categories: categoriesMap.get(b.id) || [],
             artists: artistsMap.get(b.id) || [],
+            series: seriesMap.get(b.id) || null,
         }));
     },
 
