@@ -3155,6 +3155,222 @@ body.demo-mode #app {
     border-top: 1px solid var(--border-strong);
 }
 
+/* ---- Torrents: search dialog (torrent-search.js) ---- */
+.torrent-modal {
+    z-index: 10002;
+}
+
+.torrent-modal .modal-content {
+    max-width: 900px;
+    display: flex;
+    flex-direction: column;
+}
+
+.torrent-body {
+    padding: var(--space-md) var(--space-lg);
+    overflow-y: auto;
+    max-height: 75vh;
+}
+
+.torrent-search-form {
+    display: flex;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.torrent-search-form input {
+    flex: 1;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-secondary);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.torrent-search-form input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.torrent-target {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-sm);
+}
+
+.torrent-target select {
+    margin-left: 6px;
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.torrent-hint {
+    padding: var(--space-md);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.torrent-hint.error {
+    color: var(--error);
+}
+
+.torrent-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.torrent-table th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-strong);
+}
+
+.torrent-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.torrent-table td.torrent-title {
+    white-space: normal;
+    max-width: 420px;
+    word-break: break-word;
+}
+
+.torrent-table td.torrent-dead {
+    color: var(--error);
+}
+
+.torrent-info-link {
+    color: var(--text-muted);
+    margin-left: 4px;
+}
+
+/* ---- Torrents: queue cards ---- */
+.torrent-card .task-status a {
+    color: var(--accent-primary);
+    text-decoration: none;
+}
+
+/* ---- Torrents: settings ---- */
+.settings-subhead {
+    margin: var(--space-md) 0 var(--space-sm);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-hint-inline {
+    font-weight: normal;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.form-row {
+    display: flex;
+    gap: var(--space-md);
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.torrents-actions {
+    justify-content: flex-start !important;
+    align-items: center;
+}
+
+.torrents-test-result {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.torrents-test-result.ok { color: var(--success); }
+.torrents-test-result.error { color: var(--error); }
+
+.tor-mapping {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.tor-mapping input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.tor-mapping input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.tor-map-arrow {
+    color: var(--text-muted);
+}
+
+/* ---- Volume releases on the manga page ---- */
+.badge-release {
+    background: var(--info);
+    color: var(--text-primary);
+}
+
+.volume-kind {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.volume-card .volume-cover {
+    position: relative;
+}
+
+.volume-read-btn {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--accent-primary);
+    color: var(--on-fill);
+    cursor: pointer;
+    opacity: 0.92;
+}
+
+.volume-read-btn:hover {
+    opacity: 1;
+}
+
+@media (max-width: 600px) {
+    .form-row {
+        flex-direction: column;
+        gap: 0;
+    }
+}
+
 /* Session row on the scraper cards */
 .scraper-session-cell {
     display: inline-flex;

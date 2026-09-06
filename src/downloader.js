@@ -136,7 +136,7 @@ class Downloader {
       let imageCount = 0;
       try {
         const files = await fs.readdir(path.join(mangaDir, entry.name));
-        imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f)).length;
+        imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f)).length;
       } catch (e) { /* unreadable folder counts as empty */ }
       const versionMatch = entry.name.match(/ v([a-z0-9]+)$/i);
       if (!byChapter[number]) byChapter[number] = [];
@@ -168,7 +168,7 @@ class Downloader {
         const versionPath = path.join(mangaDir, entry.name);
         // Count image files in this version
         const files = await fs.readdir(versionPath);
-        const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f)).length;
+        const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f)).length;
 
         // Extract version string from folder name (e.g., "Chapter 00001 v1a2b" -> "1a2b")
         const versionMatch = entry.name.match(/ v([a-z0-9]+)$/i);
@@ -496,7 +496,7 @@ class Downloader {
       return false;
     }
     const files = await fs.readdir(dir);
-    return files.some(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f));
+    return files.some(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f));
   }
 
   // Resolve the on-disk folder for a chapter. This is the single source of
@@ -530,7 +530,7 @@ class Downloader {
   async _listImageFiles(chapterDir) {
     const files = await fs.readdir(chapterDir);
     return files
-      .filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+      .filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f))
       .sort((a, b) => parseInt(a.match(/^(\d+)/)?.[1] || '0') - parseInt(b.match(/^(\d+)/)?.[1] || '0'));
   }
 
@@ -576,10 +576,12 @@ class Downloader {
     return { dir: targetDir, pageCount: index, parts: parts.map(p => ({ number: p.number, pages: p.files.length })) };
   }
 
+  async getImagesFromDir(dir) { return this._getImagesFromDir(dir); }
+
   async _getImagesFromDir(chapterDir) {
     const files = await fs.readdir(chapterDir);
     const imageFiles = files
-      .filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+      .filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f))
       .sort((a, b) => {
         // Sort by number prefix
         const numA = parseInt(a.match(/^(\d+)/)?.[1] || '0');
@@ -676,7 +678,7 @@ class Downloader {
 
     const files = await fs.readdir(coverDir);
     const covers = files
-      .filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+      .filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f))
       .map(f => ({
         filename: f,
         path: path.join(coverDir, f)
@@ -828,7 +830,7 @@ class Downloader {
 
           const chapterDir = path.join(mangaDir, entry.name);
           const files = await fs.readdir(chapterDir);
-          const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f)).length;
+          const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f)).length;
 
           if (imageCount > 0) {
             chapters.push({
@@ -867,7 +869,7 @@ class Downloader {
 
           try {
             const files = await fs.readdir(chapterDir);
-            const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f)).length;
+            const imageCount = files.filter(f => /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(f)).length;
 
             // Only update if not set or if this version has more pages (simple heuristic for best version)
             if (imageCount > 0) {
@@ -939,7 +941,7 @@ class Downloader {
       const entries = zip.getEntries();
 
       const imageEntries = entries
-        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp)$/i.test(e.entryName))
+        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(e.entryName))
         .sort((a, b) => {
           // Sort by name
           const nameA = path.basename(a.entryName);
@@ -982,7 +984,7 @@ class Downloader {
       const entries = zip.getEntries();
 
       const imageEntries = entries
-        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp)$/i.test(e.entryName))
+        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(e.entryName))
         .sort((a, b) => {
           const nameA = path.basename(a.entryName);
           const nameB = path.basename(b.entryName);
@@ -1091,7 +1093,7 @@ class Downloader {
       const entries = zip.getEntries();
 
       const imageEntry = entries
-        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp)$/i.test(e.entryName))
+        .filter(e => !e.isDirectory && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(e.entryName))
         .sort((a, b) => {
           const nameA = path.basename(a.entryName);
           const nameB = path.basename(b.entryName);

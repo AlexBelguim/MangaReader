@@ -182,6 +182,58 @@ export function initDatabase() {
       FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
     );
 
+    -- Reading position inside a volume release (volumes with their own
+    -- pages), per user; chapters keep using reading_progress.
+    CREATE TABLE IF NOT EXISTS volume_progress (
+      volume_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      page INTEGER NOT NULL,
+      total_pages INTEGER NOT NULL,
+      finished INTEGER DEFAULT 0,
+      last_read TEXT NOT NULL,
+      PRIMARY KEY (volume_id, user_id),
+      FOREIGN KEY (volume_id) REFERENCES volumes(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    -- Server-wide settings (admin-managed integrations such as Prowlarr
+    -- and qBittorrent). Values are JSON. Per-user preferences live in
+    -- reader_settings instead.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    -- Torrents handed to qBittorrent through the app, from grab to import.
+    -- status: downloading | completed | importing | imported | failed | removed
+    CREATE TABLE IF NOT EXISTS torrent_downloads (
+      hash TEXT PRIMARY KEY,
+      name TEXT,
+      release_title TEXT,
+      size INTEGER DEFAULT 0,
+      indexer TEXT,
+      info_url TEXT,
+      bookmark_id TEXT,
+      new_series_title TEXT,     -- import target when no bookmark was chosen
+      user_id INTEGER,
+      status TEXT NOT NULL,
+      progress REAL DEFAULT 0,
+      dlspeed INTEGER DEFAULT 0,
+      eta INTEGER,
+      state TEXT,
+      save_path TEXT,
+      content_path TEXT,
+      added_at TEXT NOT NULL,
+      completed_at TEXT,
+      imported_at TEXT,
+      auto_import INTEGER DEFAULT 1,
+      error TEXT,
+      import_result TEXT,        -- JSON summary of what was imported
+      FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_torrent_downloads_status ON torrent_downloads(status);
+
     -- Trophy pages (per user)
     CREATE TABLE IF NOT EXISTS trophy_pages (
       bookmark_id TEXT NOT NULL,

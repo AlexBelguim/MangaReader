@@ -10,15 +10,18 @@ import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
 import { openCookieImportModal, openSite } from '../site-challenge.js';
 import { session } from '../session.js';
+import { formatBytes } from '../torrent-search.js';
 
 let state = {
   downloads: {},
+  torrents: [],
   queueTasks: [],
   historyTasks: [],
   autoCheck: null,
   loading: true,
   showEmptyChecks: false,
   collapsed: {
+    torrents: false,
     active: false,
     scheduled: false,
     completed: false,
@@ -198,6 +201,89 @@ function renderDownloadCard(taskId, task) {
   `;
 }
 
+// ==================== TORRENTS ====================
+
+function torrentStatusLabel(t) {
+  switch (t.status) {
+    case 'downloading':
+      if (/paused|stopped/i.test(t.state || '')) return 'Paused';
+      if (/queued|metaDL|checking/i.test(t.state || '')) return 'Waiting';
+      return 'Downloading';
+    case 'completed': return t.autoImport ? 'Downloaded, importing soon' : 'Downloaded';
+    case 'importing': return 'Importing';
+    case 'imported': return 'Imported';
+    case 'failed': return 'Failed';
+    case 'removed': return 'Removed from qBittorrent';
+    default: return t.status;
+  }
+}
+
+function torrentStatusColor(t) {
+  if (t.status === 'imported') return 'var(--success)';
+  if (t.status === 'failed' || t.status === 'removed') return 'var(--error)';
+  if (t.status === 'importing' || t.status === 'completed') return 'var(--warning)';
+  return 'var(--text-secondary)';
+}
+
+function etaText(seconds) {
+  if (!seconds || seconds <= 0 || seconds >= 8640000) return '';
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
+}
+
+function renderTorrentCard(t) {
+  const pct = Math.round((t.progress || 0) * 100);
+  const downloading = t.status === 'downloading';
+  const paused = downloading && /paused|stopped/i.test(t.state || '');
+  const canImport = ['completed', 'failed'].includes(t.status) && (t.progress || 0) >= 1;
+  const target = t.bookmarkId
+    ? `<a href="#/manga/${escapeText(t.bookmarkId)}">open series</a>`
+    : (t.newSeriesTitle ? `new series “${escapeText(t.newSeriesTitle)}”` : '');
+  const result = t.importResult;
+  const resultText = result
+    ? [result.volumes?.length ? `${result.volumes.length} volume${result.volumes.length === 1 ? '' : 's'} (${result.volumes.map(v => v.name).join(', ')})` : '',
+       result.chapters?.length ? `${result.chapters.length} chapter${result.chapters.length === 1 ? '' : 's'}` : '',
+       result.skipped?.length ? `${result.skipped.length} skipped` : ''].filter(Boolean).join(' · ')
+    : '';
+  const meta = [
+    formatBytes(t.size),
+    downloading && t.dlspeed ? `${formatBytes(t.dlspeed)}/s` : '',
+    downloading ? etaText(t.eta) : '',
+    t.indexer || ''
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <div class="queue-card task-card torrent-card" data-hash="${escapeText(t.hash)}">
+      <div class="queue-card-header">
+        <div class="task-info">
+          <span class="task-icon">${icon('download')}</span>
+          <div>
+            <div class="task-title" title="${escapeText(t.releaseTitle || t.name)}">${escapeText(t.name || t.releaseTitle)}</div>
+            <div class="task-status" style="color: ${torrentStatusColor(t)}">${torrentStatusLabel(t)}${target ? ` · ${target}` : ''}</div>
+          </div>
+        </div>
+        <div class="task-actions">
+          ${downloading && !paused ? `<button class="btn btn-sm btn-icon" data-taction="pause" title="Pause">${icon('pause', { title: 'Pause' })}</button>` : ''}
+          ${paused ? `<button class="btn btn-sm btn-icon" data-taction="resume" title="Resume">${icon('play', { title: 'Resume' })}</button>` : ''}
+          ${canImport ? `<button class="btn btn-sm btn-secondary" data-taction="import" title="Import into the library now">${t.status === 'failed' ? 'Retry import' : 'Import now'}</button>` : ''}
+          <button class="btn btn-sm btn-icon btn-danger" data-taction="remove" title="${t.status === 'imported' ? 'Remove from this list' : 'Remove from qBittorrent and this list'}">✕</button>
+        </div>
+      </div>
+      <div class="queue-card-body">
+        ${t.status !== 'imported' ? `
+        <div class="progress-bar-container">
+          <div class="progress-bar" style="width: ${pct}%"></div>
+          <span class="progress-text">${pct}%${meta ? ` · ${meta}` : ''}</span>
+        </div>` : `<div class="task-current">${meta}</div>`}
+        ${resultText ? `<div class="task-current">${icon('check')} ${escapeText(resultText)}</div>` : ''}
+        ${result?.skipped?.length ? `<ul class="task-error-list">${result.skipped.slice(0, 4).map(s => `<li>${escapeText(s)}</li>`).join('')}</ul>` : ''}
+        ${t.error ? `<div class="task-errors">${icon('triangle-alert')} ${escapeText(t.error)}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function renderQueueTask(task) {
   const data = task.data || {};
   return `
@@ -284,7 +370,8 @@ function render() {
     if (t.type === 'download' && t.data?.mangaId && activeDownloadMangaIds.has(t.data.mangaId)) return false;
     return true;
   });
-  const totalActive = activeDownloads.length + filteredQueueTasks.length;
+  const activeTorrents = state.torrents.filter(t => ['downloading', 'completed', 'importing'].includes(t.status));
+  const totalActive = activeDownloads.length + filteredQueueTasks.length + activeTorrents.length;
 
   const schedules = state.autoCheck?.schedules || [];
 
@@ -295,6 +382,17 @@ function render() {
         <h2>${icon('list-checks')} Task Queue</h2>
         ${totalActive > 0 ? `<span class="queue-badge">${totalActive} active</span>` : ''}
       </div>
+
+      ${state.torrents.length > 0 ? `
+        <div class="queue-section ${state.collapsed.torrents ? 'collapsed' : ''}">
+          <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="torrents">
+            <span class="collapse-icon">▼</span> Torrents (${activeTorrents.length} active)
+          </h3>
+          <div class="queue-section-content">
+            ${state.torrents.map(renderTorrentCard).join('')}
+          </div>
+        </div>
+      ` : ''}
 
       ${activeDownloads.length > 0 || filteredQueueTasks.length > 0 ? `
         <div class="queue-section ${state.collapsed.active ? 'collapsed' : ''}">
@@ -387,14 +485,16 @@ function render() {
 
 async function loadData() {
   try {
-    const [downloads, queueTasks, historyTasks, autoCheck] = await Promise.all([
+    const [downloads, queueTasks, historyTasks, autoCheck, torrents] = await Promise.all([
       api.getDownloads().catch(() => ({})),
       api.getQueueTasks().catch(() => []),
       api.getQueueHistory(50).catch(() => []), // fetch last 50 historical tasks
-      api.getAutoCheckStatus().catch(() => null)
+      api.getAutoCheckStatus().catch(() => null),
+      api.getTorrentDownloads().catch(() => ({ torrents: [] }))
     ]);
 
     state.downloads = downloads || {};
+    state.torrents = torrents?.torrents || [];
     state.queueTasks = queueTasks || [];
     state.historyTasks = historyTasks || [];
     state.autoCheck = autoCheck;
@@ -479,6 +579,40 @@ function setupListeners() {
       const mangaId = card.dataset.mangaId;
       if (mangaId) {
         window.location.hash = `#/manga/${mangaId}`;
+      }
+    });
+  });
+
+  // Torrent action buttons
+  document.querySelectorAll('.torrent-card [data-taction]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const hash = btn.closest('.torrent-card').dataset.hash;
+      const t = state.torrents.find(x => x.hash === hash);
+      const action = btn.dataset.taction;
+      try {
+        if (action === 'pause') await api.pauseTorrent(hash);
+        else if (action === 'resume') await api.resumeTorrent(hash);
+        else if (action === 'import') {
+          btn.disabled = true;
+          btn.textContent = 'Importing…';
+          const r = await api.importTorrent(hash);
+          const v = r.summary?.volumes?.length || 0;
+          const c = r.summary?.chapters?.length || 0;
+          showToast(`Imported ${v} volume${v === 1 ? '' : 's'}${c ? ` and ${c} chapter${c === 1 ? '' : 's'}` : ''}`, 'success');
+        } else if (action === 'remove') {
+          const finished = t && ['imported', 'removed'].includes(t.status);
+          if (!finished && !confirm(`Remove "${t?.name || 'this torrent'}" from qBittorrent and stop tracking it?`)) return;
+          const deleteFiles = !finished && confirm('Also delete its downloaded files from disk?');
+          await api.removeTorrent(hash, { deleteFiles, fromClient: !finished });
+          showToast('Torrent removed', 'info');
+        }
+        await loadData();
+        refresh();
+      } catch (err) {
+        showToast(`Action failed: ${err.message}`, 'error');
+        await loadData();
+        refresh();
       }
     });
   });
@@ -572,10 +706,18 @@ export async function mount() {
   socketHandlers.queueUpdated = (data) => {
     loadData().then(refresh);
   };
+  // Torrent progress arrives with the full current list
+  socketHandlers.torrentUpdate = (data) => {
+    if (Array.isArray(data?.torrents)) {
+      state.torrents = data.torrents;
+      refresh();
+    }
+  };
 
   socket.on(SocketEvents.DOWNLOAD_PROGRESS, socketHandlers.downloadProgress);
   socket.on(SocketEvents.DOWNLOAD_COMPLETED, socketHandlers.downloadCompleted);
   socket.on(SocketEvents.QUEUE_UPDATED, socketHandlers.queueUpdated);
+  socket.on(SocketEvents.TORRENT_UPDATE, socketHandlers.torrentUpdate);
 }
 
 export function unmount() {
@@ -593,6 +735,9 @@ export function unmount() {
   }
   if (socketHandlers.queueUpdated) {
     socket.off(SocketEvents.QUEUE_UPDATED, socketHandlers.queueUpdated);
+  }
+  if (socketHandlers.torrentUpdate) {
+    socket.off(SocketEvents.TORRENT_UPDATE, socketHandlers.torrentUpdate);
   }
   socketHandlers = {};
 }

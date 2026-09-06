@@ -10,6 +10,8 @@ import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
 import { offlineManager } from '../offline-manager.js';
 import { session } from '../session.js';
+// Volume names come from release names (outside input)
+const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // View state
 let state = {
@@ -36,7 +38,11 @@ let state = {
     nextChapterNum: null, // chapter number of the next chapter
     _preloadCache: null, // { chapterNum, mangaId, images[], imageObjects[] }
     isStreamingMode: false,
-    _streamAbortController: null
+    _streamAbortController: null,
+    // Volume release mode: pages belong to a volume (torrent/archive import)
+    // instead of a chapter; prev/next step through the neighbouring volumes.
+    isVolumeMode: false,
+    volume: null // { id, name, number, chapters, prev: {id,name}|null, next: {id,name}|null }
 };
 
 // ==================== HELPERS ====================
@@ -193,14 +199,16 @@ export function render() {
         <button class="reader-bar-btn close-btn" id="reader-close-btn" title="Back">×</button>
         <div class="reader-title">
           <span class="manga-name">${displayName}</span>
-          ${state.isStreamingMode ? '' : `<span class="chapter-name">Ch. ${chapterNum}${versionLabel ? ` · <span class="version-label" title="Version being read">${versionLabel}</span>` : ''}</span>`}
+          ${state.isStreamingMode ? '' : (state.isVolumeMode
+            ? `<span class="chapter-name" title="Volume release">${escapeHtml(state.volume?.name || 'Volume')}</span>`
+            : `<span class="chapter-name">Ch. ${chapterNum}${versionLabel ? ` · <span class="version-label" title="Version being read">${versionLabel}</span>` : ''}</span>`)}
         </div>
         ${state.isCollectionMode ? '' : `
         <div class="reader-bar-tools" id="reader-toolbar">
           ${state.isStreamingMode ? `
           <button class="reader-bar-btn" id="stream-add-lib-btn" title="Add to Library">${icon('download', { title: 'Add to Library' })}</button>
           <span class="reader-bar-divider"></span>
-          ` : `
+          ` : state.isVolumeMode ? '' : `
           <button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">${icon('star', { title: 'Add to favorites' })}</button>
 
           <button class="reader-bar-btn" id="rotate-btn" title="Rotate 90° CW">${icon('rotate-cw', { title: 'Rotate 90 degrees clockwise' })}</button>
@@ -216,7 +224,7 @@ export function render() {
             <button class="reader-bar-btn ${state.singlePageMode ? 'active' : ''}" id="single-page-btn" title="${state.singlePageMode ? 'Switch to double page' : 'Switch to single page'}">
               ${state.singlePageMode ? icon('rectangle-vertical') : icon('columns-2')}
             </button>
-            ${state.isStreamingMode ? '' : `
+            ${state.isStreamingMode || state.isVolumeMode ? '' : `
             <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">${icon('trophy')}</button>
             `}
           ` : ''}
@@ -722,7 +730,7 @@ function progressSnapshot() {
 
     if (reachedEnd) currentPage = totalPages;
 
-    return { mangaId: state.manga.id, chapterNumber: state.chapter.number, currentPage, totalPages };
+    return { mangaId: state.manga.id, chapterNumber: state.chapter.number, volumeId: state.isVolumeMode ? state.volume?.id : null, currentPage, totalPages };
 }
 
 /**
@@ -731,6 +739,22 @@ function progressSnapshot() {
 async function saveCurrentProgress(snapshot = progressSnapshot()) {
     // Demo visitors: progress lives only for the session, never saved
     if (!snapshot || session.isDemo) return;
+
+    // A volume release keeps its own position; finishing it marks the
+    // volume's chapters read on the server.
+    if (snapshot.volumeId) {
+        try {
+            await api.saveVolumeProgress(snapshot.mangaId, snapshot.volumeId, snapshot.currentPage, snapshot.totalPages);
+            if (snapshot.currentPage >= snapshot.totalPages && state.manga?.id === snapshot.mangaId && state.volume) {
+                const read = new Set(state.manga.readChapters || []);
+                for (const n of state.volume.chapters || []) read.add(n);
+                state.manga.readChapters = [...read];
+            }
+        } catch (error) {
+            console.error('Failed to save volume progress:', error);
+        }
+        return;
+    }
 
     try {
         await api.updateReadingProgress(
@@ -1355,7 +1379,7 @@ async function removeFavoriteItem(listName, item) {
  * Fetch next chapter's first image for link mode
  */
 async function fetchNextPreview() {
-    if (!state.manga?.id || !state.chapter?.number) return;
+    if (!state.manga?.id || !state.chapter?.number || state.isVolumeMode) return;
     try {
         const data = await api.getNextChapterPreview(state.manga.id, state.chapter.number);
         state.nextChapterImage = data.firstImage || null;
@@ -1371,7 +1395,7 @@ async function fetchNextPreview() {
  * Creates Image() objects to cache them in the browser
  */
 async function preloadNextChapter() {
-    if (!state.manga?.id || !state.chapter?.number || state.isCollectionMode) return;
+    if (!state.manga?.id || !state.chapter?.number || state.isCollectionMode || state.isVolumeMode) return;
     
     const chapters = state.manga.downloadedChapters || [];
     const sorted = [...chapters].sort((a, b) => a - b);
@@ -1942,6 +1966,18 @@ async function navigateChapter(delta) {
     await saveCurrentProgress();
     await saveSettings();
 
+    // Volume releases step through the neighbouring volumes
+    if (state.isVolumeMode) {
+        const target = delta > 0 ? state.volume?.next : state.volume?.prev;
+        if (target) {
+            state.navigationDirection = delta < 0 ? 'prev' : null;
+            router.go(`/read/${state.manga.id}/volume/${target.id}`);
+        } else {
+            showToast(delta > 0 ? 'Last volume' : 'First volume', 'info');
+        }
+        return;
+    }
+
     const chapters = state.manga.downloadedChapters || [];
     const sorted = [...chapters].sort((a, b) => a - b);
     const currentIdx = sorted.indexOf(state.chapter.number);
@@ -1988,9 +2024,28 @@ async function loadData(mangaId, chapterNum, versionUrl) {
         state.firstPageSingle = true;
         state.lastPageSingle = false;
         state.versionUrl = null;
+        state.isVolumeMode = false;
+        state.volume = null;
+        let volumeProgress = null;
+
+        // Volume release: pages of a volume, not a chapter
+        if (String(chapterNum).startsWith('volume:')) {
+            const volumeId = String(chapterNum).slice('volume:'.length);
+            state.isVolumeMode = true;
+            state.isCollectionMode = false;
+            state.isGalleryMode = false;
+            state.isStreamingMode = false;
+
+            const manga = await api.getBookmark(mangaId);
+            state.manga = manga;
+            const data = await api.getVolumePages(mangaId, volumeId);
+            state.volume = { ...data.volume, prev: data.prev || null, next: data.next || null };
+            state.chapter = { number: null, title: data.volume.name, volumeId };
+            state.images = data.images || [];
+            volumeProgress = data.progress && !data.progress.finished ? data.progress : null;
 
         // Special handling for Favorite Galleries
-        if (mangaId === 'gallery') {
+        } else if (mangaId === 'gallery') {
             const listName = decodeURIComponent(chapterNum);
             const favoritesData = await api.getFavorites();
             const list = favoritesData.favorites?.[listName] || [];
@@ -2218,7 +2273,7 @@ async function loadData(mangaId, chapterNum, versionUrl) {
         // Resume reading progress (skip for streaming — no DB record)
         if (!state.isStreamingMode) {
             const targetNum = parseFloat(chapterNum);
-            const progress = state.manga?.readingProgress?.[targetNum];
+            const progress = state.isVolumeMode ? volumeProgress : state.manga?.readingProgress?.[targetNum];
             if (progress && progress.page < progress.totalPages) {
                 if (state.mode === 'manga') {
                     if (state.singlePageMode) {
@@ -2471,8 +2526,11 @@ export async function mount(params = []) {
     state.nextChapterNum = null;
     app.innerHTML = render();
 
-    // If version URL was provided via URL parameter, use it directly
-    if (urlVersionParam) {
+    // #/read/<mangaId>/volume/<volumeId>: a volume release, no version chooser
+    if (chapterNum === 'volume' && params[2]) {
+        await loadData(mangaId, `volume:${params[2]}`);
+    } else if (urlVersionParam) {
+        // If version URL was provided via URL parameter, use it directly
         await loadData(mangaId, chapterNum, decodeURIComponent(urlVersionParam));
     } else {
         // Version-aware reading: check for multiple downloaded versions
@@ -2594,7 +2652,8 @@ function applyChapterSettings(s) {
 
 /** Capture the reader settings for the open chapter (see progressSnapshot). */
 function settingsSnapshot() {
-    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode) return null;
+    // Volume releases have no per-chapter settings row to save into
+    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode || state.isVolumeMode) return null;
     return {
         mangaId: state.manga.id,
         chapterNumber: state.chapter.number,

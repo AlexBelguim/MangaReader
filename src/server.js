@@ -35,6 +35,8 @@ import dataRouter from './routes/data.js';
 import scrapersRouter from './routes/scrapers.js';
 import anilistRouter from './routes/anilist.js';
 import usersRouter from './routes/users.js';
+import torrentsRouter from './routes/torrents.js';
+import * as torrentService from './services/torrentService.js';
 
 import { queue } from './queue.js';
 import { auth, guardPermissions } from './middleware/auth.js';
@@ -320,6 +322,7 @@ app.use('/api/chapters', chaptersRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/bookmarks', bookmarksRouter);
 app.use('/api/bookmarks', volumesRouter);     // /api/bookmarks/:id/volumes/*
+app.use('/api/torrents', torrentsRouter);     // Prowlarr search, qBittorrent grabs, volume imports
 app.use('/api/bookmarks', readerRouter);      // /api/bookmarks/:id/chapters/*/images, versions, download
 app.use('/api/favorites', favoritesRouter);
 app.use('/api/categories', categoriesRouter);
@@ -631,6 +634,8 @@ async function start() {
   await scraperFactory.init();
 
   scheduleAutoCheck();
+  // Resume watching torrents that were still downloading at the last shutdown
+  torrentService.start();
 
   // Hand the io instance to the emitter service. Without this every
   // emitToAll/emitToGlobal call in the backend was a silent no-op, so live

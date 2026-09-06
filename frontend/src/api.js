@@ -655,6 +655,67 @@ class ApiClient {
         return this.post('/site-status/clear', { site });
     }
 
+    // ==================== TORRENTS (Prowlarr + qBittorrent) ====================
+
+    getTorrentStatus() {
+        return this.get('/torrents/status');
+    }
+
+    getTorrentSettings() {
+        return this.get('/torrents/settings');
+    }
+
+    saveTorrentSettings(settings) {
+        return this.put('/torrents/settings', settings);
+    }
+
+    // service: 'prowlarr' | 'qbittorrent'; settings are the form values (unsaved)
+    testTorrentService(service, settings) {
+        return this.post('/torrents/settings/test', { service, settings });
+    }
+
+    searchTorrents(query) {
+        return this.get(`/torrents/search?q=${encodeURIComponent(query)}`);
+    }
+
+    getTorrentDownloads() {
+        return this.get('/torrents/downloads');
+    }
+
+    // Send a release to qBittorrent; bookmarkId null = a new local series
+    grabTorrent(releaseId, { bookmarkId = null, newSeriesTitle = null } = {}) {
+        return this.post('/torrents/downloads', { releaseId, bookmarkId, newSeriesTitle });
+    }
+
+    refreshTorrents() {
+        return this.post('/torrents/downloads/refresh', {});
+    }
+
+    importTorrent(hash, bookmarkId = null) {
+        return this.post(`/torrents/downloads/${hash}/import`, { bookmarkId });
+    }
+
+    pauseTorrent(hash) {
+        return this.post(`/torrents/downloads/${hash}/pause`, {});
+    }
+
+    resumeTorrent(hash) {
+        return this.post(`/torrents/downloads/${hash}/resume`, {});
+    }
+
+    removeTorrent(hash, { deleteFiles = false, fromClient = true } = {}) {
+        return this.delete(`/torrents/downloads/${hash}?deleteFiles=${deleteFiles}&fromClient=${fromClient}`);
+    }
+
+    // Volume releases (volumes with their own pages)
+    getVolumePages(bookmarkId, volumeId) {
+        return this.get(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages`);
+    }
+
+    saveVolumeProgress(bookmarkId, volumeId, page, totalPages) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/progress`, { page, totalPages });
+    }
+
     // Hand a site the cookies (and browser identity) from the browser the
     // user completed its human check in. `cookies` is the pasted text.
     importSiteSession(site, cookies, userAgent) {

@@ -44,6 +44,24 @@ If you want to run it directly on your machine:
 
    The backend API runs on port 3000, and the Vite frontend will usually run on port 5173 (check your console output).
 
+## 🧲 Volume releases via Prowlarr and qBittorrent
+
+Weekly chapters come from the scrapers; whole volumes can come from torrents, the way Sonarr and Radarr work: Prowlarr is the indexer layer, qBittorrent the download client, and this app decides what to grab and imports the result.
+
+Setup (admin, **Settings → Torrents**):
+1. **Prowlarr**: its URL and API key (Prowlarr → Settings → General). Nyaa's "Literature – English-translated" is the usual indexer for manga; enable it in Prowlarr.
+2. **qBittorrent**: the Web UI URL and login, a category (default `manga`) and optionally a save path as qBittorrent sees it.
+3. **Path mappings**: qBittorrent reports where it saved a download using *its* paths. If this app sees that folder under a different path (another container mount, a network share), map the prefix, e.g. `/downloads` → `/app/torrents`. The app container must have the finished-downloads folder mounted.
+4. Use **Test connection** for both, then save.
+
+Using it:
+- On a manga page, **Find volumes** searches the indexers for that title. On the Scrapers page, **Volumes** next to the search box searches any title and lets you pick a library series or start a new one.
+- Each release shows the parsed volume number, size, seeders and indexer. **Grab** sends it to qBittorrent; progress shows on the Queue page under Torrents, with pause, resume, remove and a manual **Import now**.
+- When a download finishes it is imported automatically (or by hand): every `.cbz`/`.zip` in it becomes a **volume release** with its own pages under `<manga folder>/Volume NN/`, with a cover from its first page. Chapter-shaped archives (`c001-c010`) become chapters instead. `.cbr`/`.rar` are not supported.
+- Volumes on a manga page now come in two kinds: **chapter collections** (the original kind, a grouping of chapters) and **torrent/archive releases** (own pages). A release volume has a Read button and opens in the reader, which steps between release volumes with Prev/Next and remembers your page. Assign chapters to a release volume (the volume page's "Add chapters") and finishing it marks those chapters read, which is how a censored scanlation run and its uncensored volume can live side by side.
+
+Torrent state is stored in the database (`torrent_downloads`), so it survives restarts; the qBittorrent password is stored there in plain text like the other integration settings.
+
 ## 🛂 Sites that ask for a human check
 
 comix.to sometimes stops serving automated browsers and shows a "verify you're human" puzzle instead (`/@waf/challenge`). The app cannot solve it, and nothing in a web page can read another site's cookies, so the hand-off works like this:

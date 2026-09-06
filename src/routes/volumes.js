@@ -23,6 +23,55 @@ const router = express.Router();
 // admin's library, everyone else their own.
 const ownerId = (req) => req.user?.role === 'demo' ? getPrimaryAdminId() : req.user.id;
 
+// ==================== RELEASE VOLUMES (own pages) ====================
+
+// Pages of a volume release for the reader, with the caller's position
+router.get('/:id/volumes/:volumeId/pages', async (req, res) => {
+    try {
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+        const volume = bookmarkDb.getVolumeById(req.params.volumeId);
+        if (!volume || volume.bookmarkId !== bookmark.id) return res.status(404).json({ error: 'Volume not found' });
+        if (volume.kind !== 'release' || !volume.folder) return res.status(400).json({ error: 'This volume has no pages of its own; open its chapters instead' });
+
+        const dir = path.join(downloader.getMangaDir(bookmark.title, bookmark.alias), volume.folder);
+        const images = await downloader.getImagesFromDir(dir);
+        if (!images || images.length === 0) return res.status(404).json({ error: 'The volume folder has no pages on disk' });
+
+        // Neighbouring release volumes, for next/previous in the reader
+        const releases = (bookmark.volumes || []).filter(v => v.kind === 'release' && v.folder)
+            .sort((a, b) => (a.number ?? 0) - (b.number ?? 0) || a.displayOrder - b.displayOrder);
+        const idx = releases.findIndex(v => v.id === volume.id);
+        const progress = req.user?.id ? (bookmarkDb.getVolumeProgress(req.user.id, bookmark.id)[volume.id] || null) : null;
+
+        res.json({
+            volume: { id: volume.id, name: volume.name, number: volume.number, chapters: volume.chapters, releaseName: volume.releaseName },
+            title: volume.name,
+            images,
+            source: 'local',
+            progress,
+            prev: idx > 0 ? { id: releases[idx - 1].id, name: releases[idx - 1].name } : null,
+            next: idx >= 0 && idx < releases.length - 1 ? { id: releases[idx + 1].id, name: releases[idx + 1].name } : null
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Reading position in a volume release; the last page marks its chapters read
+router.post('/:id/volumes/:volumeId/progress', (req, res) => {
+    try {
+        if (req.user?.role === 'demo') return res.status(403).json({ error: 'Not available in the demo', demo: true });
+        const { page, totalPages } = req.body || {};
+        const volume = bookmarkDb.getVolumeById(req.params.volumeId);
+        if (!volume || volume.bookmarkId !== req.params.id) return res.status(404).json({ error: 'Volume not found' });
+        const result = bookmarkDb.updateVolumeProgress(req.user.id, volume.id, Math.max(1, parseInt(page, 10) || 1), Math.max(1, parseInt(totalPages, 10) || 1));
+        res.json({ success: true, ...result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Create a volume
 router.post('/:id/volumes', async (req, res) => {
     try {
@@ -193,8 +242,26 @@ router.post('/:id/volumes/:volumeId/chapters', async (req, res) => {
 // Delete a volume
 router.delete('/:id/volumes/:volumeId', async (req, res) => {
     try {
-        bookmarkDb.deleteVolume(req.params.volumeId);
-        res.json({ success: true });
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
+        const volume = bookmarkDb.getVolumeById(req.params.volumeId);
+        if (!bookmark || !volume || volume.bookmarkId !== bookmark.id) return res.status(404).json({ error: 'Volume not found' });
+
+        // A release volume owns its pages; they go with it (a chapter
+        // collection owns nothing on disk).
+        let removedPages = false;
+        if (volume.kind === 'release' && volume.folder) {
+            const mangaDir = downloader.getMangaDir(bookmark.title, bookmark.alias);
+            const dir = path.resolve(mangaDir, volume.folder);
+            if (dir.startsWith(path.resolve(mangaDir) + path.sep)) {
+                await fs.remove(dir);
+                removedPages = true;
+            }
+        }
+        if (volume.cover && volume.cover.startsWith('/covers/volumes/')) {
+            await fs.remove(path.join(CONFIG.dataDir, 'covers', 'volumes', path.basename(volume.cover))).catch(() => { });
+        }
+        bookmarkDb.deleteVolume(volume.id);
+        res.json({ success: true, removedPages });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

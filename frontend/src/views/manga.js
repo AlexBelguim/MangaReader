@@ -13,6 +13,7 @@ import { continueReading } from './reader.js';
 import { offlineManager } from '../offline-manager.js';
 import { icon, placeholder, coverImg } from '../icons.js';
 import { session } from '../session.js';
+import { openTorrentSearchModal } from '../torrent-search.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -289,12 +290,16 @@ export function render() {
               <div class="meta-item" style="margin-bottom: 8px;">
                 <a href="#/manga/${manga.id}" class="text-muted" style="text-decoration:none;">← ${displayName}</a>
               </div>
-              <h1>${vol.name}</h1>
+              <h1>${escapeHtml(vol.name)}</h1>
               <div class="manga-detail-meta">
+                ${vol.kind === 'release'
+        ? `<span class="meta-item">${vol.source === 'torrent' ? 'Torrent' : 'Archive'} release · ${vol.pageCount} pages</span>${vol.releaseName ? `<span class="meta-item text-muted" title="${escapeAttr(vol.releaseName)}">${escapeHtml(vol.releaseName)}</span>` : ''}`
+        : ''}
                 <span class="meta-item">${totalCount} Chapters</span>
                 ${downloadedCount > 0 ? `<span class="meta-item downloaded">${downloadedCount} Downloaded</span>` : ''}
               </div>
                <div class="manga-detail-actions">
+                 ${vol.kind === 'release' ? `<button class="btn btn-primary" id="read-volume-btn" data-vol-id="${vol.id}">${icon('play')} Read volume</button>` : ''}
                  <button class="btn btn-secondary" onclick="window.location.hash='#/manga/${manga.id}'">Back to Manga</button>
                  <button class="btn btn-secondary" id="manage-chapters-btn">${state.manageChapters ? 'Done Managing' : `${icon('plus')} Add Chapters`}</button>
                  <button class="btn btn-secondary" id="edit-vol-btn" data-vol-id="${vol.id}">${icon('pencil')} Edit Volume</button>
@@ -353,6 +358,7 @@ export function render() {
                 ${icon('wifi-off')} Auto-Offline${state.isAutoOffline ? ` ${icon('check')}` : ''}
               </button>
               <button class="btn btn-secondary" id="edit-btn">${icon('pencil')} Edit</button>
+              ${session.canDownload ? `<button class="btn btn-secondary" id="find-volumes-btn" title="Search the torrent indexers for volume releases of this title">${icon('package')} Find volumes</button>` : ''}
               <button class="btn btn-secondary" id="anilist-track-btn" style="display:none;">${icon('link')} Track</button>
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
               ${renderAutoCheckToggle(manga)}
@@ -1128,21 +1134,27 @@ function renderVolumesSection(manga, downloadedChapters) {
   const volumeCards = volumes.map(vol => {
     const volChapters = vol.chapters || [];
     const volDownloaded = volChapters.filter(n => downloadedChapters.has(n)).length;
+    // Two kinds: a grouping of chapters, or a release with its own pages
+    // (from a torrent or an archive) that the reader opens directly.
+    const isRelease = vol.kind === 'release';
 
     return `
-      <div class="volume-card" data-volume-id="${vol.id}">
+      <div class="volume-card${isRelease ? ' volume-release' : ''}" data-volume-id="${vol.id}" title="${isRelease ? escapeAttr(`Volume release · ${vol.pageCount} pages${vol.releaseName ? ` · ${vol.releaseName}` : ''}`) : `${volChapters.length} chapters`}">
         <div class="volume-cover">
           ${vol.cover
-        ? `<img src="${vol.cover}" alt="${vol.name}">`
+        ? `<img src="${vol.cover}" alt="${escapeAttr(vol.name)}">`
         : placeholder('book')
       }
           <div class="volume-badges">
-            <span class="badge badge-chapters">${volChapters.length} ch</span>
-            ${volDownloaded > 0 ? `<span class="badge badge-downloaded">${volDownloaded}</span>` : ''}
+            ${isRelease
+        ? `<span class="badge badge-release">${vol.pageCount} pages</span>${volChapters.length ? `<span class="badge badge-chapters">${volChapters.length} ch</span>` : ''}`
+        : `<span class="badge badge-chapters">${volChapters.length} ch</span>${volDownloaded > 0 ? `<span class="badge badge-downloaded">${volDownloaded}</span>` : ''}`}
           </div>
+          ${isRelease ? `<button class="volume-read-btn" data-read-volume="${vol.id}" title="Read this volume">${icon('play', { title: 'Read' })}</button>` : ''}
         </div>
         <div class="volume-info">
-          <div class="volume-name">${vol.name}</div>
+          <div class="volume-name">${escapeHtml(vol.name)}</div>
+          <div class="volume-kind">${isRelease ? `${vol.source === 'torrent' ? 'Torrent' : 'Archive'} release` : 'Chapter collection'}</div>
         </div>
       </div>
     `;
@@ -1951,6 +1963,21 @@ export function setupListeners() {
       router.go(`/manga/${manga.id}/volume/${volumeId}`);
     });
   });
+  // Read a volume release straight from its card, or from the volume page
+  app.querySelectorAll('[data-read-volume]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      router.go(`/read/${manga.id}/volume/${btn.dataset.readVolume}`);
+    });
+  });
+  app.querySelector('#read-volume-btn')?.addEventListener('click', (e) => {
+    router.go(`/read/${manga.id}/volume/${e.currentTarget.dataset.volId}`);
+  });
+
+  // Torrent search for volume releases of this title
+  app.querySelector('#find-volumes-btn')?.addEventListener('click', () => {
+    openTorrentSearchModal({ query: manga.alias || manga.title, bookmarkId: manga.id, bookmarkTitle: manga.alias || manga.title });
+  });
 
   // Volume Management Listeners
   setupVolumeListeners(app);
@@ -2697,7 +2724,11 @@ function setupVolumeListeners(app) {
   const deleteVolBtn = app.querySelector('#delete-volume-btn');
   if (deleteVolBtn) {
     deleteVolBtn.addEventListener('click', async () => {
-      if (!confirm('Are you sure you want to delete this volume? Chapters will remain in the library.')) return;
+      const volToDelete = (state.manga?.volumes || []).find(v => v.id === editModal.dataset.editingVolId);
+      const message = volToDelete?.kind === 'release'
+        ? `Delete "${volToDelete.name}"? Its ${volToDelete.pageCount || ''} pages are removed from disk. Chapters assigned to it stay in the library.`
+        : 'Are you sure you want to delete this volume? Chapters will remain in the library.';
+      if (!confirm(message)) return;
 
       const volId = editModal.dataset.editingVolId;
       try {

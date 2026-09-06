@@ -353,19 +353,90 @@ export const bookmarkDb = {
             }
         }
 
-        const volumesRaw = db.prepare('SELECT id, name, cover, display_order, created_at FROM volumes WHERE bookmark_id = ? ORDER BY display_order, created_at').all(bookmarkId);
+        const volumesRaw = db.prepare('SELECT * FROM volumes WHERE bookmark_id = ? ORDER BY display_order, created_at').all(bookmarkId);
+        return volumesRaw.map(vol => this.rowToVolume(vol));
+    },
 
-        return volumesRaw.map(vol => {
-            const chapters = db.prepare('SELECT chapter_number FROM volume_chapters WHERE volume_id = ? ORDER BY chapter_number').all(vol.id);
-            return {
-                id: vol.id,
-                name: vol.name,
-                cover: vol.cover,
-                displayOrder: vol.display_order || 0,
-                createdAt: vol.created_at,
-                chapters: chapters.map(c => c.chapter_number)
-            };
-        });
+    // Two kinds of volume: 'chapters' (a grouping of chapters, the original
+    // kind) and 'release' (a volume with its own pages, e.g. from a torrent
+    // or an archive), which the reader opens directly.
+    rowToVolume(vol) {
+        const db = getDb();
+        const chapters = db.prepare('SELECT chapter_number FROM volume_chapters WHERE volume_id = ? ORDER BY chapter_number').all(vol.id);
+        return {
+            id: vol.id,
+            bookmarkId: vol.bookmark_id,
+            name: vol.name,
+            cover: vol.cover,
+            displayOrder: vol.display_order || 0,
+            createdAt: vol.created_at,
+            kind: vol.kind || 'chapters',
+            number: vol.number ?? null,
+            folder: vol.folder || null,
+            pageCount: vol.page_count || 0,
+            source: vol.source || null,
+            releaseName: vol.release_name || null,
+            chapters: chapters.map(c => c.chapter_number)
+        };
+    },
+
+    getVolumeById(volumeId) {
+        const row = getDb().prepare('SELECT * FROM volumes WHERE id = ?').get(volumeId);
+        return row ? this.rowToVolume(row) : null;
+    },
+
+    /**
+     * Create or replace the release volume with this number for a bookmark.
+     * Keeps the row (id, cover, assigned chapters) when it already exists,
+     * so re-importing a better release does not lose what the user set up.
+     */
+    upsertReleaseVolume(bookmarkId, { number, name, folder, pageCount, source, releaseName }) {
+        const db = getDb();
+        const existing = db.prepare("SELECT * FROM volumes WHERE bookmark_id = ? AND kind = 'release' AND number = ?").get(bookmarkId, number)
+            || db.prepare('SELECT * FROM volumes WHERE bookmark_id = ? AND folder = ?').get(bookmarkId, folder);
+        if (existing) {
+            db.prepare(`UPDATE volumes SET kind = 'release', number = ?, folder = ?, page_count = ?, source = ?, release_name = ?, name = COALESCE(NULLIF(name, ''), ?) WHERE id = ?`)
+                .run(number, folder, pageCount, source || null, releaseName || null, name, existing.id);
+            return this.getVolumeById(existing.id);
+        }
+        const id = generateId();
+        db.prepare(`
+            INSERT INTO volumes (id, bookmark_id, name, created_at, display_order, kind, number, folder, page_count, source, release_name)
+            VALUES (?, ?, ?, ?, ?, 'release', ?, ?, ?, ?, ?)
+        `).run(id, bookmarkId, name, new Date().toISOString(), Math.round(number * 10), number, folder, pageCount, source || null, releaseName || null);
+        return this.getVolumeById(id);
+    },
+
+    // ---- reading position inside a release volume (per user) ----
+
+    getVolumeProgress(userId, bookmarkId) {
+        const rows = getDb().prepare(`
+            SELECT vp.volume_id, vp.page, vp.total_pages, vp.finished, vp.last_read
+            FROM volume_progress vp JOIN volumes v ON v.id = vp.volume_id
+            WHERE vp.user_id = ? AND v.bookmark_id = ?
+        `).all(userId, bookmarkId);
+        const out = {};
+        for (const r of rows) out[r.volume_id] = { page: r.page, totalPages: r.total_pages, finished: !!r.finished, lastRead: r.last_read };
+        return out;
+    },
+
+    /** Save the position; reaching the last page also marks the volume's chapters read. */
+    updateVolumeProgress(userId, volumeId, page, totalPages) {
+        const db = getDb();
+        const volume = this.getVolumeById(volumeId);
+        if (!volume) return null;
+        const finished = totalPages > 0 && page >= totalPages;
+        const now = new Date().toISOString();
+        db.prepare(`
+            INSERT OR REPLACE INTO volume_progress (volume_id, user_id, page, total_pages, finished, last_read)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(volumeId, userId, page, totalPages, finished ? 1 : 0, now);
+        if (finished) {
+            const markRead = db.prepare('INSERT OR IGNORE INTO read_chapters (bookmark_id, chapter_number, user_id) VALUES (?, ?, ?)');
+            for (const n of volume.chapters) markRead.run(volume.bookmarkId, n, userId);
+        }
+        db.prepare('UPDATE bookmarks SET updated_at = ? WHERE id = ?').run(now, volume.bookmarkId);
+        return { page, totalPages, finished };
     },
 
     // All volumes across a user's library, grouped per bookmark.
@@ -489,6 +560,15 @@ export const bookmarkDb = {
         if (data.cover !== undefined) {
             fields.push('cover = ?');
             values.push(data.cover);
+        }
+
+        // Release-volume fields (see rowToVolume)
+        const extra = { kind: 'kind', number: 'number', folder: 'folder', pageCount: 'page_count', source: 'source', releaseName: 'release_name' };
+        for (const [k, col] of Object.entries(extra)) {
+            if (data[k] !== undefined) {
+                fields.push(`${col} = ?`);
+                values.push(data[k]);
+            }
         }
 
         if (fields.length === 0) return;

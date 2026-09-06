@@ -168,6 +168,29 @@ async function runInCodeMigrations(db, applied) {
                     // Column likely exists
                 }
             }
+        },
+        {
+            name: '005_volume_releases',
+            run: () => {
+                // Volumes with their own pages (imported from a torrent or an
+                // archive) next to the original chapter-grouping volumes.
+                const columns = [
+                    ['kind', "TEXT DEFAULT 'chapters'"],
+                    ['number', 'REAL'],
+                    ['folder', 'TEXT'],
+                    ['page_count', 'INTEGER DEFAULT 0'],
+                    ['source', 'TEXT'],
+                    ['release_name', 'TEXT']
+                ];
+                for (const [name, type] of columns) {
+                    try {
+                        db.prepare(`ALTER TABLE volumes ADD COLUMN ${name} ${type}`).run();
+                        console.log(`  ✓ Added ${name} column to volumes`);
+                    } catch (e) {
+                        // Column likely exists
+                    }
+                }
+            }
         }
     ];
 

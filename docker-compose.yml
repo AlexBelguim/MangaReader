@@ -26,6 +26,10 @@ services:
       - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/data:/app/data
       # Downloads/media
       - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/media/downloads:/app/downloads
+      # Torrent imports (Settings > Torrents): mount qBittorrent's finished
+      # downloads folder here and add a path mapping in the app if qBittorrent
+      # reports it under another path, e.g. /downloads -> /app/torrents
+      # - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/torrents/manga:/app/torrents:ro
 
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest

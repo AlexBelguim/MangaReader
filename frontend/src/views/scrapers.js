@@ -4,6 +4,7 @@ import { icon, placeholder, coverImg } from '../icons.js';
 import { socket, SocketEvents } from '../socket.js';
 import { showToast } from '../utils/toast.js';
 import { openCookieImportModal } from '../site-challenge.js';
+import { openTorrentSearchModal } from '../torrent-search.js';
 import { session } from '../session.js';
 
 function esc(s) {
@@ -303,6 +304,7 @@ class ScraperView {
               <div class="search-row">
                 <input type="text" id="scraper-query" placeholder="Enter manga title to search${this.currentTarget !== 'all' ? ` in ${this.currentTarget}` : ' all sites'}..." value="${this.currentQuery}" required>
                 <button type="submit" class="btn btn-primary" id="scraper-search-btn">Search</button>
+                ${session.canDownload ? `<button type="button" class="btn btn-secondary" id="torrent-search-btn" title="Search the torrent indexers (Prowlarr) for volume releases">${icon('package')} Volumes</button>` : ''}
               </div>
             </form>
           </div>
@@ -520,6 +522,22 @@ class ScraperView {
           // We don't reset currentTarget to 'all' here, so they can keep searching the current target
           this.performSearch();
         }
+      });
+    }
+
+    // Torrent volume search: releases go to a library series or a new one
+    const torrentBtn = document.getElementById('torrent-search-btn');
+    if (torrentBtn) {
+      torrentBtn.addEventListener('click', async () => {
+        const query = (document.getElementById('scraper-query')?.value || '').trim();
+        let library = [];
+        try {
+          const list = await api.getBookmarks();
+          library = (Array.isArray(list) ? list : (list.bookmarks || []))
+            .map(b => ({ id: b.id, title: b.title, alias: b.alias }))
+            .sort((a, b) => (a.alias || a.title).localeCompare(b.alias || b.title));
+        } catch (e) { /* the dialog still works with "new series" */ }
+        openTorrentSearchModal({ query, library });
       });
     }
 
