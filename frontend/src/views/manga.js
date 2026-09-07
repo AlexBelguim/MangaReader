@@ -1941,6 +1941,12 @@ export function setupListeners() {
     });
   });
 
+  // Long-press (hold) on the read / hide / delete button of a chapter: the
+  // same action for every chapter up to and including it
+  app.querySelectorAll('[data-action="read"], [data-action="hide-chapter"], [data-action="delete-chapter"]').forEach(btn => {
+    attachLongPress(btn, () => bulkUpTo(btn.dataset.action, parseFloat(btn.dataset.num)));
+  });
+
   // Version row title click - read that version
   app.querySelectorAll('.version-row .version-title').forEach(title => {
     title.addEventListener('click', (e) => {
@@ -2018,6 +2024,74 @@ async function toggleLock(chapterNum) {
 /**
  * Toggle read status
  */
+const LONG_PRESS_MS = 550;
+
+/**
+ * Run handler when the button is held (touch or mouse); the click that
+ * follows a hold is swallowed so the single-chapter action does not fire.
+ */
+function attachLongPress(btn, handler) {
+  let timer = null;
+  let fired = false;
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    btn.classList.remove('pressing');
+  };
+  btn.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    fired = false;
+    cancel();
+    btn.classList.add('pressing');
+    timer = setTimeout(() => {
+      fired = true;
+      btn.classList.remove('pressing');
+      handler();
+    }, LONG_PRESS_MS);
+  });
+  btn.addEventListener('pointerup', cancel);
+  btn.addEventListener('pointerleave', cancel);
+  btn.addEventListener('pointercancel', cancel);
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Capture phase: runs before the button's own click handler
+  btn.addEventListener('click', (e) => {
+    if (!fired) return;
+    fired = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+}
+
+/** Read / hide / delete every chapter up to and including chapterNum. */
+async function bulkUpTo(action, chapterNum) {
+  const manga = state.manga;
+  if (!manga || !Number.isFinite(chapterNum)) return;
+  const upTo = `chapter ${chapterNum}`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  try {
+    if (action === 'read') {
+      if (!confirm(`Mark every chapter up to ${upTo} as read?`)) return;
+      await api.markChaptersReadUpTo(manga.id, chapterNum);
+      showToast(`Marked read up to ${upTo}`, 'success');
+    } else if (action === 'hide-chapter') {
+      if (!confirm(`Hide every chapter up to ${upTo}? Their downloaded files are removed too. Locked chapters and chapters in a volume stay.`)) return;
+      const r = await api.bulkHideChapters(manga.id, chapterNum);
+      showToast(`Hid ${plural(r.hidden, 'chapter version')}${r.skipped ? `, ${r.skipped} protected` : ''}`, 'success');
+    } else if (action === 'delete-chapter') {
+      if (!confirm(`Delete the downloaded files of every chapter up to ${upTo}? Locked chapters stay.`)) return;
+      const hide = confirm(`Also hide those chapters, up to ${upTo}?`);
+      const r = await api.bulkDeleteChapters(manga.id, chapterNum, hide);
+      showToast(`Deleted ${plural(r.deleted, 'chapter')}${hide ? `, hid ${r.hidden}` : ''}${r.skipped ? `, ${r.skipped} skipped` : ''}`, 'success');
+    } else {
+      return;
+    }
+    await loadData(manga.id);
+    mount([manga.id]);
+  } catch (error) {
+    showToast('Failed: ' + error.message, 'error');
+  }
+}
+
 async function toggleRead(chapterNum) {
   const manga = state.manga;
   const readChapters = new Set(manga.readChapters || []);

@@ -597,4 +597,120 @@ router.post('/:bookmarkId/:chapterNumber/unmerge', async (req, res) => {
     }
 });
 
+// ==================== "UP TO HERE" BULK ACTIONS ====================
+// Long-press on a chapter's hide / delete button: everything up to and
+// including that chapter. Locked chapters and chapters in a volume are
+// left alone, like the single-chapter actions do.
+
+// Hide one version: the same steps as hide-version above. False when the
+// chapter is protected.
+async function hideOneVersion(db, bookmark, chapterNumber, url) {
+    const chapter = db.prepare('SELECT locked, in_volume_id FROM chapters WHERE bookmark_id = ? AND url = ?').get(bookmark.id, url);
+    const lockedSetting = db.prepare('SELECT locked FROM chapter_settings WHERE bookmark_id = ? AND chapter_number = ?').get(bookmark.id, chapterNumber);
+    if (chapter?.locked || lockedSetting?.locked || chapter?.in_volume_id) return false;
+
+    const isDownloaded = db.prepare('SELECT COUNT(*) as count FROM downloaded_versions WHERE bookmark_id = ? AND url = ?').get(bookmark.id, url);
+    if (isDownloaded.count > 0) {
+        try {
+            await downloader.deleteChapter(bookmark.title, chapterNumber, bookmark.alias, url);
+        } catch (e) {
+            // folder already gone
+        }
+    }
+    db.prepare('INSERT OR IGNORE INTO deleted_chapter_urls (bookmark_id, url) VALUES (?, ?)').run(bookmark.id, url);
+    db.prepare('DELETE FROM downloaded_versions WHERE bookmark_id = ? AND url = ?').run(bookmark.id, url);
+    const remaining = db.prepare('SELECT COUNT(*) as count FROM downloaded_versions WHERE bookmark_id = ? AND chapter_number = ?').get(bookmark.id, chapterNumber);
+    if (remaining.count === 0) {
+        db.prepare('DELETE FROM downloaded_chapters WHERE bookmark_id = ? AND chapter_number = ?').run(bookmark.id, chapterNumber);
+        favoritesDb.deleteForChapter(bookmark.id, chapterNumber);
+        trophyDb.deleteForChapter(bookmark.id, chapterNumber);
+    }
+    return true;
+}
+
+// Every listed version of every chapter up to the number
+function versionsUpTo(bookmark, limit) {
+    return (bookmark.chapters || []).filter(c => typeof c.number === 'number' && c.number <= limit && c.url);
+}
+
+router.post('/:bookmarkId/bulk-hide', async (req, res) => {
+    try {
+        const limit = parseFloat(req.body?.upTo);
+        if (!Number.isFinite(limit)) return res.status(400).json({ error: 'upTo (a chapter number) is required' });
+        const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const db = getDb();
+        let hidden = 0;
+        let skipped = 0;
+        for (const c of versionsUpTo(bookmark, limit)) {
+            if (await hideOneVersion(db, bookmark, c.number, c.url)) hidden++;
+            else skipped++;
+        }
+        actionHistoryService.record({
+            actionType: ActionTypes.HIDE_VERSION,
+            entityType: EntityTypes.CHAPTER,
+            entityId: `${bookmark.id}:bulk`,
+            bookmarkId: bookmark.id,
+            beforeState: { upTo: limit, hidden: 0 },
+            afterState: { upTo: limit, hidden },
+            description: `Hid ${hidden} chapter version(s) up to chapter ${limit}`
+        });
+        res.json({ success: true, hidden, skipped });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete the downloaded files of every chapter up to the number; with
+// hide: true the chapters are hidden afterwards as well
+router.post('/:bookmarkId/bulk-delete', async (req, res) => {
+    try {
+        const limit = parseFloat(req.body?.upTo);
+        if (!Number.isFinite(limit)) return res.status(400).json({ error: 'upTo (a chapter number) is required' });
+        const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
+        const settings = chapterSettingsDb.getAll()[bookmark.id] || {};
+        let deleted = 0;
+        let skipped = 0;
+        for (const num of (bookmark.downloadedChapters || []).filter(n => n <= limit)) {
+            if (settings[num]?.locked) {
+                skipped++;
+                continue;
+            }
+            const chapter = (bookmark.chapters || []).find(c => c.number === num);
+            const result = await downloader.deleteChapter(bookmark.title, num, bookmark.alias);
+            if (!result?.success) {
+                skipped++;
+                continue;
+            }
+            await bookmarkDb.markChapterDeleted(bookmark.id, num, chapter?.url);
+            favoritesDb.deleteForChapter(bookmark.id, num);
+            trophyDb.deleteForChapter(bookmark.id, num);
+            deleted++;
+        }
+
+        let hidden = 0;
+        if (req.body?.hide) {
+            const db = getDb();
+            for (const c of versionsUpTo(bookmark, limit)) {
+                if (await hideOneVersion(db, bookmark, c.number, c.url)) hidden++;
+            }
+        }
+        actionHistoryService.record({
+            actionType: ActionTypes.DELETE_CHAPTER,
+            entityType: EntityTypes.CHAPTER,
+            entityId: `${bookmark.id}:bulk`,
+            bookmarkId: bookmark.id,
+            beforeState: { upTo: limit },
+            afterState: { upTo: limit, deleted, hidden },
+            description: `Deleted the files of ${deleted} chapter(s) up to chapter ${limit}${hidden ? ` and hid ${hidden} version(s)` : ''}`
+        });
+        res.json({ success: true, deleted, skipped, hidden });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 export default router;

@@ -11,6 +11,7 @@ import { bookmarkDb } from '../database.js';
 import { getPrimaryAdminId } from '../db/connection.js';
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
+import * as pageEdits from '../services/pageEdits.js';
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -44,17 +45,100 @@ router.get('/:id/volumes/:volumeId/pages', async (req, res) => {
         const idx = releases.findIndex(v => v.id === volume.id);
         const progress = req.user?.id ? (bookmarkDb.getVolumeProgress(req.user.id, bookmark.id)[volume.id] || null) : null;
 
+        const neighbour = (v) => (v ? { id: v.id, name: v.name, number: v.number } : null);
         res.json({
             volume: { id: volume.id, name: volume.name, number: volume.number, chapters: volume.chapters, releaseName: volume.releaseName },
             title: volume.name,
             images,
             source: 'local',
             progress,
-            prev: idx > 0 ? { id: releases[idx - 1].id, name: releases[idx - 1].name } : null,
-            next: idx >= 0 && idx < releases.length - 1 ? { id: releases[idx + 1].id, name: releases[idx + 1].name } : null
+            prev: idx > 0 ? neighbour(releases[idx - 1]) : null,
+            next: idx >= 0 && idx < releases.length - 1 ? neighbour(releases[idx + 1]) : null
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// ---- Page edits on a volume release: the same tools as a chapter ----
+
+// The release volume and its folder, or an answer to the client
+async function releaseVolume(req, res) {
+    const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
+    const volume = bookmark ? bookmarkDb.getVolumeById(req.params.volumeId) : null;
+    if (!bookmark || !volume || volume.bookmarkId !== bookmark.id) {
+        res.status(404).json({ error: 'Volume not found' });
+        return null;
+    }
+    if (volume.kind !== 'release' || !volume.folder) {
+        res.status(400).json({ error: 'This volume has no pages of its own' });
+        return null;
+    }
+    const mangaDir = path.resolve(downloader.getMangaDir(bookmark.title, bookmark.alias));
+    const dir = path.resolve(mangaDir, volume.folder);
+    if (!dir.startsWith(mangaDir + path.sep) || !await fs.pathExists(dir)) {
+        res.status(404).json({ error: 'The volume folder is missing on disk' });
+        return null;
+    }
+    return { bookmark, volume, dir };
+}
+
+// The pages after an edit, and the volume's page count kept in step
+async function pagesAfterEdit(volume, dir) {
+    const images = (await downloader.getImagesFromDir(dir)) || [];
+    bookmarkDb.updateVolume(volume.id, { pageCount: images.length });
+    return images;
+}
+
+function pageEditError(res, error) {
+    if (error.code === 'EBUSY') return res.status(423).json({ error: 'The page is in use; close the reader and try again' });
+    if (/Page not found|Invalid page name/.test(error.message)) return res.status(404).json({ error: error.message });
+    res.status(500).json({ error: error.message });
+}
+
+router.post('/:id/volumes/:volumeId/pages/rotate', async (req, res) => {
+    const found = await releaseVolume(req, res);
+    if (!found) return;
+    try {
+        const { filename, degrees = 90 } = req.body || {};
+        await pageEdits.rotatePage(found.dir, filename, Number(degrees) || 90);
+        res.json({ images: await pagesAfterEdit(found.volume, found.dir) });
+    } catch (error) {
+        pageEditError(res, error);
+    }
+});
+
+router.post('/:id/volumes/:volumeId/pages/swap', async (req, res) => {
+    const found = await releaseVolume(req, res);
+    if (!found) return;
+    try {
+        const { filenameA, filenameB } = req.body || {};
+        await pageEdits.swapPages(found.dir, filenameA, filenameB);
+        res.json({ images: await pagesAfterEdit(found.volume, found.dir) });
+    } catch (error) {
+        pageEditError(res, error);
+    }
+});
+
+router.post('/:id/volumes/:volumeId/pages/split', async (req, res) => {
+    const found = await releaseVolume(req, res);
+    if (!found) return;
+    try {
+        await pageEdits.splitPage(found.dir, (req.body || {}).filename);
+        res.json({ images: await pagesAfterEdit(found.volume, found.dir) });
+    } catch (error) {
+        pageEditError(res, error);
+    }
+});
+
+router.delete('/:id/volumes/:volumeId/pages/:filename', async (req, res) => {
+    const found = await releaseVolume(req, res);
+    if (!found) return;
+    try {
+        await pageEdits.deletePage(found.dir, decodeURIComponent(req.params.filename));
+        res.json({ images: await pagesAfterEdit(found.volume, found.dir) });
+    } catch (error) {
+        pageEditError(res, error);
     }
 });
 

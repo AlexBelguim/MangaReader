@@ -18,6 +18,7 @@ import { downloader } from '../downloader.js';
 import { bookmarkDb } from '../db/bookmarks.js';
 import { CONFIG } from '../config.js';
 import { parseReleaseName, volumeLabel } from './release-name.js';
+import { splitSpread } from './pageEdits.js';
 
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|avif)$/i;
 const ARCHIVE_RE = /\.(cbz|zip)$/i;
@@ -78,7 +79,24 @@ async function writePages(targetDir, items, readItem) {
   for (const item of items) {
     index++;
     const ext = path.extname(item.name).toLowerCase().replace(/^\.jpeg$/, '.jpg');
-    await fs.writeFile(path.join(tempDir, `${String(index).padStart(3, '0')}${ext}`), await readItem(item));
+    const buffer = await readItem(item);
+    // Every stored page is a single page: a double-page spread is cut in
+    // two in reading order (the rule the scraper applies too), so the
+    // reader's two-page pairing never lands on a spread.
+    let halves = null;
+    try {
+      halves = await splitSpread(buffer);
+    } catch (e) {
+      // unreadable image: keep it as it is
+    }
+    const pagePath = (n) => path.join(tempDir, `${String(n).padStart(3, '0')}${ext}`);
+    if (halves) {
+      await fs.writeFile(pagePath(index), halves.first);
+      index++;
+      await fs.writeFile(pagePath(index), halves.second);
+    } else {
+      await fs.writeFile(pagePath(index), buffer);
+    }
   }
   await fs.remove(targetDir);
   await fs.move(tempDir, targetDir);

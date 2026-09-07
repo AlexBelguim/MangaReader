@@ -576,6 +576,37 @@ class ApiClient {
         return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNumber}/read`, { isRead });
     }
 
+    // Everything up to and including a chapter (long-press actions)
+    markChaptersReadUpTo(bookmarkId, chapterNumber) {
+        return this.post(`/bookmarks/${bookmarkId}/chapters/${chapterNumber}/read-below`, {});
+    }
+
+    bulkHideChapters(bookmarkId, upTo) {
+        return this.post(`/chapters/${bookmarkId}/bulk-hide`, { upTo });
+    }
+
+    bulkDeleteChapters(bookmarkId, upTo, hide = false) {
+        return this.post(`/chapters/${bookmarkId}/bulk-delete`, { upTo, hide });
+    }
+
+    // ==================== VOLUME RELEASE PAGE EDITS ====================
+
+    rotateVolumePage(bookmarkId, volumeId, filename, degrees = 90) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages/rotate`, { filename, degrees });
+    }
+
+    swapVolumePages(bookmarkId, volumeId, filenameA, filenameB) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages/swap`, { filenameA, filenameB });
+    }
+
+    splitVolumePage(bookmarkId, volumeId, filename) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages/split`, { filename });
+    }
+
+    deleteVolumePage(bookmarkId, volumeId, filename) {
+        return this.delete(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages/${encodeURIComponent(filename)}`);
+    }
+
     // ==================== ANILIST ====================
 
     anilistStatus() {

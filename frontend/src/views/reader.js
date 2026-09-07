@@ -208,8 +208,8 @@ export function render() {
           ${state.isStreamingMode ? `
           <button class="reader-bar-btn" id="stream-add-lib-btn" title="Add to Library">${icon('download', { title: 'Add to Library' })}</button>
           <span class="reader-bar-divider"></span>
-          ` : state.isVolumeMode ? '' : `
-          <button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">${icon('star', { title: 'Add to favorites' })}</button>
+          ` : `
+          ${state.isVolumeMode ? '' : `<button class="reader-bar-btn ${currentIsFavorited ? 'active' : ''}" id="favorites-btn" title="Add to favorites">${icon('star', { title: 'Add to favorites' })}</button>`}
 
           <button class="reader-bar-btn" id="rotate-btn" title="Rotate 90° CW">${icon('rotate-cw', { title: 'Rotate 90 degrees clockwise' })}</button>
           ${state.mode === 'manga' && !state.singlePageMode ? `
@@ -224,7 +224,7 @@ export function render() {
             <button class="reader-bar-btn ${state.singlePageMode ? 'active' : ''}" id="single-page-btn" title="${state.singlePageMode ? 'Switch to double page' : 'Switch to single page'}">
               ${state.singlePageMode ? icon('rectangle-vertical') : icon('columns-2')}
             </button>
-            ${state.isStreamingMode || state.isVolumeMode ? '' : `
+            ${state.isStreamingMode ? '' : `
             <button class="reader-bar-btn ${currentIsTrophy ? 'active' : ''}" id="trophy-btn" title="${currentIsTrophy ? 'Unmark trophy' : 'Mark as trophy'}">${icon('trophy')}</button>
             `}
           ` : ''}
@@ -1021,7 +1021,7 @@ export function setupListeners() {
 
         try {
             showToast('Rotating...', 'info');
-            const result = await api.rotatePage(state.manga.id, state.chapter.number, filename, 90, state.versionUrl);
+            const result = await pageEditor().rotate(filename);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Page rotated', 'success');
@@ -1046,7 +1046,7 @@ export function setupListeners() {
 
         try {
             showToast('Swapping...', 'info');
-            const result = await api.swapPages(state.manga.id, state.chapter.number, fnA, fnB, state.versionUrl);
+            const result = await pageEditor().swap(fnA, fnB);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Pages swapped', 'success');
@@ -1082,13 +1082,13 @@ export function setupListeners() {
 
             // Now perform the split operation (keep loading true while this happens)
             showToast('Splitting page...', 'info');
-            const result = await api.splitPage(state.manga.id, state.chapter.number, filename, state.versionUrl);
+            const result = await pageEditor().split(filename);
 
             // Re-enable button
             if (splitBtn) splitBtn.disabled = false;
 
             // Load the chapter fresh - this will set loading=false when done
-            await loadData(state.manga.id, state.chapter.number, state.versionUrl);
+            await loadData(state.manga.id, currentChapterRef(), state.versionUrl);
 
             // Re-render the app to dismiss the loading spinner
             app.innerHTML = render();
@@ -1106,7 +1106,7 @@ export function setupListeners() {
             // On error, reload to restore state
             if (splitBtn) splitBtn.disabled = false;
             showToast('Split failed: ' + e.message, 'error');
-            await loadData(state.manga.id, state.chapter.number, state.versionUrl);
+            await loadData(state.manga.id, currentChapterRef(), state.versionUrl);
             app.innerHTML = render();
             setupListeners();
         }
@@ -1121,7 +1121,7 @@ export function setupListeners() {
 
         try {
             showToast('Deleting...', 'info');
-            const result = await api.deletePage(state.manga.id, state.chapter.number, filename, state.versionUrl);
+            const result = await pageEditor().remove(filename);
             if (result.images) {
                 await reloadImages(result.images);
                 showToast('Page deleted', 'success');
@@ -1248,6 +1248,58 @@ export function setupListeners() {
  * Extract filename from image URL
  * e.g. "/api/public/chapter-images/123/4/page001.jpg?_t=123" → "page001.jpg"
  */
+// Volume releases keep their reader settings and trophy pages in the same
+// per-chapter tables, under a key no chapter number can take.
+function volumeSettingsKey(volume) {
+    return -(1000 + (Number(volume?.number) || 0));
+}
+
+// Settings for a volume, falling back to the previous volume's; and its trophies
+async function loadVolumeSettings(mangaId, data) {
+    const key = volumeSettingsKey(data.volume);
+    try {
+        let settings = await api.getChapterSettings(mangaId, key);
+        if (!hasChapterSettings(settings) && data.prev) {
+            settings = await api.getChapterSettings(mangaId, volumeSettingsKey(data.prev));
+        }
+        if (hasChapterSettings(settings)) applyChapterSettings(settings);
+    } catch (e) {
+        console.warn('Failed to load volume settings', e);
+    }
+    try {
+        state.trophyPages = (await api.getTrophyPages(mangaId, key)) || {};
+    } catch (e) {
+        state.trophyPages = {};
+    }
+}
+
+// The page tools work on the chapter version that is open or, for a volume
+// release, on the volume's own pages
+function pageEditor() {
+    const id = state.manga.id;
+    if (state.isVolumeMode) {
+        const vol = state.volume.id;
+        return {
+            rotate: (f) => api.rotateVolumePage(id, vol, f, 90),
+            swap: (a, b) => api.swapVolumePages(id, vol, a, b),
+            split: (f) => api.splitVolumePage(id, vol, f),
+            remove: (f) => api.deleteVolumePage(id, vol, f)
+        };
+    }
+    const num = state.chapter.number;
+    return {
+        rotate: (f) => api.rotatePage(id, num, f, 90, state.versionUrl),
+        swap: (a, b) => api.swapPages(id, num, a, b, state.versionUrl),
+        split: (f) => api.splitPage(id, num, f, state.versionUrl),
+        remove: (f) => api.deletePage(id, num, f, state.versionUrl)
+    };
+}
+
+// What loadData needs to reopen what is open now
+function currentChapterRef() {
+    return state.isVolumeMode ? `volume:${state.volume.id}` : state.chapter.number;
+}
+
 function getFilenameFromUrl(img) {
     const url = typeof img === 'string' ? img : img?.url || img?.urls?.[0];
     if (!url) return null;
@@ -1276,7 +1328,7 @@ async function reloadImages(newImages) {
     // only hides that for the current session — reopening the chapter would
     // serve the pre-edit images again. Refresh the stored copy so the edit
     // actually sticks.
-    if (state.manga?.id && state.chapter?.number && !state.isStreamingMode) {
+    if (state.manga?.id && state.chapter?.number && !state.isStreamingMode && !state.isVolumeMode) {
         offlineManager.refreshOfflineChapter(state.manga.id, state.chapter.number)
             .then(refreshed => {
                 if (refreshed) console.log('[Reader] Refreshed offline copy after page edit');
@@ -2040,9 +2092,10 @@ async function loadData(mangaId, chapterNum, versionUrl) {
             state.manga = manga;
             const data = await api.getVolumePages(mangaId, volumeId);
             state.volume = { ...data.volume, prev: data.prev || null, next: data.next || null };
-            state.chapter = { number: null, title: data.volume.name, volumeId };
+            state.chapter = { number: volumeSettingsKey(data.volume), title: data.volume.name, volumeId };
             state.images = data.images || [];
             volumeProgress = data.progress && !data.progress.finished ? data.progress : null;
+            await loadVolumeSettings(mangaId, data);
 
         // Special handling for Favorite Galleries
         } else if (mangaId === 'gallery') {
@@ -2104,6 +2157,7 @@ async function loadData(mangaId, chapterNum, versionUrl) {
                     const pages = await api.getTrophyPagesAll(manga.id);
                     // Format into virtual spreads
                     for (const chNum in pages) {
+                    if (parseFloat(chNum) < 0) continue; // a volume's trophies stay in its reader
                         for (const pgIdx in pages[chNum]) {
                             const data = pages[chNum][pgIdx];
                             const images = await api.getChapterImages(manga.id, chNum);
@@ -2127,6 +2181,7 @@ async function loadData(mangaId, chapterNum, versionUrl) {
                 const pages = await api.getTrophyPagesAll(subId);
 
                 for (const chNum in pages) {
+                    if (parseFloat(chNum) < 0) continue; // a volume's trophies stay in its reader
                     for (const pgIdx in pages[chNum]) {
                         const data = pages[chNum][pgIdx];
                         const images = await api.getChapterImages(subId, chNum);
@@ -2652,8 +2707,7 @@ function applyChapterSettings(s) {
 
 /** Capture the reader settings for the open chapter (see progressSnapshot). */
 function settingsSnapshot() {
-    // Volume releases have no per-chapter settings row to save into
-    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode || state.isVolumeMode) return null;
+    if (!state.manga || !state.chapter || state.isCollectionMode || state.isStreamingMode) return null;
     return {
         mangaId: state.manga.id,
         chapterNumber: state.chapter.number,
