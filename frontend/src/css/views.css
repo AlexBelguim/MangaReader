@@ -3391,3 +3391,14 @@ body.demo-mode #app {
 .scraper-session-forget:hover {
     color: var(--text-primary);
 }
+
+/* Outcome of a grab, under the release name in the Find volumes dialog */
+.torrent-row-status {
+    font-size: 0.8em;
+    margin-top: 2px;
+    color: var(--text-secondary);
+    white-space: normal;
+}
+.torrent-row-status:empty { display: none; }
+.torrent-row-status.ok { color: var(--success); }
+.torrent-row-status.error { color: var(--error); }

@@ -2,14 +2,20 @@
  * "Find volumes" dialog: search Prowlarr for releases of a title and hand
  * one to qBittorrent. Opened from a manga page (target = that series) and
  * from the Scrapers page (target = a library series or a new one).
+ * A grab's outcome is shown under its row: the grab itself is answered at
+ * once, the fetch and hand-over happen in the background and arrive via
+ * the torrent updates (socket, with polling as fallback).
  */
 
 import { api } from './api.js';
+import { socket, SocketEvents } from './socket.js';
 import { showToast } from './utils/toast.js';
 import { icon } from './icons.js';
 
 const MODAL_ID = 'torrent-search-modal';
+const TRACK_POLL_MS = 3000;
 let openSeq = 0; // a newer open wins over one still checking the status
+let cleanup = null;
 
 function esc(s) {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -44,9 +50,27 @@ function volumeLabel(parsed) {
     return '';
 }
 
+/** What a tracked torrent row means for the release it came from. */
+function outcomeOf(t) {
+    switch (t.status) {
+        case 'grabbing': return { kind: 'pending', text: 'Fetching the release for qBittorrent…' };
+        case 'downloading': {
+            const pct = Math.round((t.progress || 0) * 100);
+            return { kind: 'ok', text: `Downloading in qBittorrent${pct ? ` · ${pct}%` : ''} · progress on the Queue page`, done: true };
+        }
+        case 'completed': return { kind: 'ok', text: 'Downloaded, waiting for import', done: true };
+        case 'importing': return { kind: 'ok', text: 'Importing into the library…', done: true };
+        case 'imported': return { kind: 'ok', text: 'Imported', done: true };
+        case 'failed': return { kind: 'error', text: `Failed: ${t.error || 'unknown error'}`, done: true, retry: true };
+        case 'removed': return { kind: 'error', text: 'Removed from qBittorrent', done: true, retry: true };
+        default: return { kind: 'pending', text: t.status };
+    }
+}
+
 export function closeTorrentSearchModal() {
     document.getElementById(MODAL_ID)?.remove();
     document.removeEventListener('keydown', onKey);
+    if (cleanup) { cleanup(); cleanup = null; }
 }
 
 function onKey(e) {
@@ -112,9 +136,68 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
     const results = modal.querySelector('#torrent-results');
     const input = modal.querySelector('#torrent-query');
     let current = [];
+    // Grabs made from this dialog: row index -> { hash (pending, then real), title, done }
+    const tracked = new Map();
+    let pollTimer = null;
+
+    const setRowStatus = (index, kind, text) => {
+        const el = results.querySelector(`.torrent-row-status[data-index="${index}"]`);
+        if (!el) return;
+        el.className = `torrent-row-status ${kind}`;
+        el.textContent = text;
+    };
+    const setRowButton = (index, label, enabled, primary) => {
+        const btn = results.querySelector(`.torrent-grab[data-index="${index}"]`);
+        if (!btn) return;
+        btn.textContent = label;
+        btn.disabled = !enabled;
+        btn.classList.toggle('btn-primary', primary);
+        btn.classList.toggle('btn-secondary', !primary);
+    };
+
+    // Match the torrent list against the grabs made here. A pending entry
+    // is replaced by the real torrent, so fall back to the newest entry
+    // with the same release title.
+    const applyTorrents = (torrents) => {
+        if (!Array.isArray(torrents)) return;
+        for (const [index, track] of tracked) {
+            let t = torrents.find(x => x.hash === track.hash);
+            if (!t) {
+                t = torrents.filter(x => x.releaseTitle === track.title).sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')))[0];
+            }
+            if (!t) continue;
+            track.hash = t.hash;
+            const o = outcomeOf(t);
+            setRowStatus(index, o.kind, o.text);
+            if (o.retry) setRowButton(index, 'Grab again', true, true);
+            else if (o.done) setRowButton(index, 'Grabbed', false, false);
+            if (o.done) track.done = true;
+        }
+        if (![...tracked.values()].some(x => !x.done)) stopPolling();
+    };
+    const onUpdate = (payload) => applyTorrents(payload?.torrents);
+    const pollTracked = async () => {
+        try {
+            const data = await api.getTorrentDownloads();
+            applyTorrents(data.torrents);
+        } catch (e) { /* next round */ }
+    };
+    const startPolling = () => {
+        if (!pollTimer) pollTimer = setInterval(pollTracked, TRACK_POLL_MS);
+    };
+    const stopPolling = () => {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    };
+    socket.on(SocketEvents.TORRENT_UPDATE, onUpdate);
+    cleanup = () => {
+        socket.off(SocketEvents.TORRENT_UPDATE, onUpdate);
+        stopPolling();
+    };
 
     const render = (list) => {
         current = list;
+        tracked.clear();
+        stopPolling();
         if (list.length === 0) {
             results.innerHTML = '<div class="torrent-hint">No releases found. Try a shorter title.</div>';
             return;
@@ -125,7 +208,10 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
                 <tbody>
                 ${list.map((r, i) => `
                     <tr>
-                        <td class="torrent-title" title="${esc(r.title)}">${esc(r.title)}${r.parsed?.digital ? ' <span class="badge badge-downloaded">Digital</span>' : ''}${r.infoUrl ? ` <a href="${esc(r.infoUrl)}" target="_blank" rel="noopener" class="torrent-info-link" title="Open on the indexer">${icon('globe')}</a>` : ''}</td>
+                        <td class="torrent-title" title="${esc(r.title)}">
+                            <div>${esc(r.title)}${r.parsed?.digital ? ' <span class="badge badge-downloaded">Digital</span>' : ''}${r.infoUrl ? ` <a href="${esc(r.infoUrl)}" target="_blank" rel="noopener" class="torrent-info-link" title="Open on the indexer">${icon('globe')}</a>` : ''}</div>
+                            <div class="torrent-row-status" data-index="${i}"></div>
+                        </td>
                         <td>${esc(volumeLabel(r.parsed))}</td>
                         <td>${formatBytes(r.size)}</td>
                         <td class="${(r.seeders ?? 0) === 0 ? 'torrent-dead' : ''}">${r.seeders ?? '?'}</td>
@@ -159,17 +245,17 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
         const targetId = bookmarkId || (select ? select.value || null : null);
         btn.disabled = true;
         btn.textContent = 'Sending…';
+        setRowStatus(index, 'pending', 'Sending to qBittorrent…');
         try {
             const result = await api.grabTorrent(release.id, { bookmarkId: targetId, newSeriesTitle: targetId ? null : release.parsed?.title || null });
-            btn.textContent = 'Grabbed';
-            btn.classList.remove('btn-primary');
-            btn.classList.add('btn-secondary');
-            showToast(`Grabbing ${release.title}. Progress is on the Queue page.`, 'success');
+            tracked.set(index, { hash: result.torrent?.hash, title: release.title, done: false });
+            setRowButton(index, 'Grabbed', false, false);
+            if (result.torrent) applyTorrents([result.torrent]);
+            startPolling();
             if (typeof onGrabbed === 'function') onGrabbed(result.torrent);
         } catch (e) {
-            btn.disabled = false;
-            btn.textContent = 'Grab';
-            showToast(`Grab failed: ${e.message}`, 'error');
+            setRowButton(index, 'Grab again', true, true);
+            setRowStatus(index, 'error', `Failed: ${e.message}`);
         }
     };
 

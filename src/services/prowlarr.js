@@ -102,18 +102,29 @@ export async function search(settings, query, { categories = MANGA_CATEGORIES, l
  * @returns {Promise<{ magnet: string } | { torrent: Buffer, filename: string }>}
  */
 export async function fetchRelease(settings, release) {
-  if (release.magnetUrl && !release.downloadUrl) {
-    if (!String(release.magnetUrl).startsWith('magnet:')) throw new Error('Invalid magnet link');
-    return { magnet: release.magnetUrl };
+  // Prowlarr proxies both links through its own /download endpoint; a
+  // magnet comes back from there as a redirect to the magnet URI. The
+  // .torrent file is tried first, the magnet when that fails.
+  const links = [release.downloadUrl, release.magnetUrl].filter(Boolean).map(String);
+  if (links.length === 0) throw new Error('This release has no download link');
+  let lastError = null;
+  for (const link of links) {
+    try {
+      return await fetchLink(settings, link, release);
+    } catch (e) {
+      lastError = e;
+    }
   }
-  if (!release.downloadUrl) throw new Error('This release has no download link');
-  if (release.downloadUrl.startsWith('magnet:')) return { magnet: release.downloadUrl };
+  throw lastError;
+}
 
-  // The release object comes from the client. Only Prowlarr's own download
-  // links get the API key, and only http(s) is fetched at all.
+async function fetchLink(settings, link, release) {
+  if (link.startsWith('magnet:')) return { magnet: link };
+
+  // Only Prowlarr's own links get the API key, and only http(s) is fetched at all
   let target;
   try {
-    target = new URL(release.downloadUrl);
+    target = new URL(link);
   } catch (e) {
     throw new Error('Invalid download link');
   }
@@ -135,17 +146,39 @@ export async function fetchRelease(settings, release) {
     const location = response.headers.get('location') || '';
     if (location.startsWith('magnet:')) return { magnet: location };
     // A redirect to another http location: follow it once
-    const followed = await fetch(location, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    let next;
+    try {
+      next = new URL(location, target);
+    } catch (e) {
+      throw new Error('Release download redirected to an invalid location');
+    }
+    if (!/^https?:$/.test(next.protocol)) throw new Error('Release download redirected to a non-http location');
+    let followed;
+    try {
+      followed = await fetch(next, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    } catch (e) {
+      throw new Error(`Could not fetch the release: ${e.message}`);
+    }
     if (!followed.ok) throw new Error(`Release download answered HTTP ${followed.status}`);
-    return { torrent: Buffer.from(await followed.arrayBuffer()), filename: filenameFrom(followed, release) };
+    return payloadFrom(followed, release);
   }
-  if (!response.ok) throw new Error(`Release download answered HTTP ${response.status}`);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Release download answered HTTP ${response.status}${text ? `: ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}` : ''}`);
+  }
+  return payloadFrom(response, release);
+}
+
+// A torrent file (bencoded, starts with "d"), or a magnet URI sent as text
+async function payloadFrom(response, release) {
   const contentType = response.headers.get('content-type') || '';
   const body = Buffer.from(await response.arrayBuffer());
-  if (/text\/html/.test(contentType) && !body.subarray(0, 1).equals(Buffer.from('d'))) {
-    throw new Error('Prowlarr returned a web page instead of a torrent file (check the URL and API key)');
+  if (body.subarray(0, 7).toString('latin1') === 'magnet:') return { magnet: body.toString('utf8').trim() };
+  if (body.length === 0) throw new Error('The release download was empty');
+  if (body[0] !== 0x64) {
+    if (/text\/html/.test(contentType)) throw new Error('Prowlarr returned a web page instead of a torrent file (check the URL and API key)');
+    throw new Error('The release download is not a torrent file');
   }
-  if (release.magnetUrl && body.length === 0) return { magnet: release.magnetUrl };
   return { torrent: body, filename: filenameFrom(response, release) };
 }
 

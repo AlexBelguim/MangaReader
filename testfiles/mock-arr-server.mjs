@@ -111,7 +111,8 @@ const server = http.createServer(async (req, res) => {
         guid: `mock-${r.id}`, title: r.title, size: r.size, seeders: r.seeders, leechers: r.leechers, indexer: r.indexer, indexerId: 1,
         protocol: 'torrent', publishDate: '2026-08-01T00:00:00Z', categories: [{ id: 7030, name: 'Books/Comics' }],
         downloadUrl: r.magnet ? null : `http://localhost:${PORT}/prowlarr/download/${r.id}?apikey=${API_KEY}`,
-        magnetUrl: r.magnet ? `magnet:?xt=urn:btih:${readTorrent(torrentFor(r)).infoHash}&dn=${encodeURIComponent(r.title)}` : null,
+        // Like Prowlarr: the magnet is proxied through /download too, which answers with a redirect to the magnet URI
+        magnetUrl: r.magnet ? `http://localhost:${PORT}/prowlarr/download/${r.id}?apikey=${API_KEY}` : null,
         infoUrl: `https://nyaa.si/view/${1000 + r.id}`
       }));
       return json(res, 200, hits);
@@ -120,6 +121,10 @@ const server = http.createServer(async (req, res) => {
     if (dl) {
       const r = RELEASES.find(x => x.id === parseInt(dl[1], 10));
       if (!r) return json(res, 404, { message: 'no such release' });
+      if (r.magnet) {
+        res.writeHead(302, { Location: `magnet:?xt=urn:btih:${readTorrent(torrentFor(r)).infoHash}&dn=${encodeURIComponent(r.title)}` });
+        return res.end();
+      }
       res.writeHead(200, { 'Content-Type': 'application/x-bittorrent', 'Content-Disposition': `attachment; filename="${r.title}.torrent"` });
       return res.end(torrentFor(r));
     }
