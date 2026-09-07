@@ -301,6 +301,12 @@ class ApiClient {
         return this.post(`/bookmarks/${bookmarkId}/covers/from-chapter`, { chapterNumber, filename });
     }
 
+    // Page URLs of a downloaded chapter version (what the reader loads)
+    getReaderImages(bookmarkId, chapterNumber, version = null) {
+        const query = version ? `?version=${encodeURIComponent(version)}` : '';
+        return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNumber}/reader-images${query}`);
+    }
+
     getChapterImages(bookmarkId, chapterNumber) {
         return this.get(`/bookmarks/${bookmarkId}/chapters/${chapterNumber}/images`);
     }
@@ -751,6 +757,28 @@ class ApiClient {
 
     importTorrent(hash, bookmarkId = null, selection = null) {
         return this.post(`/torrents/downloads/${hash}/import`, { bookmarkId, selection });
+    }
+
+    // Releases already on disk (torrent save path / path mappings)
+    browseImportFolders(path = null) {
+        return this.get(`/torrents/local-downloads/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+    }
+
+    getFolderContents(path, bookmarkId = null) {
+        return this.get(`/torrents/local-downloads/contents?path=${encodeURIComponent(path)}${bookmarkId ? `&bookmarkId=${encodeURIComponent(bookmarkId)}` : ''}`);
+    }
+
+    importFolder({ path, bookmarkId = null, newSeriesTitle = null, selection = null }) {
+        return this.post('/torrents/local-downloads/import', { path, bookmarkId, newSeriesTitle, selection });
+    }
+
+    // Leftovers in the downloads folder (admin)
+    getDownloadLeftovers() {
+        return this.get('/admin/downloads/leftovers');
+    }
+
+    removeDownloadLeftovers(paths) {
+        return this.post('/admin/downloads/leftovers/remove', { paths });
     }
 
     pauseTorrent(hash) {

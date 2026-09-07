@@ -8,7 +8,11 @@
  */
 
 import express from 'express';
+import path from 'path';
+import fs from 'fs-extra';
 import { requireAdmin } from '../middleware/auth.js';
+import { describeRelease, importRelease } from '../services/volumeImporter.js';
+import { parseReleaseName } from '../services/release-name.js';
 import { torrentSettingsDb, torrentDb, isMaskedSecret } from '../db/torrents.js';
 import { bookmarkDb } from '../db/bookmarks.js';
 import * as torrents from '../services/torrentService.js';
@@ -123,6 +127,122 @@ router.post('/downloads/refresh', async (req, res) => {
         res.json({ torrents: torrentDb.list({ limit: 100 }) });
     } catch (error) {
         res.status(502).json({ error: error.message });
+    }
+});
+
+// ==================== IMPORT FROM A FOLDER ALREADY ON DISK ====================
+// A release that is already where qBittorrent puts things (a re-import after
+// a deleted volume, or something dropped there by hand) can be imported
+// without grabbing anything. Browsing is limited to the roots the torrent
+// settings name: the local side of every path mapping and the mapped save
+// path. The route prefix carries "download" so the same permission as a
+// grab applies.
+
+function importRoots() {
+    const s = torrentSettingsDb.get();
+    const roots = new Set();
+    for (const m of s.pathMappings || []) if (m.to) roots.add(path.resolve(m.to));
+    if (s.qbittorrent?.savePath) {
+        const local = torrents.toLocalPath(s.qbittorrent.savePath);
+        if (local) roots.add(path.resolve(local));
+    }
+    return [...roots];
+}
+
+// The requested path, resolved and confirmed to sit inside one of the roots
+function resolveImportPath(requested) {
+    const roots = importRoots();
+    if (roots.length === 0) {
+        const err = new Error('Nothing to browse: set a save path or a path mapping in Settings > Torrents first');
+        err.status = 400;
+        throw err;
+    }
+    const target = path.resolve(String(requested || ''));
+    const inside = roots.some(r => target === r || target.startsWith(r + path.sep));
+    if (!inside) {
+        const err = new Error('That path is outside the folders this app may import from');
+        err.status = 403;
+        throw err;
+    }
+    return { target, roots };
+}
+
+const ARCHIVE_RE = /\.(cbz|zip)$/i;
+
+// Folders and archives at a path (no path: the roots themselves)
+router.get('/local-downloads/browse', async (req, res) => {
+    try {
+        const roots = importRoots();
+        if (!req.query.path) {
+            const list = [];
+            for (const r of roots) list.push({ name: r, path: r, kind: 'dir', exists: await fs.pathExists(r) });
+            return res.json({ roots, path: null, parent: null, entries: list });
+        }
+        const { target } = resolveImportPath(req.query.path);
+        if (!await fs.pathExists(target)) return res.status(404).json({ error: 'Folder not found' });
+        const dirents = await fs.readdir(target, { withFileTypes: true });
+        const entries = [];
+        for (const d of dirents) {
+            if (d.name.startsWith('.')) continue;
+            const full = path.join(target, d.name);
+            if (d.isDirectory()) entries.push({ name: d.name, path: full, kind: 'dir' });
+            else if (d.isFile() && ARCHIVE_RE.test(d.name)) {
+                let size = null;
+                try { size = (await fs.stat(full)).size; } catch (e) { /* unreadable */ }
+                entries.push({ name: d.name, path: full, kind: 'archive', size });
+            }
+        }
+        entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.kind === 'dir' ? -1 : 1));
+        const isRoot = roots.includes(target);
+        res.json({ roots, path: target, parent: isRoot ? null : path.dirname(target), entries });
+    } catch (error) {
+        res.status(statusOf(error, 500)).json({ error: error.message });
+    }
+});
+
+// What a folder (or archive) would import as, shaped like /downloads/:hash/contents
+router.get('/local-downloads/contents', async (req, res) => {
+    try {
+        const { target } = resolveImportPath(req.query.path);
+        if (!await fs.pathExists(target)) return res.status(404).json({ error: 'Not found on disk' });
+        const plan = await describeRelease(target);
+        const bookmark = req.query.bookmarkId ? bookmarkDb.getById(req.query.bookmarkId, req.user.id) : null;
+        res.json({
+            success: true,
+            releaseName: plan.releaseName,
+            items: plan.items,
+            unsupported: plan.unsupported,
+            bookmarkId: bookmark?.id || null,
+            bookmarkTitle: bookmark ? (bookmark.alias || bookmark.title) : null,
+            newSeriesTitle: parseReleaseName(path.basename(target)).title || path.basename(target),
+            existing: {
+                volumes: (bookmark?.volumes || []).filter(v => v.kind === 'release').map(v => ({ number: v.number, name: v.name })),
+                chapters: bookmark?.downloadedChapters || []
+            }
+        });
+    } catch (error) {
+        res.status(statusOf(error, 500)).json({ error: error.message });
+    }
+});
+
+// Import a folder (or archive): body { path, bookmarkId?, newSeriesTitle?, selection? }
+router.post('/local-downloads/import', async (req, res) => {
+    try {
+        const { path: requested, bookmarkId, newSeriesTitle, selection } = req.body || {};
+        const { target } = resolveImportPath(requested);
+        if (!await fs.pathExists(target)) return res.status(404).json({ error: 'Not found on disk' });
+        if (selection !== undefined && selection !== null && !Array.isArray(selection)) return res.status(400).json({ error: 'selection must be a list' });
+        let bookmark = bookmarkId ? bookmarkDb.getById(bookmarkId, req.user.id) : null;
+        if (bookmarkId && !bookmark) return res.status(404).json({ error: 'Series not found' });
+        if (!bookmark) bookmark = torrents.createLocalSeries(newSeriesTitle || parseReleaseName(path.basename(target)).title || path.basename(target), req.user.id);
+        const summary = await importRelease(bookmark, target, { releaseName: path.basename(target), selection: Array.isArray(selection) ? selection : null });
+        if (summary.volumes.length === 0 && summary.chapters.length === 0) {
+            return res.status(400).json({ error: summary.skipped[0] || 'Nothing was imported', summary });
+        }
+        console.log(`[Torrents] Imported folder "${target}" into ${bookmark.alias || bookmark.title}: ${summary.volumes.length} volume(s), ${summary.chapters.length} chapter(s)`);
+        res.json({ success: true, bookmarkId: bookmark.id, summary });
+    } catch (error) {
+        res.status(statusOf(error, 500)).json({ error: error.message });
     }
 });
 

@@ -361,7 +361,7 @@ export async function importTorrent(hash, { bookmarkId = null, selection = null 
   }
 }
 
-function createLocalSeries(title, userId) {
+export function createLocalSeries(title, userId) {
   const clean = String(title || 'Untitled').trim() || 'Untitled';
   const result = bookmarkDb.add({
     url: `local://${downloader.sanitizeFileName(clean)}`,
@@ -440,4 +440,4 @@ export function start() {
   if (torrentDb.active().length > 0) ensurePolling();
 }
 
-export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT };
+export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, createLocalSeries, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT };

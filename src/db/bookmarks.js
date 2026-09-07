@@ -495,11 +495,13 @@ export const bookmarkDb = {
 
         const insertVolume = db.prepare('INSERT INTO volumes (id, bookmark_id, name, created_at) VALUES (?, ?, ?, ?)');
         const insertChapter = db.prepare('INSERT INTO volume_chapters (volume_id, chapter_number) VALUES (?, ?)');
+        const markChapter = db.prepare('UPDATE chapters SET in_volume_id = ? WHERE bookmark_id = ? AND number = ?');
 
         const createTransaction = db.transaction(() => {
             insertVolume.run(id, bookmarkId, name, now);
             for (const num of chapterNumbers) {
                 insertChapter.run(id, num);
+                markChapter.run(id, bookmarkId, num);
             }
         });
 
@@ -507,10 +509,15 @@ export const bookmarkDb = {
         return { id, name, chapters: chapterNumbers };
     },
 
-    // Delete a volume
+    // Delete a volume. Its chapters stay; only the grouping goes, and with
+    // it the "in a volume" protection flag on the chapter rows (otherwise a
+    // deleted volume would keep its chapters unhideable and undeletable).
     deleteVolume(volumeId) {
         const db = getDb();
-        db.prepare('DELETE FROM volumes WHERE id = ?').run(volumeId);
+        db.transaction(() => {
+            db.prepare('UPDATE chapters SET in_volume_id = NULL WHERE in_volume_id = ?').run(volumeId);
+            db.prepare('DELETE FROM volumes WHERE id = ?').run(volumeId);
+        })();
     },
 
     // Reorder volume (move up or down)
@@ -577,16 +584,21 @@ export const bookmarkDb = {
         db.prepare(`UPDATE volumes SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     },
 
-    // Update volume chapters (replace all)
+    // Update volume chapters (replace all), keeping chapters.in_volume_id in step
     updateVolumeChapters(volumeId, chapterNumbers) {
         const db = getDb();
+        const volume = db.prepare('SELECT bookmark_id FROM volumes WHERE id = ?').get(volumeId);
         const insertChapter = db.prepare('INSERT INTO volume_chapters (volume_id, chapter_number) VALUES (?, ?)');
         const deleteChapters = db.prepare('DELETE FROM volume_chapters WHERE volume_id = ?');
+        const unmarkAll = db.prepare('UPDATE chapters SET in_volume_id = NULL WHERE in_volume_id = ?');
+        const markChapter = db.prepare('UPDATE chapters SET in_volume_id = ? WHERE bookmark_id = ? AND number = ?');
 
         const transaction = db.transaction(() => {
             deleteChapters.run(volumeId);
+            unmarkAll.run(volumeId);
             for (const num of chapterNumbers) {
                 insertChapter.run(volumeId, num);
+                if (volume) markChapter.run(volumeId, volume.bookmark_id, num);
             }
         });
 

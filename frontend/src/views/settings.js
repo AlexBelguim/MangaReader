@@ -93,6 +93,114 @@ function renderTorrentsSection() {
     `;
 }
 
+function renderCleanupSection() {
+    return `
+        <div class="settings-group" id="cleanup-group">
+            <h2>Downloads folder</h2>
+            <p class="settings-hint">Find folders on disk that nothing in the library refers to any more: chapter versions whose download was removed, volumes that were deleted, series folders left behind by a renamed alias, and unfinished imports. Scanning changes nothing; you choose what to delete.</p>
+            <div class="settings-actions torrents-actions">
+                <button type="button" class="btn btn-secondary" id="cleanup-scan">${icon('search')} Scan for leftovers</button>
+                <span class="torrents-test-result" id="cleanup-summary"></span>
+            </div>
+            <div id="cleanup-results"></div>
+        </div>
+    `;
+}
+
+async function initCleanupSection() {
+    const $ = (id) => document.getElementById(id);
+    const scanBtn = $('cleanup-scan');
+    const summary = $('cleanup-summary');
+    const results = $('cleanup-results');
+    if (!scanBtn) return;
+
+    const fmt = (n) => {
+        if (!n) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0; let v = n;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
+    };
+    const kindLabel = { series: 'Series folder', chapter: 'Chapter folder', volume: 'Volume folder', temp: 'Unfinished import' };
+
+    const picked = () => [...results.querySelectorAll('.cl-pick:checked')].map(cb => cb.value);
+    const updateDeleteBtn = () => {
+        const btn = results.querySelector('#cleanup-delete');
+        if (!btn) return;
+        const n = picked().length;
+        btn.disabled = n === 0;
+        btn.textContent = n ? `Delete ${n} selected` : 'Delete selected';
+    };
+
+    const render = (data) => {
+        if (!data.groups.length) {
+            results.innerHTML = '<p class="settings-hint">Nothing left over. Every folder on disk is in use.</p>';
+            return;
+        }
+        results.innerHTML = `
+            <div class="review-tools">
+                <button type="button" class="btn btn-sm btn-secondary" id="cleanup-all">Select all</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="cleanup-none">Select none</button>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-sm btn-danger" id="cleanup-delete" disabled>Delete selected</button>
+            </div>
+            ${data.groups.map(g => `
+                <div class="cleanup-group">
+                    <div class="cleanup-series">${icon('book-open')} ${esc(g.series)}${g.bookmarkIds.length ? '' : ' <small>(no series in the library)</small>'}</div>
+                    ${g.items.map(it => `
+                        <label class="cleanup-item">
+                            <input type="checkbox" class="cl-pick" value="${esc(it.path)}">
+                            <span class="cleanup-kind">${kindLabel[it.kind] || it.kind}</span>
+                            <span class="cleanup-name" title="${esc(it.path)}">${esc(it.name)}</span>
+                            <span class="cleanup-note">${esc(it.note)}</span>
+                            <span class="cleanup-size">${fmt(it.size)}</span>
+                        </label>`).join('')}
+                </div>`).join('')}
+            <div id="cleanup-result"></div>
+        `;
+        results.querySelector('#cleanup-all').addEventListener('click', () => { results.querySelectorAll('.cl-pick').forEach(cb => { cb.checked = true; }); updateDeleteBtn(); });
+        results.querySelector('#cleanup-none').addEventListener('click', () => { results.querySelectorAll('.cl-pick').forEach(cb => { cb.checked = false; }); updateDeleteBtn(); });
+        results.addEventListener('change', updateDeleteBtn);
+        results.querySelector('#cleanup-delete').addEventListener('click', async () => {
+            const paths = picked();
+            if (!paths.length) return;
+            const size = data.groups.flatMap(g => g.items).filter(it => paths.includes(it.path)).reduce((a, it) => a + it.size, 0);
+            if (!confirm(`Delete ${paths.length} folder${paths.length === 1 ? '' : 's'} from disk (${fmt(size)})? This cannot be undone.`)) return;
+            const btn = results.querySelector('#cleanup-delete');
+            btn.disabled = true;
+            btn.textContent = 'Deleting…';
+            try {
+                const r = await api.removeDownloadLeftovers(paths);
+                showToast(`Deleted ${r.removed.length} folder${r.removed.length === 1 ? '' : 's'}, freed ${fmt(r.freed)}`, 'success');
+                if (r.skipped.length) {
+                    results.querySelector('#cleanup-result').innerHTML = `<ul class="task-error-list">${r.skipped.map(s => `<li>${esc(s.path)}: ${esc(s.reason)}</li>`).join('')}</ul>`;
+                }
+                await scan();
+            } catch (e) {
+                showToast(`Delete failed: ${e.message}`, 'error');
+                updateDeleteBtn();
+            }
+        });
+    };
+
+    const scan = async () => {
+        scanBtn.disabled = true;
+        summary.textContent = 'Scanning…';
+        try {
+            const data = await api.getDownloadLeftovers();
+            summary.textContent = data.totalItems
+                ? `${data.totalItems} leftover${data.totalItems === 1 ? '' : 's'}, ${fmt(data.totalSize)}`
+                : 'Nothing left over';
+            render(data);
+        } catch (e) {
+            summary.textContent = `Scan failed: ${e.message}`;
+        } finally {
+            scanBtn.disabled = false;
+        }
+    };
+    scanBtn.addEventListener('click', scan);
+}
+
 async function initTorrentsSection() {
     const $ = (id) => document.getElementById(id);
     const mappingsEl = $('tor-path-mappings');
@@ -269,6 +377,7 @@ export default {
                     </div>
 
                     ${session.isAdmin ? renderTorrentsSection() : ''}
+                    ${session.isAdmin ? renderCleanupSection() : ''}
                 </div>
             </div>
         `;
@@ -405,6 +514,7 @@ export default {
         refreshAnilistStatus();
 
         if (session.isAdmin) initTorrentsSection();
+        if (session.isAdmin) initCleanupSection();
 
         // ---- Slideshow section ----
         const cfg = { ...SLIDESHOW_DEFAULTS, ...(loadedSettings.slideshow || {}) };

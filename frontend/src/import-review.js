@@ -3,7 +3,8 @@
  * archive or image folder with the target it would get (volume N,
  * chapter N, or skip), editable, with warnings for duplicate numbers and
  * for volumes or chapters the series already has. Opened from the Queue
- * page ("Review import" / "Import again").
+ * page ("Review import" / "Import again") for a torrent, and from the
+ * manga page's "Import from folder" for a release already on disk.
  */
 
 import { api } from './api.js';
@@ -34,10 +35,13 @@ function onKey(e) {
 }
 
 /**
- * @param {object} torrent  a row from the torrent list (hash, name, bookmarkId, newSeriesTitle)
+ * @param {object} source  a torrent row ({ hash, name, bookmarkId, newSeriesTitle })
+ *   or a folder/archive on disk ({ path, name, bookmarkId })
  * @param {{ onImported?: Function }} opts
  */
-export async function openImportReviewModal(torrent, { onImported } = {}) {
+export async function openImportReviewModal(source, { onImported } = {}) {
+    const torrent = source;
+    const fromDisk = !source.hash;
     closeImportReviewModal();
     const modal = document.createElement('div');
     modal.id = MODAL_ID;
@@ -62,7 +66,7 @@ export async function openImportReviewModal(torrent, { onImported } = {}) {
 
     let data;
     try {
-        data = await api.getTorrentContents(torrent.hash);
+        data = fromDisk ? await api.getFolderContents(source.path, source.bookmarkId || null) : await api.getTorrentContents(torrent.hash);
     } catch (e) {
         body.innerHTML = `<div class="torrent-hint error">${esc(e.message)}</div>`;
         return;
@@ -200,7 +204,9 @@ export async function openImportReviewModal(torrent, { onImported } = {}) {
         btn.textContent = 'Importing…';
         body.querySelectorAll('input, select, button').forEach(el => { el.disabled = true; });
         try {
-            const r = await api.importTorrent(torrent.hash, targetId, selection);
+            const r = fromDisk
+                ? await api.importFolder({ path: source.path, bookmarkId: targetId, newSeriesTitle: data.newSeriesTitle || source.name, selection })
+                : await api.importTorrent(torrent.hash, targetId, selection);
             const v = r.summary?.volumes || [];
             const c = r.summary?.chapters || [];
             const skipped = r.summary?.skipped || [];

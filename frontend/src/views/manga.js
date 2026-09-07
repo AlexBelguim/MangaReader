@@ -14,6 +14,8 @@ import { offlineManager } from '../offline-manager.js';
 import { icon, placeholder, coverImg } from '../icons.js';
 import { session } from '../session.js';
 import { openTorrentSearchModal } from '../torrent-search.js';
+import { openChapterPagesModal } from '../chapter-pages.js';
+import { openFolderImportModal } from '../folder-import.js';
 import { openVolumeManager } from '../volume-manager.js';
 
 const CHAPTERS_PER_PAGE = 50;
@@ -360,6 +362,7 @@ export function render() {
               </button>
               <button class="btn btn-secondary" id="edit-btn">${icon('pencil')} Edit</button>
               ${session.canDownload ? `<button class="btn btn-secondary" id="find-volumes-btn" title="Search the torrent indexers for volume releases of this title">${icon('package')} Find volumes</button>` : ''}
+              ${session.canDownload ? `<button class="btn btn-secondary" id="import-folder-btn" title="Import a release that is already on disk (torrent folder), without downloading it again">${icon('folder')} Import from folder</button>` : ''}
               <button class="btn btn-secondary" id="anilist-track-btn" style="display:none;">${icon('link')} Track</button>
               ${(manga.volumes || []).length === 0 ? '<button class="btn btn-secondary" id="add-volume-btn">+ Add Volume</button>' : ''}
               ${renderAutoCheckToggle(manga)}
@@ -949,6 +952,15 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
     : (downloadedVersions ? [downloadedVersions] : []);
   const downloadedCount = downloadedList.length;
 
+  // Page count of the version the row opens (or the first folder on disk),
+  // as a pill that opens the page grid - for every downloaded chapter, not
+  // only those with several versions.
+  const primaryFolder = folderFor(displayVersions[0]?.url) || folders.find(f => f.url) || folders[0] || null;
+  const pageCount = primaryFolder ? primaryFolder.imageCount : (manga.downloadedPageCounts?.[num] ?? null);
+  const pagesPill = isDownloaded && pageCount !== null
+    ? `<button class="chapter-pages-pill ${primaryFolder && looksIncomplete(primaryFolder) ? 'warn' : ''}" data-action="pages" data-num="${num}" ${primaryFolder?.url ? `data-url="${encodeURIComponent(primaryFolder.url)}"` : ''} title="${pageCount} pages - view and edit them">${icon('images')} ${pageCount}</button>`
+    : '';
+
   // Render version dropdown if multiple versions exist
   const versionsHtml = hasMultiple ? `
     <div class="versions-dropdown hidden" id="versions-${num}">
@@ -1014,6 +1026,7 @@ function renderChapterItem(num, versions, downloadedChapters, readChapters, mang
         </span>
         ${merge ? `<span class="chapter-tag merged" title="Combined from ${merge.sources.map(n => `Ch. ${n}`).join(', ')}">Combined</span>` : (isExtra ? '<span class="chapter-tag">Extra</span>' : '')}
         <div class="chapter-actions">
+          ${pagesPill}
           ${merge && !isExcluded ? `<button class="btn-icon small" data-action="split-chapter" data-num="${num}" title="Split back into ${merge.sources.map(n => `Ch. ${n}`).join(', ')}">${icon('scissors', { title: 'Split' })}</button>` : ''}
           ${isExcluded
       ? `<button class="btn-icon small warning" data-action="restore-chapter" data-num="${num}" title="Restore Chapter">${icon('undo-2', { title: 'Restore chapter' })}</button>`
@@ -1907,6 +1920,23 @@ export function setupListeners() {
         case 'versions':
           toggleVersions(num);
           break;
+        case 'pages': {
+          const versionsOf = manga.chapters.filter(c => c.number === num);
+          const labelOf = (u) => {
+            const v = versionsOf.find(c => c.url === u);
+            if (!v) return null;
+            const t = v.title && v.title !== `Chapter ${num}` ? v.title : '';
+            return t || v.releaseGroup || null;
+          };
+          openChapterPagesModal({
+            mangaId: manga.id, num,
+            title: labelOf(url) || '',
+            versions: (manga.chapterFolders?.[num] || []).map(f => ({ ...f, label: labelOf(f.url) })),
+            versionUrl: url,
+            onChanged: async () => { await loadData(manga.id); mount([manga.id]); }
+          });
+          break;
+        }
         case 'read-version':
           router.go(`/read/${manga.id}/${num}?version=${encodeURIComponent(url)}`);
           break;
@@ -1987,6 +2017,12 @@ export function setupListeners() {
   });
 
   // Torrent search for volume releases of this title
+  app.querySelector('#import-folder-btn')?.addEventListener('click', () => {
+    openFolderImportModal({
+      bookmarkId: manga.id, bookmarkTitle: manga.alias || manga.title,
+      onImported: async () => { await loadData(manga.id); mount([manga.id]); }
+    });
+  });
   app.querySelector('#find-volumes-btn')?.addEventListener('click', () => {
     openTorrentSearchModal({ query: manga.alias || manga.title, bookmarkId: manga.id, bookmarkTitle: manga.alias || manga.title });
   });

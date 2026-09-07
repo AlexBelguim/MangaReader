@@ -3639,3 +3639,274 @@ button[data-action].pressing {
 .vm-order { white-space: nowrap; }
 #review-result { margin-top: var(--space-sm); }
 #review-result .btn { margin-top: var(--space-xs); }
+
+/* ==================== Chapter pages (chapter-pages.js) ==================== */
+.chapter-pages-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.chapter-pages-pill svg {
+    width: 13px;
+    height: 13px;
+}
+
+.chapter-pages-pill:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+}
+
+.chapter-pages-pill.warn {
+    border-color: var(--warning, #f0a030);
+    color: var(--warning, #f0a030);
+}
+
+.chapter-pages-modal {
+    z-index: 10002;
+}
+
+.chapter-pages-modal .modal-content {
+    max-width: min(1100px, calc(100vw - 32px));
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+}
+
+.chapter-pages-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-lg) 0;
+}
+
+.chapter-pages-toolbar .spacer {
+    flex: 1;
+}
+
+.chapter-pages-version select {
+    margin-left: 6px;
+}
+
+.chapter-pages-hint {
+    padding: 4px var(--space-lg) var(--space-sm);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.chapter-pages-body {
+    padding: 0 var(--space-lg) var(--space-lg);
+    overflow-y: auto;
+}
+
+.chapter-pages-body.busy {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.chapter-pages-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: var(--space-sm);
+}
+
+.chapter-page {
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-secondary, rgba(255, 255, 255, 0.03));
+    overflow: hidden;
+}
+
+.chapter-page.picked {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-primary);
+}
+
+.chapter-page img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    object-fit: contain;
+    background: #000;
+}
+
+.chapter-page figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 4px 6px;
+}
+
+.chapter-page-num {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.chapter-page-tools {
+    display: flex;
+    gap: 2px;
+}
+
+.chapter-page-tools svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* ==================== Import from folder (folder-import.js) ==================== */
+.folder-crumbs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+    min-height: 32px;
+}
+
+.folder-path {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-list {
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+}
+
+.folder-entry {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-strong);
+    cursor: pointer;
+}
+
+.folder-entry:last-child {
+    border-bottom: none;
+}
+
+.folder-entry:hover {
+    background: var(--bg-hover);
+}
+
+.folder-entry.picked {
+    background: var(--bg-hover);
+    box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.folder-entry.missing {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.folder-entry-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.folder-entry-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-entry-meta {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.folder-import-modal .modal-footer .spacer {
+    flex: 1;
+}
+
+/* ==================== Downloads cleanup (settings) ==================== */
+.cleanup-group {
+    margin-top: var(--space-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.cleanup-series {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--surface-secondary, rgba(255, 255, 255, 0.04));
+    font-weight: 600;
+}
+
+.cleanup-series svg {
+    width: 16px;
+    height: 16px;
+}
+
+.cleanup-series small {
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.cleanup-item {
+    display: grid;
+    grid-template-columns: auto 130px minmax(120px, 1fr) minmax(160px, 2fr) 80px;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 6px 10px;
+    border-top: 1px solid var(--border-strong);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.cleanup-item:hover {
+    background: var(--bg-hover);
+}
+
+.cleanup-kind {
+    color: var(--text-secondary);
+}
+
+.cleanup-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cleanup-note {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.cleanup-size {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.review-tools .spacer {
+    flex: 1;
+}
+
+@media (max-width: 700px) {
+    .cleanup-item {
+        grid-template-columns: auto 1fr 70px;
+    }
+    .cleanup-kind, .cleanup-note {
+        display: none;
+    }
+}

@@ -62,6 +62,11 @@ Using it:
 
 Torrent state is stored in the database (`torrent_downloads`), so it survives restarts; the qBittorrent password is stored there in plain text like the other integration settings.
 
+Related library tools:
+- **Import from folder** (manga page): import a release that is already on disk - in qBittorrent's save folder or under any path mapping - without downloading it again, for example after deleting a volume. Browse to the folder or `.cbz`, review what it imports as, import. The source files are never touched.
+- **Chapter pages**: every downloaded chapter row shows its page count as a pill; it opens a grid of the pages with the page tools (rotate, cut a spread in two, swap, delete), the same tools the reader has. With several downloaded versions the grid switches between them.
+- **Downloads folder cleanup** (Settings, admin): scan the downloads folder for leftovers nothing refers to any more - chapter versions whose download was removed, folders of deleted volumes, series folders left behind by a renamed alias, unfinished imports - with sizes, and delete what you tick. Nothing is deleted without ticking it, and only what a fresh scan still calls a leftover.
+
 ## 🛂 Sites that ask for a human check
 
 comix.to sometimes stops serving automated browsers and shows a "verify you're human" puzzle instead (`/@waf/challenge`, a rotate-the-picture check that hands out a `waf_pass` cookie good for about a day). The app cannot solve it, but it can put a person in front of it and keep everything else waiting in the meantime:

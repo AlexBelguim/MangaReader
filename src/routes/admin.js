@@ -4,6 +4,8 @@
 
 import express from 'express';
 import { getDb, chapterSettingsDb } from '../database.js';
+import { requireAdmin } from '../middleware/auth.js';
+import * as downloadsCleanup from '../services/downloadsCleanup.js';
 import { actionHistoryService, ActionTypes, EntityTypes } from '../services/ActionHistoryService.js';
 
 const router = express.Router();
@@ -13,6 +15,30 @@ const router = express.Router();
 /**
  * Get list of all tables in the database
  */
+// ==================== DOWNLOADS FOLDER CLEANUP ====================
+// Leftovers on disk that nothing in the library refers to any more
+// (services/downloadsCleanup.js). Scan is a dry run; cleanup deletes only
+// what the caller ticked and a fresh scan still reports.
+
+router.get('/downloads/leftovers', requireAdmin, async (req, res) => {
+    try {
+        res.json(await downloadsCleanup.scan());
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/downloads/leftovers/remove', requireAdmin, async (req, res) => {
+    try {
+        const paths = Array.isArray(req.body?.paths) ? req.body.paths.map(String) : [];
+        if (paths.length === 0) return res.status(400).json({ error: 'paths required' });
+        if (paths.length > 500) return res.status(400).json({ error: 'Too many at once; do it in batches' });
+        res.json(await downloadsCleanup.remove(paths));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 router.get('/tables', (req, res) => {
     try {
         const db = getDb();
