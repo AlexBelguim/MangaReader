@@ -79,8 +79,16 @@ class ApiClient {
                 throw new Error('Authentication required');
             }
 
-            // Parse JSON response
-            const data = await response.json();
+            // A non-JSON answer (a proxy error page, an HTML error) is reported
+            // with its status instead of as a parse error
+            const text = await response.text();
+            let data;
+            try {
+                data = text ? JSON.parse(text) : {};
+            } catch (e) {
+                const snippet = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+                throw new Error(`Server answered HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`);
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || `Request failed: ${response.status}`);

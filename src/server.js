@@ -411,6 +411,22 @@ app.post('/api/auto-check/run', async (req, res) => {
   }
 });
 
+// ==================== API FALLBACKS ====================
+// Everything under /api answers JSON: unknown routes, and errors Express 5
+// catches from async handlers (its own answers are HTML pages, which the
+// client can only report as "not valid JSON").
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `No API route for ${req.method} ${req.originalUrl}` });
+});
+app.use('/api', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`[API] ${req.method} ${req.originalUrl} failed:`, err);
+  const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600
+    ? err.status
+    : (err?.type === 'entity.parse.failed' ? 400 : 500);
+  res.status(status).json({ error: err?.message || 'Internal server error' });
+});
+
 // ==================== AUTO-CHECK SCHEDULER ====================
 
 async function sendPushNotifications(mangaTitle, chapterCount) {

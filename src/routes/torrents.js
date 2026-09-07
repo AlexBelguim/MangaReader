@@ -110,6 +110,7 @@ router.post('/downloads', async (req, res) => {
         const row = await torrents.grab({ releaseId: String(id), bookmarkId: bookmarkId || null, newSeriesTitle: newSeriesTitle || null, userId: req.user.id, autoImport: autoImport ?? null });
         res.json({ success: true, torrent: row });
     } catch (error) {
+        console.error(`[Torrents] Grab failed: ${error.message}`);
         res.status(statusOf(error, 502)).json({ error: error.message });
     }
 });
