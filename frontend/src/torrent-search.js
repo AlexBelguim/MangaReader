@@ -164,7 +164,7 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
             btn.textContent = 'Grabbed';
             btn.classList.remove('btn-primary');
             btn.classList.add('btn-secondary');
-            showToast(`Sent to qBittorrent: ${release.title}. Progress is on the Queue page.`, 'success');
+            showToast(`Grabbing ${release.title}. Progress is on the Queue page.`, 'success');
             if (typeof onGrabbed === 'function') onGrabbed(result.torrent);
         } catch (e) {
             btn.disabled = false;

@@ -145,7 +145,11 @@ export function getCachedRelease(id) {
 // ─── Grab ────────────────────────────────────────────────────────────
 
 /**
- * Send a cached search hit to qBittorrent and start tracking it.
+ * Start grabbing a cached search hit. Answers at once with a pending entry
+ * (status "grabbing", temporary hash); fetching the .torrent through
+ * Prowlarr and handing it to qBittorrent happen in the background, because
+ * a tunnel or proxy in front of the app may not keep a request open that
+ * long. The entry is replaced by the real torrent, or marked failed.
  * @param {{ releaseId: string, bookmarkId?: string, newSeriesTitle?: string, userId?: number, autoImport?: boolean }} opts
  */
 export async function grab({ releaseId, bookmarkId = null, newSeriesTitle = null, userId = null, autoImport = null }) {
@@ -153,22 +157,12 @@ export async function grab({ releaseId, bookmarkId = null, newSeriesTitle = null
   if (!release) throw fail('Search results expired, search again', 410);
   if (!release.downloadUrl && !release.magnetUrl) throw fail('That release has no download link', 400);
   const s = settings();
+  requireProwlarr();
   const client = qbt();
-  const payload = await prowlarr.fetchRelease(requireProwlarr(), release);
-  const added = await client.add({
-    ...payload,
-    category: s.qbittorrent.category || undefined,
-    savePath: s.qbittorrent.savePath || undefined
-  });
-  if (!added.hash) throw new Error('Could not determine the torrent hash');
 
-  const existing = torrentDb.get(added.hash);
-  if (existing && ['downloading', 'completed', 'importing'].includes(existing.status)) {
-    throw fail(`Already downloading: ${existing.name || existing.releaseTitle}`, 409);
-  }
-  const row = torrentDb.insert({
-    hash: added.hash,
-    name: added.name || release.title,
+  const pending = torrentDb.insert({
+    hash: `grab-${crypto.randomUUID()}`,
+    name: release.title,
     releaseTitle: release.title,
     size: release.size || 0,
     indexer: release.indexer || null,
@@ -176,13 +170,45 @@ export async function grab({ releaseId, bookmarkId = null, newSeriesTitle = null
     bookmarkId,
     newSeriesTitle: bookmarkId ? null : (newSeriesTitle || parseReleaseName(release.title).title || release.title),
     userId,
-    status: 'downloading',
+    status: 'grabbing',
     autoImport: autoImport === null ? s.autoImport !== false : !!autoImport
   });
-  console.log(`[Torrents] Grabbed "${row.releaseTitle}" (${row.hash}) for ${bookmarkId ? `bookmark ${bookmarkId}` : `new series "${row.newSeriesTitle}"`}`);
   broadcast();
-  ensurePolling();
-  return row;
+  finishGrab(pending, release, client, s).catch(e => console.error(`[Torrents] Grab of "${release.title}" failed: ${e.message}`));
+  return pending;
+}
+
+async function finishGrab(pending, release, client, s) {
+  try {
+    const payload = await prowlarr.fetchRelease(requireProwlarr(), release);
+    const added = await client.add({
+      ...payload,
+      category: s.qbittorrent.category || undefined,
+      savePath: s.qbittorrent.savePath || undefined
+    });
+    if (!added.hash) throw new Error('Could not determine the torrent hash');
+
+    const existing = torrentDb.get(added.hash);
+    if (existing && ['downloading', 'completed', 'importing'].includes(existing.status)) {
+      throw new Error(`Already downloading: ${existing.name || existing.releaseTitle}`);
+    }
+    if (!torrentDb.get(pending.hash)) return null; // removed from the list meanwhile
+    torrentDb.remove(pending.hash);
+    const row = torrentDb.insert({
+      ...pending,
+      hash: added.hash,
+      name: added.name || release.title,
+      status: 'downloading'
+    });
+    console.log(`[Torrents] Grabbed "${row.releaseTitle}" (${row.hash}) for ${row.bookmarkId ? `bookmark ${row.bookmarkId}` : `new series "${row.newSeriesTitle}"`}`);
+    broadcast();
+    ensurePolling();
+    return row;
+  } catch (e) {
+    if (torrentDb.get(pending.hash)) torrentDb.update(pending.hash, { status: 'failed', error: e.message });
+    broadcast();
+    throw e;
+  }
 }
 
 // ─── Polling ─────────────────────────────────────────────────────────
@@ -332,7 +358,8 @@ function createLocalSeries(title, userId) {
 export async function remove(hash, { deleteFiles = false, fromClient = true } = {}) {
   const row = torrentDb.get(hash);
   if (!row) return false;
-  if (fromClient) {
+  // A pending grab has no torrent in qBittorrent yet
+  if (fromClient && row.status !== 'grabbing') {
     try {
       await qbt().delete(row.hash, deleteFiles);
     } catch (e) {
@@ -374,6 +401,10 @@ export async function testQbittorrent(candidate) {
 
 /** Called once at startup: resume watching anything that was active. */
 export function start() {
+  // A grab that was still fetching when the server stopped never reached qBittorrent
+  for (const row of torrentDb.list({ limit: 1000 }).filter(t => t.status === 'grabbing')) {
+    torrentDb.update(row.hash, { status: 'failed', error: 'The grab was interrupted by a restart; grab it again' });
+  }
   // An import that was running when the server stopped never finished
   for (const row of torrentDb.active().filter(t => t.status === 'importing')) {
     torrentDb.update(row.hash, { status: 'completed', error: 'The import was interrupted by a restart' });

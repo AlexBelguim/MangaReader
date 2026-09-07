@@ -100,7 +100,8 @@ router.get('/downloads', (req, res) => {
     res.json({ torrents: torrentDb.list({ limit: 100 }) });
 });
 
-// Grab a release: body { releaseId, bookmarkId?, newSeriesTitle?, autoImport? }
+// Grab a release: body { releaseId, bookmarkId?, newSeriesTitle?, autoImport? }.
+// Answers 202 with a pending entry; the outcome shows up in the list.
 router.post('/downloads', async (req, res) => {
     try {
         const { releaseId, release, bookmarkId, newSeriesTitle, autoImport } = req.body || {};
@@ -108,7 +109,7 @@ router.post('/downloads', async (req, res) => {
         if (!id) return res.status(400).json({ error: 'releaseId is required (an id from a search)' });
         if (bookmarkId && !bookmarkDb.getById(bookmarkId, req.user.id)) return res.status(404).json({ error: 'Series not found' });
         const row = await torrents.grab({ releaseId: String(id), bookmarkId: bookmarkId || null, newSeriesTitle: newSeriesTitle || null, userId: req.user.id, autoImport: autoImport ?? null });
-        res.json({ success: true, torrent: row });
+        res.status(202).json({ success: true, pending: true, torrent: row });
     } catch (error) {
         console.error(`[Torrents] Grab failed: ${error.message}`);
         res.status(statusOf(error, 502)).json({ error: error.message });

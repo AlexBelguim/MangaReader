@@ -209,6 +209,7 @@ function torrentStatusLabel(t) {
       if (/paused|stopped/i.test(t.state || '')) return 'Paused';
       if (/queued|metaDL|checking/i.test(t.state || '')) return 'Waiting';
       return 'Downloading';
+    case 'grabbing': return 'Fetching the release for qBittorrent';
     case 'completed': return t.autoImport ? 'Downloaded, importing soon' : 'Downloaded';
     case 'importing': return 'Importing';
     case 'imported': return 'Imported';
@@ -221,7 +222,7 @@ function torrentStatusLabel(t) {
 function torrentStatusColor(t) {
   if (t.status === 'imported') return 'var(--success)';
   if (t.status === 'failed' || t.status === 'removed') return 'var(--error)';
-  if (t.status === 'importing' || t.status === 'completed') return 'var(--warning)';
+  if (t.status === 'importing' || t.status === 'completed' || t.status === 'grabbing') return 'var(--warning)';
   return 'var(--text-secondary)';
 }
 
@@ -267,11 +268,11 @@ function renderTorrentCard(t) {
           ${downloading && !paused ? `<button class="btn btn-sm btn-icon" data-taction="pause" title="Pause">${icon('pause', { title: 'Pause' })}</button>` : ''}
           ${paused ? `<button class="btn btn-sm btn-icon" data-taction="resume" title="Resume">${icon('play', { title: 'Resume' })}</button>` : ''}
           ${canImport ? `<button class="btn btn-sm btn-secondary" data-taction="import" title="Import into the library now">${t.status === 'failed' ? 'Retry import' : 'Import now'}</button>` : ''}
-          <button class="btn btn-sm btn-icon btn-danger" data-taction="remove" title="${t.status === 'imported' ? 'Remove from this list' : 'Remove from qBittorrent and this list'}">✕</button>
+          <button class="btn btn-sm btn-icon btn-danger" data-taction="remove" title="${['imported', 'grabbing'].includes(t.status) ? 'Remove from this list' : 'Remove from qBittorrent and this list'}">✕</button>
         </div>
       </div>
       <div class="queue-card-body">
-        ${t.status !== 'imported' ? `
+        ${!['imported', 'grabbing'].includes(t.status) ? `
         <div class="progress-bar-container">
           <div class="progress-bar" style="width: ${pct}%"></div>
           <span class="progress-text">${pct}%${meta ? ` · ${meta}` : ''}</span>
