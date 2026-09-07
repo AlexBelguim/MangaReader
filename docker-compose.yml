@@ -26,10 +26,10 @@ services:
       - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/data:/app/data
       # Downloads/media
       - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/manga/media/downloads:/app/downloads
-      # Torrent imports (Settings > Torrents): mount qBittorrent's finished
-      # downloads folder here and add a path mapping in the app if qBittorrent
-      # reports it under another path, e.g. /downloads -> /app/torrents
-      # - /mnt/ApsonaterCloud/ApsonaterWinshare/Apps/torrents/manga:/app/torrents:ro
+      # Torrent imports (Settings > Torrents): qBittorrent's download folder,
+      # read-only. In the app, map the path qBittorrent reports for it (the
+      # Test button shows its default save path) to /app/torrents.
+      - /mnt/ApsonaterCloud/ApsonaterWinshare/Jellyfin/Down:/app/torrents:ro
 
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
