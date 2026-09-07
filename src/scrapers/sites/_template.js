@@ -60,6 +60,23 @@ export class MySiteScraper extends BaseScraper {
   get supportsBrowse() { return false; }
   get supportsQuickCheck() { return false; }
 
+  // ─── OPTIONAL: Human-verification check ───────────────────────────
+  // For a site that stops serving automated browsers and shows a puzzle a
+  // person has to pass (see sites/comix.js). Opting in gives the site a
+  // gate: while the puzzle is up, its downloads and checks wait in the
+  // queue instead of failing, an admin can pass the puzzle from the app in
+  // the scraper's own browser (streamed), and the resulting cookies are
+  // kept as the site's session. The scraper itself must detect the puzzle
+  // (`isChallengeUrl`) and throw `reportChallenge(...)` from util/challenge.js
+  // when it sees it, and apply the saved session on its pages
+  // (`applySiteSession` from util/site-session.js).
+  //
+  // get supportsSession() { return true; }
+  // get sessionCookieNames() { return ['waf_pass']; }   // what the check hands out; the session ends when it expires
+  // get siteUrl() { return 'https://mysite.com/'; }      // page to open for the assisted solve (default: https://<websiteName>/)
+  // isChallengeUrl(url) { return url.includes('/@waf/challenge'); }
+  // async checkAccess() { ... }                          // load siteUrl once and report { ok, blocked, error }
+
   // ─── REQUIRED: getMangaInfo ───────────────────────────────────────
   // Fetches title, cover, description, and chapter list from a manga URL.
   // This is called when adding a manga to the library.

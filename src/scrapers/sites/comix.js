@@ -157,6 +157,11 @@ export class ComixScraper extends BaseScraper {
   get supportsQuickCheck() { return true; }
   get supportsSearch() { return true; }
   get supportsSession() { return true; }
+  get siteUrl() { return `${BASE_URL}/`; }
+  // `waf_pass` is what /@waf/challenge hands out (about a day); the site
+  // is trusted exactly as long as it lives.
+  get sessionCookieNames() { return ['waf_pass']; }
+  isChallengeUrl(url) { return isChallengeUrl(url); }
 
   // ── Quick Check ──
 

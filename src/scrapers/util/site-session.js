@@ -16,6 +16,7 @@
  */
 
 import path from 'path';
+import { EventEmitter } from 'events';
 import fs from 'fs-extra';
 import { emitToAll } from '../../services/socketService.js';
 import { CONFIG } from '../../config.js';
@@ -23,6 +24,14 @@ import { CONFIG } from '../../config.js';
 const STATE_FILE = path.join(CONFIG.dataDir, 'site-sessions.json');
 
 export const SITE_SESSION_EVENT = 'site:session';
+
+/**
+ * In-process notifications: 'change' (site) whenever a site's saved session
+ * is set, refreshed, flagged stale or forgotten. The site gate listens to
+ * re-arm its expiry timer.
+ */
+export const sessionEvents = new EventEmitter();
+sessionEvents.setMaxListeners(50);
 
 // Longest user agent we accept from the client; real ones are ~100-200 chars.
 const MAX_USER_AGENT_LENGTH = 512;
@@ -342,10 +351,46 @@ function emitSession(site) {
   const entry = sessions.get(site);
   if (!entry) {
     emitToAll(SITE_SESSION_EVENT, { site, cleared: true });
-    return;
+  } else {
+    const s = sessionSummary(entry);
+    emitToAll(SITE_SESSION_EVENT, { site, cookieCount: s.cookieCount, stale: s.stale, updatedAt: s.updatedAt });
   }
-  const s = sessionSummary(entry);
-  emitToAll(SITE_SESSION_EVENT, { site, cookieCount: s.cookieCount, stale: s.stale, updatedAt: s.updatedAt });
+  sessionEvents.emit('change', site);
+}
+
+/**
+ * When the saved session runs out, as epoch milliseconds: the earliest
+ * expiry among the named cookies (the ones the site hands out for passing
+ * its check), or among all cookies when no names are given. Null when there
+ * is no session, a named cookie is missing (the site will say so itself)
+ * or none of the relevant cookies carries an expiry.
+ */
+export function sessionExpiresAt(site, names = []) {
+  const entry = sessions.get(site);
+  if (!entry) return null;
+  const relevant = names.length
+    ? names.map(n => entry.cookies.find(c => c.name === n))
+    : entry.cookies;
+  if (relevant.some(c => !c)) return null;
+  const expiries = relevant.map(c => c.expires).filter(e => e !== undefined);
+  if (!expiries.length) return null;
+  return Math.min(...expiries) * 1000;
+}
+
+/**
+ * Turn the cookies a puppeteer page/browser reports (CDP shape) into stored
+ * cookies for the site: only its domain, normalised, newest per name.
+ */
+export function cookiesFromBrowser(site, browserCookies = [], now = Date.now()) {
+  const byName = new Map();
+  for (const raw of browserCookies) {
+    if (!raw || !cookieDomainMatchesSite(raw.domain, site)) continue;
+    // CDP reports domain cookies with a leading dot and host-only ones
+    // without; normaliseCookie reads that distinction from the domain.
+    const result = normaliseCookie({ ...raw, expires: raw.expires === -1 ? undefined : raw.expires }, site, now);
+    if (result.cookie) byName.set(result.cookie.name, result.cookie);
+  }
+  return [...byName.values()];
 }
 
 /** The saved session for a site with only its unexpired cookies, or null. */
@@ -427,13 +472,7 @@ export function refreshSiteSession(site, pageCookies = []) {
   let changed = false;
   const known = new Map(entry.cookies.map(c => [c.name, c]));
 
-  for (const raw of pageCookies) {
-    if (!raw || !cookieDomainMatchesSite(raw.domain, site)) continue;
-    // CDP reports domain cookies with a leading dot and host-only ones
-    // without; normaliseCookie reads that distinction from the domain.
-    const result = normaliseCookie({ ...raw, expires: raw.expires === -1 ? undefined : raw.expires }, site, now);
-    if (!result.cookie) continue;
-    const c = result.cookie;
+  for (const c of cookiesFromBrowser(site, pageCookies, now)) {
     const existing = known.get(c.name);
     if (existing && existing.value === c.value && existing.expires === c.expires) continue;
     known.set(c.name, c);
@@ -491,6 +530,8 @@ export default {
   normaliseCookie,
   toCookieParams,
   sanitiseUserAgent,
+  sessionExpiresAt,
+  cookiesFromBrowser,
   getSiteSession,
   hasSiteSession,
   listSiteSessions,

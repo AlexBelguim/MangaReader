@@ -4,6 +4,7 @@ import { icon, placeholder, coverImg } from '../icons.js';
 import { socket, SocketEvents } from '../socket.js';
 import { showToast } from '../utils/toast.js';
 import { openCookieImportModal } from '../site-challenge.js';
+import { openAssistModal } from '../site-assist.js';
 import { openTorrentSearchModal } from '../torrent-search.js';
 import { session } from '../session.js';
 
@@ -185,9 +186,9 @@ class ScraperView {
     const challenge = this.challengeFor(s.name);
     let pill;
     if (saved && saved.stale) {
-      pill = `<span class="capability-pill capability-soon" title="${esc(saved.staleReason || 'The site showed its check again')}">${icon('triangle-alert')} Rejected, paste fresh</span>`;
+      pill = `<span class="capability-pill capability-soon" title="${esc(saved.staleReason || 'The site showed its check again')}">${icon('triangle-alert')} Rejected, solve again</span>`;
     } else if (saved && saved.cookieCount === 0) {
-      pill = `<span class="capability-pill capability-soon" title="Every saved cookie has expired">${icon('triangle-alert')} Expired, paste fresh</span>`;
+      pill = `<span class="capability-pill capability-soon" title="Every saved cookie has expired">${icon('triangle-alert')} Expired, solve again</span>`;
     } else if (saved) {
       const when = timeAgo(saved.updatedAt || saved.importedAt);
       // Names and identity are admin-only detail (the server masks them for others)
@@ -251,6 +252,15 @@ class ScraperView {
         const saved = this.sessionFor(site);
         const stale = !!saved && (saved.stale || saved.cookieCount === 0);
         openCookieImportModal({ site, url: challenge?.url, stale, onImported: () => this.loadSiteStatus() });
+      });
+    });
+    document.querySelectorAll('.scraper-session-solve-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const site = e.currentTarget.dataset.scraper;
+        const challenge = this.challengeFor(site);
+        const saved = this.sessionFor(site);
+        const reason = challenge?.reason || (saved && (saved.stale || saved.cookieCount === 0) ? 'rejected' : 'check');
+        openAssistModal({ site, url: challenge?.url, reason, onSolved: () => this.loadSiteStatus() });
       });
     });
     document.querySelectorAll('.scraper-session-forget').forEach(btn => {
@@ -488,10 +498,15 @@ class ScraperView {
             >${icon('book-open')} Browse</button>
             ${s.supportsSession && session.isAdmin ? `
             <button
+              class="btn btn-secondary scraper-session-solve-btn"
+              data-scraper="${esc(s.name)}"
+              title="Pass ${esc(s.name)}'s human check inside the scraper's own browser"
+            >${icon('lock-open')} Solve check</button>
+            <button
               class="btn btn-secondary scraper-session-card-btn"
               data-scraper="${esc(s.name)}"
               title="Hand over cookies from a browser that completed ${esc(s.name)}'s human check"
-            >${icon('lock-open')} Cookies</button>` : ''}
+            >Cookies</button>` : ''}
           </div>
 
         </div>

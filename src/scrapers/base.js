@@ -53,6 +53,29 @@ export class BaseScraper {
     return false;
   }
 
+  // The page to open when a person passes the site's check through the app
+  // (the assisted solve) and what `checkAccess()` loads: the site's front
+  // page, which redirects to the check while the site does not trust us.
+  get siteUrl() {
+    return `https://${this.websiteName}/`;
+  }
+
+  // Cookies the site sets once its check is passed. An assisted solve is
+  // complete when all of them are present; the saved session is over when
+  // one of them expires (the site gate closes shortly before). Empty means
+  // "any cookie": the solve completes when the check page is left behind
+  // and the session lasts as long as its longest-lived cookie.
+  get sessionCookieNames() {
+    return [];
+  }
+
+  // Is this URL the site's human-verification page? Sites that show one
+  // override this (see sites/comix.js); it drives both the detection in
+  // the scraper and the "solved" check of the assisted solve.
+  isChallengeUrl(url) {
+    return false;
+  }
+
   // Check if this scraper can handle the given URL
   canHandle(url) {
     return this.urlPatterns.some(pattern => url.includes(pattern));

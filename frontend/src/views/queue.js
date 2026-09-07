@@ -9,6 +9,7 @@ import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
 import { openCookieImportModal, openSite } from '../site-challenge.js';
+import { openAssistModal } from '../site-assist.js';
 import { session } from '../session.js';
 import { formatBytes } from '../torrent-search.js';
 import { openImportReviewModal } from '../import-review.js';
@@ -74,7 +75,8 @@ function statusColor(status) {
   switch (status) {
     case 'running': return 'var(--color-success)';
     case 'queued':
-    case 'pending': return 'var(--color-warning)';
+    case 'pending':
+    case 'waiting': return 'var(--color-warning)';
     case 'paused': return 'var(--color-info)';
     case 'complete': return 'var(--color-success)';
     case 'error':
@@ -89,6 +91,7 @@ function statusLabel(status) {
     case 'running': return '● Running';
     case 'queued':
     case 'pending': return '◌ Queued';
+    case 'waiting': return '⏳ Waiting for site';
     case 'paused': return '❚❚ Paused';
     case 'complete': return '✓ Complete';
     case 'error':
@@ -147,11 +150,36 @@ function escapeText(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// The block a waiting task shows: why it waits and, for admins, how to end
+// the wait. Nothing to retry - the task resumes by itself once the site's
+// check is passed (assisted solve, pasted cookies, or "retry anyway").
+function renderWaitingBlock(task) {
+  const ch = task.challenge || {};
+  const site = escapeText(task.waitingFor || ch.site || task.site || 'the site');
+  const url = escapeText(ch.url || `https://${task.waitingFor || ch.site || task.site}/`);
+  const admin = session.isAdmin;
+  const reason = ch.reason || (ch.sessionStale ? 'rejected' : 'check');
+  const text = reason === 'expired'
+    ? `${site}'s verification cookies expired. Solve its check again; this download continues where it stopped.`
+    : ch.sessionStale
+      ? `${site} no longer accepts the saved cookies. Solve its check again; this download continues where it stopped.`
+      : `${site} wants a human verification check. Once it is passed, this download continues where it stopped.`;
+  return `
+    <div class="task-challenge task-waiting">
+      <span>${text}${admin ? '' : ' (An admin has to pass it.)'}</span>
+      ${admin ? `<button class="btn btn-sm btn-primary" data-action="solve" data-site="${site}" data-url="${url}" data-reason="${reason}">Solve it here</button>` : ''}
+      ${admin ? `<button class="btn btn-sm btn-secondary" data-action="import-cookies" data-site="${site}" data-url="${url}" data-stale="${ch.sessionStale || reason === 'expired' ? '1' : ''}">Paste cookies</button>`
+              : `<button class="btn btn-sm btn-secondary" data-action="open-site" data-site="${site}" data-url="${url}">Open ${site}</button>`}
+    </div>`;
+}
+
 function renderDownloadCard(taskId, task) {
   const pct = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
-  const isActive = task.status === 'running' || task.status === 'queued';
+  const isWaiting = task.status === 'waiting';
+  const isActive = task.status === 'running' || task.status === 'queued' || isWaiting;
   const isPaused = task.status === 'paused';
-  const hasErrors = task.errors && task.errors.length > 0;
+  const visibleErrors = (task.errors || []).filter(e => !e.waiting);
+  const hasErrors = visibleErrors.length > 0;
   const canRetry = !isActive && !isPaused && hasErrors && (task.chapterUrls || []).length > 0;
 
   return `
@@ -165,7 +193,7 @@ function renderDownloadCard(taskId, task) {
           </div>
         </div>
         <div class="task-actions">
-          ${isActive ? `<button class="btn btn-sm btn-icon" data-action="pause" data-task="${taskId}" title="Pause">${icon('pause', { title: 'Pause' })}</button>` : ''}
+          ${isActive && !isWaiting ? `<button class="btn btn-sm btn-icon" data-action="pause" data-task="${taskId}" title="Pause">${icon('pause', { title: 'Pause' })}</button>` : ''}
           ${isPaused ? `<button class="btn btn-sm btn-icon" data-action="resume" data-task="${taskId}" title="Resume">${icon('play', { title: 'Resume' })}</button>` : ''}
           ${isActive || isPaused ? `<button class="btn btn-sm btn-icon btn-danger" data-action="cancel" data-task="${taskId}" title="Cancel">✕</button>` : ''}
         </div>
@@ -176,24 +204,10 @@ function renderDownloadCard(taskId, task) {
           <span class="progress-text">${task.completed} / ${task.total} chapters (${pct}%)</span>
         </div>
         ${task.current ? `<div class="task-current">Currently: Chapter ${task.current}</div>` : ''}
-        ${task.errors && task.errors.length > 0 ? `
-          <div class="task-errors">${icon('triangle-alert')} ${task.errors.length} error(s)</div>
-          <ul class="task-error-list">${task.errors.slice(0, 5).map(e => `<li>${typeof e.chapter === 'number' ? `Ch. ${e.chapter}: ` : ''}${escapeText(e.error)}</li>`).join('')}</ul>` : ''}
-        ${task.challenge ? (() => {
-          const site = escapeText(task.challenge.site);
-          const url = escapeText(task.challenge.url || `https://${task.challenge.site}/`);
-          const admin = session.isAdmin;
-          const text = task.challenge.sessionStale
-            ? `${site} no longer accepts the cookies handed over earlier. Complete its check again, paste fresh cookies, then retry.`
-            : `${site} wants a human verification check. Complete it in your browser, hand over its cookies, then retry here.`;
-          return `
-          <div class="task-challenge">
-            <span>${text}${admin ? '' : ' (An admin has to hand the cookies over.)'}</span>
-            <button class="btn btn-sm btn-primary" data-action="open-site" data-site="${site}" data-url="${url}">${admin ? '1. ' : ''}Open ${site}</button>
-            ${admin ? `<button class="btn btn-sm btn-primary" data-action="import-cookies" data-site="${site}" data-url="${url}" data-stale="${task.challenge.sessionStale ? '1' : ''}">2. Paste cookies</button>` : ''}
-            <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">${admin ? '3. ' : ''}Retry download</button>
-          </div>`;
-        })() : (canRetry ? `
+        ${hasErrors ? `
+          <div class="task-errors">${icon('triangle-alert')} ${visibleErrors.length} error(s)</div>
+          <ul class="task-error-list">${visibleErrors.slice(0, 5).map(e => `<li>${typeof e.chapter === 'number' ? `Ch. ${e.chapter}: ` : ''}${escapeText(e.error)}</li>`).join('')}</ul>` : ''}
+        ${isWaiting ? renderWaitingBlock(task) : (canRetry ? `
           <div class="task-challenge">
             <button class="btn btn-sm btn-secondary" data-action="retry" data-task="${taskId}">Retry failed chapters</button>
           </div>` : '')}
@@ -299,7 +313,8 @@ function renderQueueTask(task) {
           </div>
         </div>
       </div>
-      ${task.started_at ? `<div class="queue-card-body"><small>Started: ${timeAgo(task.started_at)}</small></div>` : ''}
+      ${task.status === 'waiting' && task.error ? `<div class="queue-card-body"><div class="task-challenge task-waiting"><span>${escapeText(task.error)}</span></div></div>`
+        : task.started_at ? `<div class="queue-card-body"><small>Started: ${timeAgo(task.started_at)}</small></div>` : ''}
     </div>
   `;
 }
@@ -636,6 +651,11 @@ function setupListeners() {
       if (action === 'import-cookies') {
         // ...then hands that browser's cookies to the scraper
         openCookieImportModal({ site: btn.dataset.site, url: btn.dataset.url, stale: btn.dataset.stale === '1' });
+        return;
+      }
+      if (action === 'solve') {
+        // Pass the check inside the scraper's own browser, streamed here
+        openAssistModal({ site: btn.dataset.site, url: btn.dataset.url, reason: btn.dataset.reason });
         return;
       }
       try {

@@ -10,14 +10,19 @@
  * and identity (user agent), and immediately tests whether the site is
  * reachable again.
  *
- * Two entry points: the fixed banner (any page) and `openCookieImportModal`
- * (used by the queue and scrapers views as well).
+ * The preferred route is the assisted solve (site-assist.js): the check is
+ * streamed from the scraper's own browser and passed there, so the cookies
+ * fit the scraper by construction. Pasting stays as the fallback.
+ *
+ * Entry points: the fixed banners (any page, one per blocked site) and
+ * `openCookieImportModal` (used by the queue and scrapers views as well).
  */
 
 import { api } from './api.js';
 import { socket } from './socket.js';
 import { session } from './session.js';
 import { showToast } from './utils/toast.js';
+import { openAssistModal } from './site-assist.js';
 
 const BANNER_ID = 'site-challenge-banner';
 const MODAL_ID = 'site-cookie-modal';
@@ -50,8 +55,8 @@ function describeResult(site, result) {
     if (probe && probe.ok) {
         return {
             kind: 'ok',
-            html: `<strong>${esc(site)} accepted the cookies.</strong> ${n} saved; update checks for this site resume.
-                   Downloads that stopped on the check can be retried from the <a href="#/queue">Task Queue</a>.`
+            html: `<strong>${esc(site)} accepted the cookies.</strong> ${n} saved; downloads and checks that were
+                   waiting for this site resume by themselves (see the <a href="#/queue">Task Queue</a>).`
         };
     }
     if (probe && !probe.ok && probe.error) {
@@ -102,6 +107,11 @@ export function openCookieImportModal({ site, url, stale = false, onImported } =
                 <button class="modal-close" data-act="close" title="Close">×</button>
             </div>
             <div class="site-cookie-body">
+                <div class="site-cookie-alt">
+                    Easier: <button type="button" class="btn btn-sm btn-primary" data-act="assist">Solve it here</button>
+                    passes the check inside the scraper's own browser, so nothing needs copying and the cookies fit
+                    the scraper's identity and network. Use the steps below when that does not work.
+                </div>
                 <ol class="site-cookie-steps">
                     <li><button type="button" class="btn btn-sm btn-secondary" data-act="open">Open ${esc(site)}</button>
                         and complete its "verify you're human" check.
@@ -149,6 +159,10 @@ export function openCookieImportModal({ site, url, stale = false, onImported } =
     modal.querySelector('.modal-overlay').addEventListener('click', closeCookieImportModal);
     modal.querySelectorAll('[data-act="close"]').forEach(b => b.addEventListener('click', closeCookieImportModal));
     modal.querySelector('[data-act="open"]').addEventListener('click', () => openSite(site, url));
+    modal.querySelector('[data-act="assist"]').addEventListener('click', () => {
+        closeCookieImportModal();
+        openAssistModal({ site, url, reason: stale ? 'rejected' : 'check', onSolved: onImported });
+    });
 
     let busy = false;
     saveBtn.addEventListener('click', async () => {
@@ -191,79 +205,101 @@ export function openCookieImportModal({ site, url, stale = false, onImported } =
     textarea.focus();
 }
 
-// ==================== BANNER ====================
+// ==================== BANNERS (one per blocked site) ====================
 
-function render(entry) {
-    let banner = document.getElementById(BANNER_ID);
-    if (!banner) {
-        banner = document.createElement('div');
-        banner.id = BANNER_ID;
-        banner.className = 'site-challenge-banner';
-        document.body.appendChild(banner);
-    }
-    banner.dataset.site = entry.site;
+const CONTAINER_ID = 'site-challenge-banners';
+const entries = new Map(); // site -> challenge entry
+
+function describeEntry(entry) {
+    const site = `<strong>${esc(entry.site)}</strong>`;
+    const tail = ' Its downloads and update checks wait in the queue and resume by themselves once the check is passed.';
+    if (entry.reason === 'expired') return `${site}'s verification cookies expired.${tail}`;
+    if (entry.sessionStale) return `${site} no longer accepts the cookies handed over earlier.${tail}`;
+    return `${site} is asking for a human verification check.${tail}`;
+}
+
+function renderBanner(entry) {
     const admin = session.isAdmin;
-    let message = entry.sessionStale
-        ? `<strong>${esc(entry.site)}</strong> no longer accepts the cookies handed over earlier. Complete its verification check again and paste fresh ones.`
-        : `<strong>${esc(entry.site)}</strong> is asking for a human verification check. Automatic update checks for this site are paused and downloads stop at the first blocked chapter until someone completes it and hands over its cookies.`;
-    if (!admin) message += ' Ask an admin to do that.';
-    banner.innerHTML = `
-        <div class="site-challenge-text">${message}</div>
+    const el = document.createElement('div');
+    el.className = 'site-challenge-banner';
+    el.dataset.site = entry.site;
+    const waiting = entry.waiting ? ` <span class="site-challenge-waiting">${entry.waiting} task${entry.waiting === 1 ? '' : 's'} waiting</span>` : '';
+    el.innerHTML = `
+        <div class="site-challenge-text">${describeEntry(entry)}${admin ? '' : ' Ask an admin to pass it.'}${waiting}</div>
         <div class="site-challenge-actions">
-            <button class="btn btn-primary btn-sm" data-act="open">${admin ? '1. ' : ''}Open ${esc(entry.site)}</button>
-            ${admin ? '<button class="btn btn-primary btn-sm" data-act="import">2. Paste cookies</button>' : ''}
-            <button class="btn btn-secondary btn-sm" data-act="retry" title="Resume without handing over cookies. Only works if the site stopped asking.">Retry anyway</button>
+            ${admin ? '<button class="btn btn-primary btn-sm" data-act="assist">Solve it here</button>' : ''}
+            ${admin ? '<button class="btn btn-secondary btn-sm" data-act="import" title="Complete the check in your own browser and paste its cookies">Paste cookies</button>'
+                    : `<button class="btn btn-primary btn-sm" data-act="open">Open ${esc(entry.site)}</button>`}
+            <button class="btn btn-secondary btn-sm" data-act="retry" title="Resume without solving. Only works if the site stopped asking.">Retry anyway</button>
             <button class="site-challenge-close" data-act="close" title="Hide">×</button>
         </div>
     `;
-    banner.querySelector('[data-act="open"]').addEventListener('click', () => openSite(entry.site, entry.url));
-    banner.querySelector('[data-act="import"]')?.addEventListener('click', () => {
-        openCookieImportModal({ site: entry.site, url: entry.url, stale: !!entry.sessionStale });
+    el.querySelector('[data-act="assist"]')?.addEventListener('click', () => {
+        openAssistModal({ site: entry.site, url: entry.url, reason: entry.reason || (entry.sessionStale ? 'rejected' : 'check') });
     });
-    banner.querySelector('[data-act="retry"]').addEventListener('click', async () => {
+    el.querySelector('[data-act="open"]')?.addEventListener('click', () => openSite(entry.site, entry.url));
+    el.querySelector('[data-act="import"]')?.addEventListener('click', () => {
+        openCookieImportModal({ site: entry.site, url: entry.url, stale: !!entry.sessionStale || entry.reason === 'expired' });
+    });
+    el.querySelector('[data-act="retry"]').addEventListener('click', async () => {
         try {
             await api.clearSiteChallenge(entry.site);
-            showToast(`${entry.site}: checks resumed. If the puzzle comes back, hand over its cookies instead.`, 'info');
+            showToast(`${entry.site}: waiting work resumes. If the puzzle comes back, solve it instead.`, 'info');
         } catch (e) {
             showToast('Failed: ' + e.message, 'error');
         }
-        hide();
+        entries.delete(entry.site);
+        renderAll();
     });
-    banner.querySelector('[data-act="close"]').addEventListener('click', () => {
+    el.querySelector('[data-act="close"]').addEventListener('click', () => {
         dismissed.add(entry.site);
-        hide();
+        renderAll();
     });
-    banner.classList.add('show');
+    return el;
 }
 
-function hide() {
-    const banner = document.getElementById(BANNER_ID);
-    if (banner) banner.remove();
+function renderAll() {
+    let container = document.getElementById(CONTAINER_ID);
+    const visible = [...entries.values()].filter(e => !dismissed.has(e.site));
+    if (visible.length === 0) {
+        if (container) container.remove();
+        return;
+    }
+    if (!container) {
+        container = document.createElement('div');
+        container.id = CONTAINER_ID;
+        container.className = 'site-challenge-banners';
+        document.body.appendChild(container);
+    }
+    container.replaceChildren(...visible.map(renderBanner));
 }
 
 function show(entry) {
-    if (!entry || dismissed.has(entry.site)) return;
-    render(entry);
+    if (!entry || !entry.site) return;
+    entries.set(entry.site, entry);
+    renderAll();
+}
+
+function hide(site) {
+    entries.delete(site);
+    renderAll();
 }
 
 /**
- * Wire up: listen for live challenge events and pick up any challenge that
- * was already active when the page loaded.
+ * Wire up: listen for live challenge events and pick up any challenges that
+ * were already active when the page loaded. Several sites can be blocked at
+ * once; each gets its own banner.
  */
 export async function initSiteChallengeBanner() {
     socket.on('site:challenge', (entry) => {
         dismissed.delete(entry.site); // a new report re-surfaces a closed banner
         show(entry);
     });
-    socket.on('site:challenge-cleared', ({ site }) => {
-        const banner = document.getElementById(BANNER_ID);
-        if (banner && banner.dataset.site === site) hide();
-    });
+    socket.on('site:challenge-cleared', ({ site }) => hide(site));
 
     try {
         const status = await api.getSiteStatus();
-        const active = (status.challenges || [])[0];
-        if (active) show(active);
+        for (const entry of status.challenges || []) show(entry);
     } catch (e) {
         // Not fatal; the live event will still show it.
     }

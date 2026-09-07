@@ -12,7 +12,8 @@ import { trophyDb } from '../db/trophies.js';
 import { CONFIG } from '../config.js';
 import { scraperFactory } from '../scrapers/index.js';
 import { queue } from '../queue.js';
-import { isChallengeError, clearChallenge } from '../scrapers/util/challenge.js';
+import { isChallengeError, clearChallenge, SiteChallengeError } from '../scrapers/util/challenge.js';
+import { siteForUrl, isSiteOpen, closedBecause } from '../scrapers/util/site-gate.js';
 
 const router = express.Router();
 const taskQueue = queue;
@@ -22,8 +23,10 @@ const taskQueue = queue;
 // failed task can be retried the same way (see /downloads/:taskId/retry).
 function queueChapterDownloads(bookmark, chaptersToDownload, userId, description = null) {
     const taskId = `${bookmark.id}-${Date.now()}`;
+    const site = siteForUrl(bookmark.url);
     activeDownloads.set(taskId, {
         bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
+        site,
         total: chaptersToDownload.length,
         chapters: chaptersToDownload.map(c => c.number), // numbers for the UI
         chapterUrls: chaptersToDownload,                 // what a retry needs
@@ -37,12 +40,38 @@ function queueChapterDownloads(bookmark, chaptersToDownload, userId, description
         mangaId: bookmark.id,
         mangaTitle: bookmark.alias || bookmark.title,
         userId,
+        site,
+        ...waitHooks(taskId),
         execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
     });
 
     return taskId;
 }
 const activeDownloads = new Map();
+
+// The queue parks a task whose site is closed before it ever runs; mirror
+// that on the progress record so the queue page says "waiting for the site"
+// (and why) rather than "queued". Resuming puts it back to queued until the
+// task itself starts running.
+function waitHooks(taskId) {
+    return {
+        onWait: (site) => {
+            const task = activeDownloads.get(taskId);
+            if (!task || task.status === 'cancelled') return;
+            const why = closedBecause(site) || { reason: 'check' };
+            task.status = 'waiting';
+            task.waitingFor = site;
+            task.challenge = { site, url: why.url, sessionStale: !!why.sessionStale, reason: why.reason };
+        },
+        onResume: () => {
+            const task = activeDownloads.get(taskId);
+            if (!task || task.status !== 'waiting') return;
+            task.status = 'queued';
+            task.waitingFor = null;
+            task.challenge = null;
+        }
+    };
+}
 
 // Per-user download-task visibility: admins see/control all tasks, other
 // roles only their own. Tasks without a userId stamp (created before this
@@ -472,8 +501,10 @@ router.post('/downloads/:taskId/retry', async (req, res) => {
     try {
         const task = activeDownloads.get(req.params.taskId);
         if (!task || !canAccessTask(task, req.user)) return res.status(404).json({ error: 'Download task not found' });
-        if (['running', 'queued', 'paused'].includes(task.status)) {
-            return res.status(400).json({ error: 'This download is still running' });
+        if (['running', 'queued', 'paused', 'waiting'].includes(task.status)) {
+            return res.status(400).json({ error: task.status === 'waiting'
+                ? `This download is waiting for ${task.site || 'the site'} and resumes by itself`
+                : 'This download is still running' });
         }
 
         const failed = new Set(task.errors.filter(e => typeof e.chapter === 'number').map(e => e.chapter));
@@ -532,11 +563,25 @@ router.delete('/downloads/:taskId', (req, res) => {
 
 // ==================== BACKGROUND DOWNLOAD ====================
 
+// Runs (and re-runs) one download task. The queue calls it again after the
+// task was parked on a site's verification check, so everything already
+// attempted is skipped and the chapter that hit the check is retried first.
+// Hitting the check - or finding the site's gate closed between chapters,
+// which is what a session about to expire looks like - throws the
+// SiteChallengeError to the queue, which parks the task until the site is
+// open again. Other errors are per chapter and do not stop the task.
 async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
     const task = activeDownloads.get(taskId);
-    if (!task) return;
+    if (!task) return { cancelled: true };
+    if (task.status === 'cancelled') return { cancelled: true };
 
+    const resuming = task.status === 'waiting' || (task.errors || []).some(e => e.waiting);
     task.status = 'running';
+    task.waitingFor = null;
+    if (resuming) {
+        task.challenge = null;
+        task.errors = task.errors.filter(e => !e.waiting);
+    }
 
     // Ensure scraper is initialized
     if (!scraperFactory.browser) {
@@ -556,14 +601,34 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
         throw new Error('No scraper available for this URL');
     }
 
+    const site = task.site || siteForUrl(bookmark.url);
+    const attempted = new Set(task.completedChapters || []);
+    const parkOn = (error) => {
+        task.status = 'waiting';
+        task.waitingFor = error.site;
+        task.challenge = { site: error.site, url: error.challengeUrl, sessionStale: !!error.sessionStale, reason: error.reason };
+        task.current = null;
+        task.errors.push({ chapter: 'waiting', waiting: true, error: error.message });
+        return error;
+    };
+
     for (const chapterData of chaptersToDownload) {
         if (!activeDownloads.has(taskId) || task.status === 'cancelled') break;
+        // Already done (or failed) in an earlier run of this task
+        if (attempted.has(chapterData.number)) continue;
 
         while (task.status === 'paused') {
             await new Promise(resolve => setTimeout(resolve, 500));
             if (!activeDownloads.has(taskId) || task.status === 'cancelled') break;
         }
         if (task.status === 'cancelled') break;
+
+        // The site closed between chapters (its check came up elsewhere, or
+        // the saved session is about to expire): park before touching it.
+        if (site && !isSiteOpen(site)) {
+            const why = closedBecause(site) || { reason: 'check' };
+            throw parkOn(new SiteChallengeError(site, why.url, { sessionStale: why.sessionStale, reason: why.reason }));
+        }
 
         // chapterData is now { number, url }
         const chapterNum = chapterData.number;
@@ -585,13 +650,11 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
                 task.errors.push({ chapter: chapterNum, error: `${result.failed} of ${images.length} pages failed to download`, partial: true });
             }
         } catch (error) {
+            // Every further chapter would hit the same puzzle: hand the task
+            // back to the queue, which re-runs it (from this chapter) once
+            // the site is open again.
+            if (isChallengeError(error)) throw parkOn(error);
             task.errors.push({ chapter: chapterNum, error: error.message });
-            if (isChallengeError(error)) {
-                task.challenge = { site: error.site, url: error.challengeUrl, sessionStale: !!error.sessionStale };
-                // Every further chapter would hit the same puzzle
-                task.errors.push({ chapter: 'stopped', error: `Stopped: ${error.site} is asking for a human verification check` });
-                break;
-            }
         }
         task.completed++;
         task.completedChapters = task.completedChapters || [];
@@ -603,10 +666,8 @@ async function downloadChaptersAsync(taskId, bookmark, chaptersToDownload) {
 
     task.status = 'complete';
     task.current = null;
-    // A task that stopped on a site's human check stays on the queue page
-    // long enough for the user to complete it, hand the cookies over and
-    // press Retry; everything else clears after a few minutes.
-    setTimeout(() => activeDownloads.delete(taskId), task.challenge ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000);
+    task.challenge = null;
+    setTimeout(() => activeDownloads.delete(taskId), 5 * 60 * 1000);
 
     // Job history: a run where nothing came down is a failure, not a
     // "completed" row. Partial runs complete with the per-chapter errors
@@ -1020,9 +1081,12 @@ export function queueBackgroundDownload(bookmark, chaptersToDownload, userId = n
     if (!chaptersToDownload || chaptersToDownload.length === 0) return null;
     
     const taskId = `${bookmark.id}-auto-${Date.now()}`;
+    const site = siteForUrl(bookmark.url);
     activeDownloads.set(taskId, {
         bookmarkId: bookmark.id, mangaTitle: bookmark.alias || bookmark.title,
+        site,
         total: chaptersToDownload.length, chapters: chaptersToDownload.map(c => c.number),
+        chapterUrls: chaptersToDownload,
         completedChapters: [], completed: 0, current: null, status: 'queued', errors: [],
         userId
     });
@@ -1033,6 +1097,8 @@ export function queueBackgroundDownload(bookmark, chaptersToDownload, userId = n
         mangaId: bookmark.id,
         mangaTitle: bookmark.alias || bookmark.title,
         userId,
+        site,
+        ...waitHooks(taskId),
         execute: () => downloadChaptersAsync(taskId, bookmark, chaptersToDownload)
     });
 

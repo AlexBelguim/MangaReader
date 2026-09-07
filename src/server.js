@@ -40,7 +40,9 @@ import * as torrentService from './services/torrentService.js';
 
 import { queue } from './queue.js';
 import { auth, guardPermissions } from './middleware/auth.js';
-import { isChallenged } from './scrapers/util/challenge.js';
+import { isChallenged, challengeEvents } from './scrapers/util/challenge.js';
+import { registerGatedSites, siteForJob, isSiteOpen, waitForSite, closedBecause } from './scrapers/util/site-gate.js';
+import { attachAssistNamespace } from './services/assistedChallenge.js';
 import { setIO } from './services/socketService.js';
 import { login, me, demoLogin } from './controllers/auth_controller.js';
 import { runMigrations } from './db/migrations.js';
@@ -453,11 +455,19 @@ async function sendPushNotifications(mangaTitle, chapterCount) {
   }
 }
 
+// Manga an auto-check run skipped because their site was showing its
+// verification check: site -> Set<bookmark id>. When the site opens again
+// (challengeEvents 'clear') exactly those are checked, so a run that hit
+// the puzzle finishes by itself once someone solves it.
+const skippedByChallenge = new Map();
+
 // userId scopes the run to one user's bookmarks (manual non-admin trigger);
-// null = global run (scheduler, admin trigger).
-async function runAutoCheck(forceAll = false, userId = null) {
-  console.log('[Auto-Check] Starting scheduled check...');
-  global.lastAutoCheckRun = new Date().toISOString();
+// null = global run (scheduler, admin trigger). `onlyIds` restricts the run
+// to these bookmarks regardless of their schedule (the resume after a
+// site opened).
+async function runAutoCheck(forceAll = false, userId = null, { onlyIds = null } = {}) {
+  console.log(onlyIds ? `[Auto-Check] Resuming ${onlyIds.size} skipped manga...` : '[Auto-Check] Starting scheduled check...');
+  if (!onlyIds) global.lastAutoCheckRun = new Date().toISOString();
 
   const db = getDb();
   const autoCheckEnabled = db.prepare(`
@@ -470,6 +480,7 @@ async function runAutoCheck(forceAll = false, userId = null) {
   // Filter to only manga whose next_check is due (or has no schedule set = use default)
   const now = new Date();
   const dueForCheck = autoCheckEnabled.filter(m => {
+    if (onlyIds) return onlyIds.has(m.id);
     if (forceAll) return true;
     if (!m.next_check) return true; // No schedule set, always check
     return new Date(m.next_check) <= now;
@@ -506,10 +517,12 @@ async function runAutoCheck(forceAll = false, userId = null) {
 
       // A site that is showing a human-verification puzzle would answer
       // every check with the puzzle. Checking anyway only feeds the block;
-      // leave it alone until the user clears it or the cooldown passes.
+      // remember the manga and check it when the site opens again.
       if (isChallenged(scraper.websiteName)) {
-        console.log(`[Auto-Check] Skipping ${manga.alias || manga.title}: ${scraper.websiteName} is showing a verification check`);
+        console.log(`[Auto-Check] Skipping ${manga.alias || manga.title}: ${scraper.websiteName} is showing a verification check (resumes when it is solved)`);
         results.skipped = (results.skipped || 0) + 1;
+        if (!skippedByChallenge.has(scraper.websiteName)) skippedByChallenge.set(scraper.websiteName, new Set());
+        skippedByChallenge.get(scraper.websiteName).add(manga.id);
         continue;
       }
 
@@ -643,11 +656,39 @@ async function start() {
     logger.error(`Failed to initialize database: ${e.message}`);
     process.exit(1);
   }
-  queue.recover();
   await migrateFromJson();
   await runMigrations();
   usersDb.seedAdminFromEnv();
   await scraperFactory.init();
+
+  // Per-site gate: work for a site that is showing its verification check
+  // (or whose saved cookies are about to expire) waits instead of failing,
+  // and resumes when the check is passed. Wired before the queue recovers
+  // so a recovered job for a blocked site is parked, not failed.
+  registerGatedSites(scraperFactory.scrapers);
+  queue.useGate({
+    siteForJob,
+    isSiteOpen,
+    waitForSite,
+    describeClosed: (site) => {
+      const why = closedBecause(site);
+      if (why?.reason === 'expired') return `Waiting for ${site}: its verification cookies expired. Solve the check again (queue page or banner).`;
+      if (why?.sessionStale) return `Waiting for ${site}: it no longer accepts the saved cookies. Solve the check again (queue page or banner).`;
+      return `Waiting for ${site}: it is asking for a human verification check. Solve it (queue page or banner); this resumes by itself.`;
+    },
+    onOpen: (cb) => challengeEvents.on('clear', cb)
+  });
+  queue.recover();
+
+  // Auto-checks that were skipped while the site was blocked run as soon
+  // as it opens again.
+  challengeEvents.on('clear', (site) => {
+    const ids = skippedByChallenge.get(site);
+    if (!ids || ids.size === 0) return;
+    skippedByChallenge.delete(site);
+    runAutoCheck(false, null, { onlyIds: new Set(ids) })
+      .catch(err => console.error(`[Auto-Check] Resume for ${site} failed: ${err.message}`));
+  });
 
   scheduleAutoCheck();
   // Resume watching torrents that were still downloading at the last shutdown
@@ -657,6 +698,10 @@ async function start() {
   // emitToAll/emitToGlobal call in the backend was a silent no-op, so live
   // events (downloads, site challenges) never reached the UI.
   setIO(io);
+
+  // Admin-only namespace that streams a site's verification check from the
+  // scraper browser and takes the person's input (services/assistedChallenge.js)
+  attachAssistNamespace(io, scraperFactory);
 
   // Socket.io connection handling
   io.on('connection', (socket) => {
