@@ -131,6 +131,44 @@
     margin-bottom: 12px;
 }
 
+/* Manage + Add sit together at the right edge, icon-only */
+.volumes-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs, 6px);
+    margin-left: auto;
+}
+
+.volumes-action-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.volumes-action-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* The stylised plus: accent-coloured ring that fills on hover */
+.volumes-add-btn {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.volumes-add-btn svg {
+    width: 22px;
+    height: 22px;
+}
+
+.volumes-actions .volumes-add-btn:hover {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
 /* The whole title block is the hit target, not just the chevron. */
 .volumes-toggle {
     display: flex;

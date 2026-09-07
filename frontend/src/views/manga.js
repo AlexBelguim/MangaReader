@@ -1179,8 +1179,12 @@ function renderVolumesSection(manga, downloadedChapters) {
       ? `<span class="badge badge-downloaded">${totalVolDownloaded} downloaded</span>`
       : ''}
         </button>
-        <button class="btn btn-secondary btn-small" id="manage-volumes-btn" title="Rename, renumber, reorder or delete volumes">${icon('settings')} Manage</button>
-        <button class="btn btn-secondary btn-small" id="add-volume-btn">${icon('plus')} Add Volume</button>
+        <div class="volumes-actions">
+          <button class="btn btn-secondary btn-icon volumes-action-btn" id="manage-volumes-btn"
+                  title="Manage volumes: rename, renumber, reorder or delete" aria-label="Manage volumes">${icon('settings')}</button>
+          <button class="btn btn-secondary btn-icon volumes-action-btn volumes-add-btn" id="add-volume-btn"
+                  title="Add a volume" aria-label="Add volume">${icon('circle-plus')}</button>
+        </div>
       </div>
       <div class="volumes-grid" id="volumes-grid">
         ${volumeCards || (manga.chapters?.length > 0 ? '<div class="empty-state-lite">No volumes yet. Create one to organize your chapters!</div>' : '')}
