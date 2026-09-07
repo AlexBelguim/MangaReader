@@ -607,6 +607,25 @@ class ApiClient {
         return this.delete(`/bookmarks/${bookmarkId}/volumes/${volumeId}/pages/${encodeURIComponent(filename)}`);
     }
 
+    // What a finished torrent contains, with a suggested target per item
+    getTorrentContents(hash) {
+        return this.get(`/torrents/downloads/${hash}/contents`);
+    }
+
+    // ==================== VOLUME MANAGER ====================
+
+    updateVolume(bookmarkId, volumeId, patch) {
+        return this.put(`/bookmarks/${bookmarkId}/volumes/${volumeId}`, patch);
+    }
+
+    reorderVolume(bookmarkId, volumeId, direction) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/reorder`, { direction });
+    }
+
+    bulkDeleteVolumes(bookmarkId, volumeIds) {
+        return this.post(`/bookmarks/${bookmarkId}/volumes/bulk-delete`, { volumeIds });
+    }
+
     // ==================== ANILIST ====================
 
     anilistStatus() {
@@ -730,8 +749,8 @@ class ApiClient {
         return this.post('/torrents/downloads/refresh', {});
     }
 
-    importTorrent(hash, bookmarkId = null) {
-        return this.post(`/torrents/downloads/${hash}/import`, { bookmarkId });
+    importTorrent(hash, bookmarkId = null, selection = null) {
+        return this.post(`/torrents/downloads/${hash}/import`, { bookmarkId, selection });
     }
 
     pauseTorrent(hash) {

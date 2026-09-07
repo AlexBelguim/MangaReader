@@ -160,7 +160,8 @@ export async function importAsVolume(bookmark, sourcePath, { number, name, relea
  * regular chapter extraction, so it shows up as chapters, not a volume.
  */
 export async function importAsChapter(bookmark, archivePath, chapterNumber) {
-  const result = await downloader.extractCbz(archivePath, bookmark.title, chapterNumber, bookmark.alias, { forceReExtract: true, deleteAfter: false });
+  // renameCbz false: the archive belongs to the torrent (seeding) and keeps its name
+  const result = await downloader.extractCbz(archivePath, bookmark.title, chapterNumber, bookmark.alias, { forceReExtract: true, deleteAfter: false, renameCbz: false });
   const url = `local://${bookmark.id}/chapter-${chapterNumber}`;
   await bookmarkDb.update(bookmark.id, {
     chapters: [...(bookmark.chapters || []), { number: chapterNumber, title: `Chapter ${chapterNumber}`, url, removedFromRemote: true }]
@@ -170,59 +171,128 @@ export async function importAsChapter(bookmark, archivePath, chapterNumber) {
 }
 
 /**
- * Import everything a finished release contains into a bookmark.
- * Volume numbers come from each file's own name, then from the release
- * name (a range "v01-v03" numbers the files in order), then from position.
- * @returns {Promise<{ volumes: Array<{ number, name, pages }>, chapters: number[], skipped: string[] }>}
+ * What a finished release contains, item by item, with the target each
+ * item would get on an automatic import: the volume number from the
+ * file's own name, then from the release name (a range "v01-v03" numbers
+ * the files in order), then from position; a single-chapter archive
+ * becomes that chapter. Paths are relative to the release root.
+ * @returns {Promise<{ releaseName: string, root: string, items: Array<{ path, name, kind: 'archive'|'dir', size: number|null, pages: number|null, parsed: object, as: 'volume'|'chapter', number: number }>, unsupported: string[] }>}
  */
-export async function importRelease(bookmark, rootPath, { releaseName = '' } = {}) {
+export async function describeRelease(rootPath, { releaseName = '' } = {}) {
   const found = await scanRelease(rootPath);
-  const summary = { volumes: [], chapters: [], skipped: [] };
-  for (const u of found.unsupported) summary.skipped.push(`${path.basename(u)} (only .cbz/.zip archives and image folders can be imported)`);
-
+  const root = path.resolve(rootPath);
+  const rel = (p) => path.relative(root, p).split(path.sep).join('/') || path.basename(p);
   const releaseInfo = parseReleaseName(releaseName || path.basename(rootPath));
-  const items = [
+  const candidates = [
     ...found.archives.map(p => ({ path: p, kind: 'archive' })),
     // A folder of images inside a folder that also holds archives is usually
-    // an unpacked copy; only import image folders when there are no archives.
+    // an unpacked copy; only offer image folders when there are no archives.
     ...(found.archives.length === 0 ? found.imageDirs.map(p => ({ path: p, kind: 'dir' })) : [])
   ];
-  if (items.length === 0) throw new Error('Nothing importable in this release (no .cbz/.zip archives or image folders)');
 
   const used = new Set();
   let nextVolume = releaseInfo.volumes[0] || 1;
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const own = parseReleaseName(path.basename(item.path));
+  const items = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const own = parseReleaseName(path.basename(c.path));
+    let size = null;
+    let pages = null;
     try {
-      if (own.volume === null && own.chapter !== null && own.chapterEnd === null && item.kind === 'archive') {
-        // Single chapter archive: import as that chapter
-        const r = await importAsChapter(bookmark, item.path, own.chapter);
-        summary.chapters.push(r.chapter);
-        continue;
-      }
+      if (c.kind === 'archive') size = (await fs.stat(c.path)).size;
+      else pages = (await fs.readdir(c.path)).filter(f => IMAGE_RE.test(f)).length;
+    } catch (e) {
+      // unreadable: shown without a size
+    }
+    const item = {
+      path: rel(c.path),
+      name: path.basename(c.path),
+      kind: c.kind,
+      size,
+      pages,
+      parsed: { volume: own.volume, volumeEnd: own.volumeEnd, chapter: own.chapter, chapterEnd: own.chapterEnd },
+      as: 'volume',
+      number: null
+    };
+    if (own.volume === null && own.chapter !== null && own.chapterEnd === null && c.kind === 'archive') {
+      item.as = 'chapter';
+      item.number = own.chapter;
+    } else {
       let number = own.volume;
       if (number === null) {
-        // From the release name: a range numbers the files in order
-        if (items.length === 1 && releaseInfo.volume !== null) number = releaseInfo.volume;
-        else if (releaseInfo.volumes.length >= items.length) number = releaseInfo.volumes[i];
+        if (candidates.length === 1 && releaseInfo.volume !== null) number = releaseInfo.volume;
+        else if (releaseInfo.volumes.length >= candidates.length) number = releaseInfo.volumes[i];
         else number = nextVolume;
       }
       while (used.has(number)) number++;
       used.add(number);
       nextVolume = number + 1;
+      item.number = number;
+    }
+    items.push(item);
+  }
+  return { releaseName: releaseName || path.basename(rootPath), root, items, unsupported: found.unsupported.map(u => path.basename(u)) };
+}
 
-      const r = await importAsVolume(bookmark, item.path, {
-        number,
-        name: volumeLabel(number),
-        releaseName: releaseName || path.basename(item.path)
+/**
+ * Import a finished release into a bookmark: everything at its automatic
+ * target, or only a selection ([{ path, as: 'volume'|'chapter'|'skip',
+ * number }]) at the targets chosen. Only items the scan found can be
+ * imported.
+ * @returns {Promise<{ volumes: Array<{ number, name, pages, id }>, chapters: number[], skipped: string[] }>}
+ */
+export async function importRelease(bookmark, rootPath, { releaseName = '', selection = null } = {}) {
+  const plan = await describeRelease(rootPath, { releaseName });
+  const summary = { volumes: [], chapters: [], skipped: [] };
+  for (const u of plan.unsupported) summary.skipped.push(`${u} (only .cbz/.zip archives and image folders can be imported)`);
+  if (plan.items.length === 0) throw new Error('Nothing importable in this release (no .cbz/.zip archives or image folders)');
+
+  let items;
+  if (Array.isArray(selection)) {
+    const byPath = new Map(plan.items.map(i => [i.path, i]));
+    items = [];
+    for (const s of selection) {
+      const base = byPath.get(String(s?.path ?? ''));
+      if (!base) {
+        summary.skipped.push(`${s?.path || '?'}: not part of this download`);
+        continue;
+      }
+      const as = s.as === 'chapter' ? 'chapter' : s.as === 'volume' ? 'volume' : 'skip';
+      if (as === 'skip') continue;
+      const number = Number(s.number);
+      if (!Number.isFinite(number) || number < 0) {
+        summary.skipped.push(`${base.name}: no ${as} number given`);
+        continue;
+      }
+      items.push({ ...base, as, number });
+    }
+  } else {
+    items = plan.items;
+  }
+
+  const seenVolumes = new Set();
+  for (const item of items) {
+    const abs = path.resolve(plan.root, item.path);
+    try {
+      if (item.as === 'chapter') {
+        if (item.kind !== 'archive') throw new Error('an image folder can only be imported as a volume');
+        const r = await importAsChapter(bookmark, abs, item.number);
+        summary.chapters.push(r.chapter);
+        continue;
+      }
+      if (seenVolumes.has(item.number)) throw new Error(`volume ${item.number} was already imported from another file of this selection`);
+      seenVolumes.add(item.number);
+      const r = await importAsVolume(bookmark, abs, {
+        number: item.number,
+        name: volumeLabel(item.number),
+        releaseName: releaseName || item.name
       });
-      summary.volumes.push({ number, name: r.volume.name, pages: r.pageCount, id: r.volume.id });
+      summary.volumes.push({ number: item.number, name: r.volume.name, pages: r.pageCount, id: r.volume.id });
     } catch (e) {
-      summary.skipped.push(`${path.basename(item.path)}: ${e.message}`);
+      summary.skipped.push(`${item.name}: ${e.message}`);
     }
   }
   return summary;
 }
 
-export default { scanRelease, importAsVolume, importAsChapter, importRelease, volumeFolderName };
+export default { scanRelease, describeRelease, importAsVolume, importAsChapter, importRelease, volumeFolderName };

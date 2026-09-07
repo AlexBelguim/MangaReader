@@ -126,14 +126,42 @@ router.post('/downloads/refresh', async (req, res) => {
     }
 });
 
-// Import a finished torrent (again), optionally into another series
+// What a finished download contains, each item with the target it would
+// get on an automatic import, plus what the series already has
+router.get('/downloads/:hash/contents', async (req, res) => {
+    const row = trackedTorrent(req, res);
+    if (!row) return;
+    try {
+        const plan = await torrents.describeTorrent(row.hash);
+        const bookmark = row.bookmarkId ? bookmarkDb.getById(row.bookmarkId, req.user.id) : null;
+        res.json({
+            success: true,
+            releaseName: plan.releaseName,
+            items: plan.items,
+            unsupported: plan.unsupported,
+            bookmarkId: bookmark?.id || null,
+            bookmarkTitle: bookmark ? (bookmark.alias || bookmark.title) : null,
+            newSeriesTitle: row.newSeriesTitle || null,
+            existing: {
+                volumes: (bookmark?.volumes || []).filter(v => v.kind === 'release').map(v => ({ number: v.number, name: v.name })),
+                chapters: bookmark?.downloadedChapters || []
+            }
+        });
+    } catch (error) {
+        res.status(statusOf(error, 500)).json({ error: error.message });
+    }
+});
+
+// Import a finished torrent (again), optionally into another series and
+// optionally only a selection of its items: body { bookmarkId?, selection? }
 router.post('/downloads/:hash/import', async (req, res) => {
     const row = trackedTorrent(req, res);
     if (!row) return;
     try {
-        const { bookmarkId } = req.body || {};
+        const { bookmarkId, selection } = req.body || {};
         if (bookmarkId && !bookmarkDb.getById(bookmarkId, req.user.id)) return res.status(404).json({ error: 'Series not found' });
-        const { bookmark, summary } = await torrents.importTorrent(row.hash, { bookmarkId: bookmarkId || null });
+        if (selection !== undefined && selection !== null && !Array.isArray(selection)) return res.status(400).json({ error: 'selection must be a list' });
+        const { bookmark, summary } = await torrents.importTorrent(row.hash, { bookmarkId: bookmarkId || null, selection: Array.isArray(selection) ? selection : null });
         res.json({ success: true, bookmarkId: bookmark.id, summary });
     } catch (error) {
         res.status(statusOf(error, 500)).json({ error: error.message });

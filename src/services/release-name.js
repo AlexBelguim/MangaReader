@@ -15,6 +15,10 @@
 const VOLUME_RE = /(?:^|[\s._\-(\[])(?:v|vol\.?|volume)\s*0*(\d{1,3})(?:\s*(?:-|~|to)\s*(?:v|vol\.?|volume)?\s*0*(\d{1,3}))?(?=$|[\s._\-)\].,])/i;
 const CHAPTER_RE = /(?:^|[\s._\-(\[])(?:c|ch\.?|chapter)\s*0*(\d{1,4}(?:\.\d+)?)(?:\s*(?:-|~|to)\s*(?:c|ch\.?|chapter)?\s*0*(\d{1,4}(?:\.\d+)?))?(?=$|[\s._\-)\].,])/i;
 const YEAR_RE = /\((19|20)\d{2}\)/;
+// A bare number after the title, before a tag or the end: "One Piece 1101
+// (2024)", "Title 001-010 (Digital)". Chapter files in digital releases
+// often carry no "c" marker at all.
+const BARE_CHAPTER_RE = /\s0*(\d{1,4}(?:\.\d+)?)(?:\s*[-~]\s*0*(\d{1,4}(?:\.\d+)?))?\s*(?=[(\[]|$)/;
 
 /**
  * @returns {{ title: string, volume: number|null, volumeEnd: number|null, volumes: number[], chapter: number|null, chapterEnd: number|null, year: number|null, digital: boolean, group: string|null, raw: string }}
@@ -47,6 +51,14 @@ export function parseReleaseName(raw) {
     out.chapter = parseFloat(ch[1]);
     out.chapterEnd = ch[2] ? parseFloat(ch[2]) : null;
     markerIndex = Math.min(markerIndex, ch.index + (ch[0].match(/^[\s._\-(\[]/) ? 1 : 0));
+  }
+  if (!vol && !ch) {
+    const bare = name.match(BARE_CHAPTER_RE);
+    if (bare && bare.index > 0) {
+      out.chapter = parseFloat(bare[1]);
+      out.chapterEnd = bare[2] ? parseFloat(bare[2]) : null;
+      markerIndex = Math.min(markerIndex, bare.index);
+    }
   }
   if (year && !vol && !ch) markerIndex = Math.min(markerIndex, year.index);
 

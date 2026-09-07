@@ -12,6 +12,7 @@ import { getPrimaryAdminId } from '../db/connection.js';
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
 import * as pageEdits from '../services/pageEdits.js';
+import { volumeFolderName } from '../services/volumeImporter.js';
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -323,29 +324,100 @@ router.post('/:id/volumes/:volumeId/chapters', async (req, res) => {
     }
 });
 
+// Remove a volume. A release volume owns its pages; they go with it (a
+// chapter collection owns nothing on disk). Returns whether pages went.
+async function removeVolume(bookmark, volume) {
+    let removedPages = false;
+    if (volume.kind === 'release' && volume.folder) {
+        const mangaDir = downloader.getMangaDir(bookmark.title, bookmark.alias);
+        const dir = path.resolve(mangaDir, volume.folder);
+        if (dir.startsWith(path.resolve(mangaDir) + path.sep)) {
+            await fs.remove(dir);
+            removedPages = true;
+        }
+    }
+    if (volume.cover && volume.cover.startsWith('/covers/volumes/')) {
+        await fs.remove(path.join(CONFIG.dataDir, 'covers', 'volumes', path.basename(volume.cover))).catch(() => { });
+    }
+    bookmarkDb.deleteVolume(volume.id);
+    return removedPages;
+}
+
 // Delete a volume
 router.delete('/:id/volumes/:volumeId', async (req, res) => {
     try {
         const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
         const volume = bookmarkDb.getVolumeById(req.params.volumeId);
         if (!bookmark || !volume || volume.bookmarkId !== bookmark.id) return res.status(404).json({ error: 'Volume not found' });
+        const removedPages = await removeVolume(bookmark, volume);
+        res.json({ success: true, removedPages });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
-        // A release volume owns its pages; they go with it (a chapter
-        // collection owns nothing on disk).
-        let removedPages = false;
-        if (volume.kind === 'release' && volume.folder) {
-            const mangaDir = downloader.getMangaDir(bookmark.title, bookmark.alias);
-            const dir = path.resolve(mangaDir, volume.folder);
-            if (dir.startsWith(path.resolve(mangaDir) + path.sep)) {
-                await fs.remove(dir);
-                removedPages = true;
+// Delete several volumes at once (the volume manager)
+router.post('/:id/volumes/bulk-delete', async (req, res) => {
+    try {
+        const ids = Array.isArray(req.body?.volumeIds) ? req.body.volumeIds.map(String) : [];
+        if (ids.length === 0) return res.status(400).json({ error: 'volumeIds required' });
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+        let deleted = 0;
+        let removedPages = 0;
+        const missing = [];
+        for (const id of ids) {
+            const volume = bookmarkDb.getVolumeById(id);
+            if (!volume || volume.bookmarkId !== bookmark.id) {
+                missing.push(id);
+                continue;
+            }
+            if (await removeVolume(bookmark, volume)) removedPages++;
+            deleted++;
+        }
+        res.json({ success: true, deleted, removedPages, missing });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Rename and/or renumber a volume (the volume manager). A release volume's
+// folder on disk follows its number.
+router.put('/:id/volumes/:volumeId', async (req, res) => {
+    try {
+        const bookmark = await bookmarkDb.getById(req.params.id, ownerId(req));
+        const volume = bookmarkDb.getVolumeById(req.params.volumeId);
+        if (!bookmark || !volume || volume.bookmarkId !== bookmark.id) return res.status(404).json({ error: 'Volume not found' });
+
+        const { name, number } = req.body || {};
+        const patch = {};
+        if (name !== undefined) {
+            const clean = String(name).trim();
+            if (!clean) return res.status(400).json({ error: 'Volume name required' });
+            if (clean !== volume.name) patch.name = clean;
+        }
+        if (number !== undefined && number !== null && number !== '') {
+            const num = Number(number);
+            if (!Number.isFinite(num) || num < 0) return res.status(400).json({ error: 'Volume number must be a number' });
+            if (num !== volume.number) {
+                const clash = (bookmark.volumes || []).find(v => v.id !== volume.id && v.kind === 'release' && v.number === num);
+                if (volume.kind === 'release' && clash) return res.status(409).json({ error: `Volume ${num} already exists (${clash.name})` });
+                if (volume.kind === 'release' && volume.folder) {
+                    const mangaDir = path.resolve(downloader.getMangaDir(bookmark.title, bookmark.alias));
+                    const from = path.resolve(mangaDir, volume.folder);
+                    const to = path.join(mangaDir, volumeFolderName(num));
+                    if (from !== to && from.startsWith(mangaDir + path.sep) && await fs.pathExists(from)) {
+                        if (await fs.pathExists(to)) return res.status(409).json({ error: `A "${volumeFolderName(num)}" folder already exists on disk` });
+                        await fs.move(from, to);
+                        patch.folder = path.relative(mangaDir, to);
+                    }
+                }
+                patch.number = num;
             }
         }
-        if (volume.cover && volume.cover.startsWith('/covers/volumes/')) {
-            await fs.remove(path.join(CONFIG.dataDir, 'covers', 'volumes', path.basename(volume.cover))).catch(() => { });
-        }
-        bookmarkDb.deleteVolume(volume.id);
-        res.json({ success: true, removedPages });
+        if (Object.keys(patch).length === 0) return res.json({ success: true, volume, changed: false });
+        bookmarkDb.updateVolume(volume.id, patch);
+        res.json({ success: true, volume: bookmarkDb.getVolumeById(volume.id), changed: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

@@ -14,7 +14,7 @@ import { downloader } from '../downloader.js';
 import * as prowlarr from './prowlarr.js';
 import { QBittorrentClient, isComplete, ERROR_STATES } from './qbittorrent.js';
 import { parseReleaseName } from './release-name.js';
-import { importRelease } from './volumeImporter.js';
+import { importRelease, describeRelease } from './volumeImporter.js';
 import { emitToAll } from './socketService.js';
 
 export const TORRENT_EVENT = 'torrent:update';
@@ -295,15 +295,45 @@ async function doPoll() {
 
 // ─── Import ──────────────────────────────────────────────────────────
 
+function finished(row) {
+  return ['completed', 'imported', 'failed'].includes(row.status) || row.progress >= 1;
+}
+
+// Where a finished torrent's files are for this app
+async function localPathOf(row) {
+  const reported = row.contentPath || (row.savePath && row.name ? path.join(row.savePath, row.name) : null);
+  if (!reported) throw new Error('qBittorrent has not reported where the files are yet; refresh and try again');
+  const localPath = toLocalPath(reported);
+  if (!await fs.pathExists(localPath)) {
+    throw new Error(`Cannot see the download at "${localPath}". qBittorrent reports "${reported}"; add a path mapping in Settings > Torrents if the app sees that folder under another path.`);
+  }
+  return localPath;
+}
+
+/**
+ * What a finished torrent contains, item by item, with the target each
+ * item would get on an automatic import (for the review dialog).
+ */
+export async function describeTorrent(hash) {
+  const row = torrentDb.get(hash);
+  if (!row) throw fail('Unknown torrent', 404);
+  if (!finished(row)) throw fail('The download has not finished yet', 409);
+  const localPath = await localPathOf(row);
+  const plan = await describeRelease(localPath, { releaseName: row.releaseTitle || row.name });
+  return { releaseName: plan.releaseName, items: plan.items, unsupported: plan.unsupported };
+}
+
 /**
  * Import a finished torrent into its bookmark (creating a local series
- * when none was chosen). Safe to call again after a failure.
+ * when none was chosen). Safe to call again after a failure. With a
+ * selection ([{ path, as: 'volume'|'chapter'|'skip', number }]) only those
+ * items are imported, at those targets.
  */
-export async function importTorrent(hash, { bookmarkId = null } = {}) {
+export async function importTorrent(hash, { bookmarkId = null, selection = null } = {}) {
   const row = torrentDb.get(hash);
   if (!row) throw fail('Unknown torrent', 404);
   if (row.status === 'importing') throw fail('Import already running', 409);
-  if (!['completed', 'imported', 'failed'].includes(row.status) && row.progress < 1) throw fail('The download has not finished yet', 409);
+  if (!finished(row)) throw fail('The download has not finished yet', 409);
 
   const targetId = bookmarkId || row.bookmarkId;
   torrentDb.update(row.hash, { status: 'importing', error: null, bookmarkId: targetId || null });
@@ -312,16 +342,11 @@ export async function importTorrent(hash, { bookmarkId = null } = {}) {
     let bookmark = targetId ? bookmarkDb.getById(targetId) : null;
     if (targetId && !bookmark) throw new Error('The chosen series no longer exists');
 
-    const reported = row.contentPath || (row.savePath && row.name ? path.join(row.savePath, row.name) : null);
-    if (!reported) throw new Error('qBittorrent has not reported where the files are yet; refresh and try again');
-    const localPath = toLocalPath(reported);
-    if (!await fs.pathExists(localPath)) {
-      throw new Error(`Cannot see the download at "${localPath}". qBittorrent reports "${reported}"; add a path mapping in Settings > Torrents if the app sees that folder under another path.`);
-    }
+    const localPath = await localPathOf(row);
     // Only now create a series for it, so a path problem leaves no empty one behind
     if (!bookmark) bookmark = createLocalSeries(row.newSeriesTitle || parseReleaseName(row.releaseTitle || row.name).title || row.name, row.userId);
 
-    const summary = await importRelease(bookmark, localPath, { releaseName: row.releaseTitle || row.name });
+    const summary = await importRelease(bookmark, localPath, { releaseName: row.releaseTitle || row.name, selection });
     if (summary.volumes.length === 0 && summary.chapters.length === 0) {
       throw new Error(summary.skipped[0] || 'Nothing was imported');
     }
@@ -415,4 +440,4 @@ export function start() {
   if (torrentDb.active().length > 0) ensurePolling();
 }
 
-export default { search, grab, poll, ensurePolling, importTorrent, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT };
+export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT };

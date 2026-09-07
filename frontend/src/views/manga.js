@@ -14,6 +14,7 @@ import { offlineManager } from '../offline-manager.js';
 import { icon, placeholder, coverImg } from '../icons.js';
 import { session } from '../session.js';
 import { openTorrentSearchModal } from '../torrent-search.js';
+import { openVolumeManager } from '../volume-manager.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -1178,6 +1179,7 @@ function renderVolumesSection(manga, downloadedChapters) {
       ? `<span class="badge badge-downloaded">${totalVolDownloaded} downloaded</span>`
       : ''}
         </button>
+        <button class="btn btn-secondary btn-small" id="manage-volumes-btn" title="Rename, renumber, reorder or delete volumes">${icon('settings')} Manage</button>
         <button class="btn btn-secondary btn-small" id="add-volume-btn">${icon('plus')} Add Volume</button>
       </div>
       <div class="volumes-grid" id="volumes-grid">
@@ -1983,6 +1985,11 @@ export function setupListeners() {
   // Torrent search for volume releases of this title
   app.querySelector('#find-volumes-btn')?.addEventListener('click', () => {
     openTorrentSearchModal({ query: manga.alias || manga.title, bookmarkId: manga.id, bookmarkTitle: manga.alias || manga.title });
+  });
+
+  // Volume manager (rename, renumber, reorder, delete)
+  app.querySelector('#manage-volumes-btn')?.addEventListener('click', () => {
+    openVolumeManager(manga, { onChanged: async () => { await loadData(manga.id); mount([manga.id]); } });
   });
 
   // Volume Management Listeners
