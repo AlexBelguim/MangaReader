@@ -382,16 +382,17 @@ export class ComixScraper extends BaseScraper {
           // Strip comix.to's hardcoded default genre exclusions from API calls
           await page.setRequestInterception(true);
           page.on('request', (req) => {
+            if (req.isInterceptResolutionHandled()) return;
             const url = req.url();
             if (url.includes('/api/') && url.includes('genres')) {
               const cleaned = url.replace(/[&?]genres(\[\])?=[^&]*/g, '');
               if (cleaned !== url) {
                 console.log(`  [COMIX] Stripped genre filters from API call`);
-                req.continue({ url: cleaned });
+                req.continue({ url: cleaned }).catch(() => { });
                 return;
               }
             }
-            req.continue();
+            req.continue().catch(() => { });
           });
         },
 

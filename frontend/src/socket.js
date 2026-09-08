@@ -133,7 +133,8 @@ export const SocketEvents = {
     SITE_CHALLENGE: 'site:challenge',
     SITE_CHALLENGE_CLEARED: 'site:challenge-cleared',
     SITE_SESSION: 'site:session',
-    TORRENT_UPDATE: 'torrent:update'
+    TORRENT_UPDATE: 'torrent:update',
+    IMPORT_PROGRESS: 'import:progress'
 };
 
 // Export singleton instance

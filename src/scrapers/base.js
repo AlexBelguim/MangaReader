@@ -89,15 +89,16 @@ export class BaseScraper {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // Block unnecessary resources for faster loading
+    // Block unnecessary resources for faster loading. A request that was
+    // already resolved (another handler, or the page going away) must be
+    // left alone: continuing it twice throws inside puppeteer, and that
+    // rejection is not caught by anyone - it took the whole server down.
     await this.page.setRequestInterception(true);
     this.page.on('request', (req) => {
+      if (req.isInterceptResolutionHandled()) return;
       const resourceType = req.resourceType();
-      if (['stylesheet', 'font', 'media'].includes(resourceType)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
+      const action = ['stylesheet', 'font', 'media'].includes(resourceType) ? req.abort() : req.continue();
+      action.catch(() => { /* page closed mid-flight */ });
     });
 
     return this.page;

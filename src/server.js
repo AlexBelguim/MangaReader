@@ -406,7 +406,7 @@ app.get('/api/auto-check/status', (req, res) => {
 // Admins trigger a global run; other roles only check their own manga.
 app.post('/api/auto-check/run', async (req, res) => {
   try {
-    const result = await runAutoCheck(true, req.user.role === 'admin' ? null : req.user.id);
+    const result = await runAutoCheckSerial(true, req.user.role === 'admin' ? null : req.user.id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -627,12 +627,23 @@ async function runAutoCheck(forceAll = false, userId = null, { onlyIds = null } 
   return results;
 }
 
+// Auto-check runs must not overlap: each scraper keeps one working page,
+// so two concurrent runs close each other's pages ("frame detached", "no
+// target"). The scheduled run, the manual "Run All Now" and the resume
+// after a site opens all go through this chain.
+let autoCheckChain = Promise.resolve();
+function runAutoCheckSerial(...args) {
+  const run = autoCheckChain.then(() => runAutoCheck(...args));
+  autoCheckChain = run.catch(() => { });
+  return run;
+}
+
 function scheduleAutoCheck() {
   const ONE_HOUR = 60 * 60 * 1000;
 
   const runScheduled = async () => {
     try {
-      await runAutoCheck();
+      await runAutoCheckSerial();
     } catch (err) {
       console.error('[Auto-Check] Scheduled check failed:', err);
     }
@@ -686,7 +697,7 @@ async function start() {
     const ids = skippedByChallenge.get(site);
     if (!ids || ids.size === 0) return;
     skippedByChallenge.delete(site);
-    runAutoCheck(false, null, { onlyIds: new Set(ids) })
+    runAutoCheckSerial(false, null, { onlyIds: new Set(ids) })
       .catch(err => console.error(`[Auto-Check] Resume for ${site} failed: ${err.message}`));
   });
 
@@ -735,6 +746,19 @@ async function start() {
 export { io };
 
 start().catch(console.error);
+
+// A scraper or browser error that escapes its promise (a puppeteer request
+// handler, a page closed mid-navigation) must not take the whole server -
+// and every running download or import - down with it. Log it and go on.
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  console.error(`[Process] Unhandled rejection (kept running): ${msg}`);
+  logger.error(`[Process] Unhandled rejection: ${msg}`);
+});
+process.on('uncaughtException', (err) => {
+  console.error(`[Process] Uncaught exception (kept running): ${err.stack || err.message}`);
+  logger.error(`[Process] Uncaught exception: ${err.stack || err.message}`);
+});
 
 // Handle shutdown
 process.on('SIGINT', async () => {

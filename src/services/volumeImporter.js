@@ -239,9 +239,11 @@ export async function describeRelease(rootPath, { releaseName = '' } = {}) {
  * target, or only a selection ([{ path, as: 'volume'|'chapter'|'skip',
  * number }]) at the targets chosen. Only items the scan found can be
  * imported.
+ * `onProgress({ done, total, current })` is called before each item and once
+ * at the end, for progress displays.
  * @returns {Promise<{ volumes: Array<{ number, name, pages, id }>, chapters: number[], skipped: string[] }>}
  */
-export async function importRelease(bookmark, rootPath, { releaseName = '', selection = null } = {}) {
+export async function importRelease(bookmark, rootPath, { releaseName = '', selection = null, onProgress = null } = {}) {
   const plan = await describeRelease(rootPath, { releaseName });
   const summary = { volumes: [], chapters: [], skipped: [] };
   for (const u of plan.unsupported) summary.skipped.push(`${u} (only .cbz/.zip archives and image folders can be imported)`);
@@ -271,7 +273,13 @@ export async function importRelease(bookmark, rootPath, { releaseName = '', sele
   }
 
   const seenVolumes = new Set();
-  for (const item of items) {
+  const report = (done, current) => {
+    if (!onProgress) return;
+    try { onProgress({ done, total: items.length, current }); } catch (e) { /* a display problem must not stop the import */ }
+  };
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    report(i, item.name);
     const abs = path.resolve(plan.root, item.path);
     try {
       if (item.as === 'chapter') {
@@ -292,6 +300,7 @@ export async function importRelease(bookmark, rootPath, { releaseName = '', sele
       summary.skipped.push(`${item.name}: ${e.message}`);
     }
   }
+  report(items.length, null);
   return summary;
 }
 

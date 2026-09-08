@@ -11,7 +11,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
 import { requireAdmin } from '../middleware/auth.js';
-import { describeRelease, importRelease } from '../services/volumeImporter.js';
+import { describeRelease } from '../services/volumeImporter.js';
 import { parseReleaseName } from '../services/release-name.js';
 import { torrentSettingsDb, torrentDb, isMaskedSecret } from '../db/torrents.js';
 import { bookmarkDb } from '../db/bookmarks.js';
@@ -130,6 +130,20 @@ router.post('/downloads/refresh', async (req, res) => {
     }
 });
 
+// ==================== IMPORT PROGRESS ====================
+// Every import (torrent or folder) runs as a queue task; these list them
+// with their progress so the queue page and the review dialog can follow.
+
+router.get('/imports', (req, res) => {
+    res.json({ imports: torrents.listImports() });
+});
+
+router.get('/imports/:id', (req, res) => {
+    const rec = torrents.getImport(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'Unknown import' });
+    res.json(rec);
+});
+
 // ==================== IMPORT FROM A FOLDER ALREADY ON DISK ====================
 // A release that is already where qBittorrent puts things (a re-import after
 // a deleted volume, or something dropped there by hand) can be imported
@@ -232,15 +246,14 @@ router.post('/local-downloads/import', async (req, res) => {
         const { target } = resolveImportPath(requested);
         if (!await fs.pathExists(target)) return res.status(404).json({ error: 'Not found on disk' });
         if (selection !== undefined && selection !== null && !Array.isArray(selection)) return res.status(400).json({ error: 'selection must be a list' });
-        let bookmark = bookmarkId ? bookmarkDb.getById(bookmarkId, req.user.id) : null;
+        const bookmark = bookmarkId ? bookmarkDb.getById(bookmarkId, req.user.id) : null;
         if (bookmarkId && !bookmark) return res.status(404).json({ error: 'Series not found' });
-        if (!bookmark) bookmark = torrents.createLocalSeries(newSeriesTitle || parseReleaseName(path.basename(target)).title || path.basename(target), req.user.id);
-        const summary = await importRelease(bookmark, target, { releaseName: path.basename(target), selection: Array.isArray(selection) ? selection : null });
-        if (summary.volumes.length === 0 && summary.chapters.length === 0) {
-            return res.status(400).json({ error: summary.skipped[0] || 'Nothing was imported', summary });
-        }
-        console.log(`[Torrents] Imported folder "${target}" into ${bookmark.alias || bookmark.title}: ${summary.volumes.length} volume(s), ${summary.chapters.length} chapter(s)`);
-        res.json({ success: true, bookmarkId: bookmark.id, summary });
+        // Queued: the import runs as a task with progress (GET /imports/:id, queue page)
+        const rec = torrents.queueFolderImport({
+            path: target, bookmark, newSeriesTitle: newSeriesTitle || null,
+            selection: Array.isArray(selection) ? selection : null, userId: req.user.id
+        });
+        res.status(202).json({ success: true, queued: true, importId: rec.id, import: rec });
     } catch (error) {
         res.status(statusOf(error, 500)).json({ error: error.message });
     }
@@ -281,8 +294,9 @@ router.post('/downloads/:hash/import', async (req, res) => {
         const { bookmarkId, selection } = req.body || {};
         if (bookmarkId && !bookmarkDb.getById(bookmarkId, req.user.id)) return res.status(404).json({ error: 'Series not found' });
         if (selection !== undefined && selection !== null && !Array.isArray(selection)) return res.status(400).json({ error: 'selection must be a list' });
-        const { bookmark, summary } = await torrents.importTorrent(row.hash, { bookmarkId: bookmarkId || null, selection: Array.isArray(selection) ? selection : null });
-        res.json({ success: true, bookmarkId: bookmark.id, summary });
+        // Queued: the import runs as a task with progress (GET /imports/:id, queue page)
+        const rec = torrents.queueTorrentImport(row.hash, { bookmarkId: bookmarkId || null, selection: Array.isArray(selection) ? selection : null });
+        res.status(202).json({ success: true, queued: true, importId: rec.id, import: rec });
     } catch (error) {
         res.status(statusOf(error, 500)).json({ error: error.message });
     }

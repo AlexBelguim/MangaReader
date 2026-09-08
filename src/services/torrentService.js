@@ -16,6 +16,7 @@ import { QBittorrentClient, isComplete, ERROR_STATES } from './qbittorrent.js';
 import { parseReleaseName } from './release-name.js';
 import { importRelease, describeRelease } from './volumeImporter.js';
 import { emitToAll } from './socketService.js';
+import { queue } from '../queue.js';
 
 export const TORRENT_EVENT = 'torrent:update';
 
@@ -285,12 +286,99 @@ async function doPoll() {
     torrentDb.update(row.hash, patch);
     changed = true;
     if (patch.status === 'completed' && row.autoImport) {
-      importTorrent(row.hash).catch(e => console.warn(`[Torrents] Auto-import of ${row.hash} failed: ${e.message}`));
+      try { queueTorrentImport(row.hash); } catch (e) { console.warn(`[Torrents] Auto-import of ${row.hash} failed: ${e.message}`); }
     }
   }
   if (changed) broadcast();
   // Keep polling while something is still downloading or waiting to import
   return torrentDb.active().some(t => t.status === 'downloading' || t.status === 'importing');
+}
+
+// ─── Import tracking ─────────────────────────────────────────────────
+// Every import (a finished torrent, or a folder already on disk) runs as
+// a queue task and is tracked here with per-item progress, so the queue
+// page can show it and the review dialog can follow it after the request
+// that started it has returned.
+
+export const IMPORT_EVENT = 'import:progress';
+const MAX_IMPORT_RECORDS = 100;
+const imports = new Map(); // id -> record
+let importSeq = 0;
+
+function emitImport(rec) {
+  emitToAll(IMPORT_EVENT, rec);
+}
+
+function pruneImports() {
+  if (imports.size <= MAX_IMPORT_RECORDS) return;
+  for (const [id, r] of imports) {
+    if (r.status === 'done' || r.status === 'failed') imports.delete(id);
+    if (imports.size <= MAX_IMPORT_RECORDS) break;
+  }
+}
+
+function newImport(fields) {
+  const id = `imp_${Date.now().toString(36)}_${++importSeq}`;
+  const rec = {
+    id, status: 'queued', total: 0, done: 0, current: null,
+    createdAt: new Date().toISOString(), startedAt: null, finishedAt: null,
+    summary: null, error: null, hash: null, path: null, bookmarkId: null, bookmarkTitle: null, userId: null,
+    ...fields
+  };
+  imports.set(id, rec);
+  pruneImports();
+  emitImport(rec);
+  return rec;
+}
+
+/** Imports, newest first (running and queued ones included). */
+export function listImports() {
+  return [...imports.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export function getImport(id) {
+  return imports.get(id) || null;
+}
+
+// Run `work(onProgress)` as a queue task, keeping the record in step
+function runQueuedImport(rec, work) {
+  queue.addAsync({
+    type: 'import',
+    description: `Import ${rec.title}${rec.bookmarkTitle ? ` into ${rec.bookmarkTitle}` : ''}`,
+    mangaId: rec.bookmarkId || null,
+    mangaTitle: rec.bookmarkTitle || null,
+    userId: rec.userId ?? null,
+    execute: async () => {
+      rec.status = 'running';
+      rec.startedAt = new Date().toISOString();
+      emitImport(rec);
+      const onProgress = ({ done, total, current }) => {
+        rec.done = done;
+        rec.total = total;
+        rec.current = current || null;
+        emitImport(rec);
+      };
+      try {
+        const { bookmark, summary } = await work(onProgress);
+        rec.status = 'done';
+        rec.summary = summary;
+        rec.bookmarkId = bookmark.id;
+        rec.bookmarkTitle = bookmark.alias || bookmark.title;
+        rec.current = null;
+        rec.done = rec.total;
+        rec.finishedAt = new Date().toISOString();
+        emitImport(rec);
+        return { bookmarkId: bookmark.id, volumes: summary.volumes.length, chapters: summary.chapters.length, skipped: summary.skipped.length };
+      } catch (e) {
+        rec.status = 'failed';
+        rec.error = e.message;
+        rec.finishedAt = new Date().toISOString();
+        emitImport(rec);
+        throw e;
+      }
+    }
+  });
+  return rec;
 }
 
 // ─── Import ──────────────────────────────────────────────────────────
@@ -329,7 +417,7 @@ export async function describeTorrent(hash) {
  * selection ([{ path, as: 'volume'|'chapter'|'skip', number }]) only those
  * items are imported, at those targets.
  */
-export async function importTorrent(hash, { bookmarkId = null, selection = null } = {}) {
+export async function importTorrent(hash, { bookmarkId = null, selection = null, onProgress = null } = {}) {
   const row = torrentDb.get(hash);
   if (!row) throw fail('Unknown torrent', 404);
   if (row.status === 'importing') throw fail('Import already running', 409);
@@ -346,7 +434,7 @@ export async function importTorrent(hash, { bookmarkId = null, selection = null 
     // Only now create a series for it, so a path problem leaves no empty one behind
     if (!bookmark) bookmark = createLocalSeries(row.newSeriesTitle || parseReleaseName(row.releaseTitle || row.name).title || row.name, row.userId);
 
-    const summary = await importRelease(bookmark, localPath, { releaseName: row.releaseTitle || row.name, selection });
+    const summary = await importRelease(bookmark, localPath, { releaseName: row.releaseTitle || row.name, selection, onProgress });
     if (summary.volumes.length === 0 && summary.chapters.length === 0) {
       throw new Error(summary.skipped[0] || 'Nothing was imported');
     }
@@ -359,6 +447,55 @@ export async function importTorrent(hash, { bookmarkId = null, selection = null 
     broadcast();
     throw e;
   }
+}
+
+// Torrents with an import queued but not started yet (the row still says
+// completed until the task runs)
+const queuedHashes = new Set();
+
+/**
+ * Queue the import of a finished torrent; the record it returns tracks
+ * progress. Throws (with a status) when the torrent cannot be imported.
+ */
+export function queueTorrentImport(hash, { bookmarkId = null, selection = null } = {}) {
+  const row = torrentDb.get(hash);
+  if (!row) throw fail('Unknown torrent', 404);
+  if (row.status === 'importing' || queuedHashes.has(hash)) throw fail('Import already running', 409);
+  if (!finished(row)) throw fail('The download has not finished yet', 409);
+  const targetId = bookmarkId || row.bookmarkId || null;
+  const bookmark = targetId ? bookmarkDb.getById(targetId) : null;
+  queuedHashes.add(hash);
+  const rec = newImport({
+    title: row.releaseTitle || row.name, hash,
+    bookmarkId: bookmark?.id || null, bookmarkTitle: bookmark ? (bookmark.alias || bookmark.title) : (row.newSeriesTitle || null),
+    userId: row.userId ?? null
+  });
+  return runQueuedImport(rec, async (onProgress) => {
+    queuedHashes.delete(hash);
+    return importTorrent(hash, { bookmarkId, selection, onProgress });
+  });
+}
+
+/**
+ * Queue the import of a folder or archive already on disk into a bookmark
+ * (or a new local series named `newSeriesTitle`).
+ */
+export function queueFolderImport({ path: rootPath, bookmark = null, newSeriesTitle = null, selection = null, userId = null }) {
+  const name = path.basename(rootPath);
+  const rec = newImport({
+    title: name, path: rootPath,
+    bookmarkId: bookmark?.id || null, bookmarkTitle: bookmark ? (bookmark.alias || bookmark.title) : (newSeriesTitle || null),
+    userId
+  });
+  return runQueuedImport(rec, async (onProgress) => {
+    const target = bookmark || createLocalSeries(newSeriesTitle || parseReleaseName(name).title || name, userId);
+    const summary = await importRelease(target, rootPath, { releaseName: name, selection, onProgress });
+    if (summary.volumes.length === 0 && summary.chapters.length === 0) {
+      throw new Error(summary.skipped[0] || 'Nothing was imported');
+    }
+    console.log(`[Torrents] Imported folder "${rootPath}" into ${target.alias || target.title}: ${summary.volumes.length} volume(s), ${summary.chapters.length} chapter(s)`);
+    return { bookmark: target, summary };
+  });
 }
 
 export function createLocalSeries(title, userId) {
@@ -434,10 +571,10 @@ export function start() {
   for (const row of torrentDb.active().filter(t => t.status === 'importing')) {
     torrentDb.update(row.hash, { status: 'completed', error: 'The import was interrupted by a restart' });
     if (row.autoImport) {
-      importTorrent(row.hash).catch(e => console.warn(`[Torrents] Import of ${row.hash} after restart failed: ${e.message}`));
+      try { queueTorrentImport(row.hash); } catch (e) { console.warn(`[Torrents] Import of ${row.hash} after restart failed: ${e.message}`); }
     }
   }
   if (torrentDb.active().length > 0) ensurePolling();
 }
 
-export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, createLocalSeries, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT };
+export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, queueTorrentImport, queueFolderImport, listImports, getImport, createLocalSeries, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT, IMPORT_EVENT };

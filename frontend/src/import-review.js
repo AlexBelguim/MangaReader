@@ -25,6 +25,34 @@ function detectedLabel(item) {
     return 'no number in the name';
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * The import now runs as a queue task. Follow it until it ends, showing
+ * progress in `el`; resolves with { bookmarkId, summary }, or null when the
+ * dialog was closed meanwhile (the import carries on regardless).
+ */
+async function followImport(started, el) {
+    if (!started.importId) return started; // an older server answering with the summary at once
+    for (; ;) {
+        if (!document.getElementById(MODAL_ID)) return null;
+        let rec;
+        try {
+            rec = await api.getImport(started.importId);
+        } catch (e) {
+            await sleep(2000);
+            continue;
+        }
+        if (rec.status === 'done') return { bookmarkId: rec.bookmarkId, summary: rec.summary };
+        if (rec.status === 'failed') throw new Error(rec.error || 'Import failed');
+        const where = rec.status === 'queued' ? 'Queued behind other tasks…' : `Importing ${Math.min(rec.done + 1, rec.total || rec.done + 1)} of ${rec.total || '?'}${rec.current ? `: ${esc(rec.current)}` : ''}`;
+        el.innerHTML = `
+            <div class="torrent-row-status">${icon('loader', { spin: true })} ${where}</div>
+            <div class="torrent-hint">You can close this dialog; the import carries on and shows on the <a href="#/queue">Queue</a> page.</div>`;
+        await sleep(1500);
+    }
+}
+
 export function closeImportReviewModal() {
     document.getElementById(MODAL_ID)?.remove();
     document.removeEventListener('keydown', onKey);
@@ -204,9 +232,13 @@ export async function openImportReviewModal(source, { onImported } = {}) {
         btn.textContent = 'Importing…';
         body.querySelectorAll('input, select, button').forEach(el => { el.disabled = true; });
         try {
-            const r = fromDisk
+            const started = fromDisk
                 ? await api.importFolder({ path: source.path, bookmarkId: targetId, newSeriesTitle: data.newSeriesTitle || source.name, selection })
                 : await api.importTorrent(torrent.hash, targetId, selection);
+            btn.textContent = 'Importing…';
+            footer.querySelector('[data-act="close"]').textContent = 'Close';
+            const r = await followImport(started, body.querySelector('#review-result'));
+            if (!r) return; // dialog closed; the queue page shows the rest
             const v = r.summary?.volumes || [];
             const c = r.summary?.chapters || [];
             const skipped = r.summary?.skipped || [];

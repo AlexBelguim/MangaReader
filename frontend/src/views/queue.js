@@ -17,6 +17,7 @@ import { openImportReviewModal } from '../import-review.js';
 let state = {
   downloads: {},
   torrents: [],
+  imports: [],
   queueTasks: [],
   historyTasks: [],
   autoCheck: null,
@@ -24,6 +25,7 @@ let state = {
   showEmptyChecks: false,
   collapsed: {
     torrents: false,
+    imports: false,
     active: false,
     scheduled: false,
     completed: false,
@@ -300,6 +302,62 @@ function renderTorrentCard(t) {
   `;
 }
 
+function importStatusLabel(rec) {
+  switch (rec.status) {
+    case 'queued': return '◌ Queued';
+    case 'running': return '● Importing';
+    case 'done': return '✓ Imported';
+    case 'failed': return '✗ Failed';
+    default: return rec.status;
+  }
+}
+
+function importStatusColor(rec) {
+  if (rec.status === 'done') return 'var(--color-success)';
+  if (rec.status === 'failed') return 'var(--color-error)';
+  return 'var(--color-warning)';
+}
+
+// One import (a finished torrent or a folder on disk) running as a task
+function renderImportCard(rec) {
+  const total = rec.total || 0;
+  const done = rec.status === 'done' ? total : (rec.done || 0);
+  const pct = total > 0 ? Math.round((done / total) * 100) : (rec.status === 'done' ? 100 : 0);
+  const s = rec.summary;
+  const resultText = s
+    ? [s.volumes?.length ? `${s.volumes.length} volume${s.volumes.length === 1 ? '' : 's'} (${s.volumes.map(v => v.name).join(', ')})` : '',
+       s.chapters?.length ? `${s.chapters.length} chapter${s.chapters.length === 1 ? '' : 's'}` : '',
+       s.skipped?.length ? `${s.skipped.length} skipped` : ''].filter(Boolean).join(' · ')
+    : '';
+  const target = rec.bookmarkId
+    ? `<a href="#/manga/${escapeText(rec.bookmarkId)}">${escapeText(rec.bookmarkTitle || 'open series')}</a>`
+    : (rec.bookmarkTitle ? `new series “${escapeText(rec.bookmarkTitle)}”` : '');
+  return `
+    <div class="queue-card task-card import-card" data-import-id="${escapeText(rec.id)}">
+      <div class="queue-card-header">
+        <div class="task-info">
+          <span class="task-icon">${icon(rec.path ? 'folder' : 'package')}</span>
+          <div>
+            <div class="task-title" title="${escapeText(rec.path || rec.title)}">${escapeText(rec.title)}</div>
+            <div class="task-status" style="color: ${importStatusColor(rec)}">${importStatusLabel(rec)}${target ? ` · into ${target}` : ''}</div>
+          </div>
+        </div>
+      </div>
+      <div class="queue-card-body">
+        ${rec.status === 'running' || rec.status === 'queued' ? `
+          <div class="progress-bar-container">
+            <div class="progress-bar" style="width: ${pct}%"></div>
+            <span class="progress-text">${total ? `${done} / ${total} items (${pct}%)` : 'Starting…'}</span>
+          </div>
+          ${rec.current ? `<div class="task-current">Currently: ${escapeText(rec.current)}</div>` : ''}` : ''}
+        ${rec.status === 'done' && resultText ? `<div class="task-current">${escapeText(resultText)}</div>` : ''}
+        ${rec.status === 'done' && s?.skipped?.length ? `<ul class="task-error-list">${s.skipped.slice(0, 5).map(x => `<li>${escapeText(x)}</li>`).join('')}</ul>` : ''}
+        ${rec.status === 'failed' ? `<div class="task-errors">${icon('triangle-alert')} ${escapeText(rec.error || 'Import failed')}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function renderQueueTask(task) {
   const data = task.data || {};
   return `
@@ -388,7 +446,10 @@ function render() {
     return true;
   });
   const activeTorrents = state.torrents.filter(t => ['downloading', 'completed', 'importing'].includes(t.status));
-  const totalActive = activeDownloads.length + filteredQueueTasks.length + activeTorrents.length;
+  const activeImports = state.imports.filter(r => r.status === 'running' || r.status === 'queued');
+  // Import tasks show as their own cards, not as bare queue rows
+  const queueTasksShown = filteredQueueTasks.filter(t => t.type !== 'import');
+  const totalActive = activeDownloads.length + queueTasksShown.length + activeTorrents.length + activeImports.length;
 
   const schedules = state.autoCheck?.schedules || [];
 
@@ -411,14 +472,25 @@ function render() {
         </div>
       ` : ''}
 
-      ${activeDownloads.length > 0 || filteredQueueTasks.length > 0 ? `
+      ${state.imports.length > 0 ? `
+        <div class="queue-section ${state.collapsed.imports ? 'collapsed' : ''}">
+          <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="imports">
+            <span class="collapse-icon">▼</span> Imports (${activeImports.length} active)
+          </h3>
+          <div class="queue-section-content">
+            ${state.imports.map(renderImportCard).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      ${activeDownloads.length > 0 || queueTasksShown.length > 0 ? `
         <div class="queue-section ${state.collapsed.active ? 'collapsed' : ''}">
           <h3 class="queue-section-title queue-section-header-collapsible" data-toggle="active">
             <span class="collapse-icon">▼</span> Active Tasks
           </h3>
           <div class="queue-section-content">
             ${activeDownloads.map(([id, task]) => renderDownloadCard(id, task)).join('')}
-            ${filteredQueueTasks.map(t => renderQueueTask(t)).join('')}
+            ${queueTasksShown.map(t => renderQueueTask(t)).join('')}
           </div>
         </div>
       ` : ''}
@@ -502,16 +574,18 @@ function render() {
 
 async function loadData() {
   try {
-    const [downloads, queueTasks, historyTasks, autoCheck, torrents] = await Promise.all([
+    const [downloads, queueTasks, historyTasks, autoCheck, torrents, imports] = await Promise.all([
       api.getDownloads().catch(() => ({})),
       api.getQueueTasks().catch(() => []),
       api.getQueueHistory(50).catch(() => []), // fetch last 50 historical tasks
       api.getAutoCheckStatus().catch(() => null),
-      api.getTorrentDownloads().catch(() => ({ torrents: [] }))
+      api.getTorrentDownloads().catch(() => ({ torrents: [] })),
+      api.getImports().catch(() => ({ imports: [] }))
     ]);
 
     state.downloads = downloads || {};
     state.torrents = torrents?.torrents || [];
+    state.imports = imports?.imports || [];
     state.queueTasks = queueTasks || [];
     state.historyTasks = historyTasks || [];
     state.autoCheck = autoCheck;
@@ -615,11 +689,9 @@ function setupListeners() {
           return;
         } else if (action === 'import') {
           btn.disabled = true;
-          btn.textContent = 'Importing…';
-          const r = await api.importTorrent(hash);
-          const v = r.summary?.volumes?.length || 0;
-          const c = r.summary?.chapters?.length || 0;
-          showToast(`Imported ${v} volume${v === 1 ? '' : 's'}${c ? ` and ${c} chapter${c === 1 ? '' : 's'}` : ''}`, 'success');
+          btn.textContent = 'Queued…';
+          await api.importTorrent(hash);
+          showToast('Import queued; its progress shows under Imports', 'info');
         } else if (action === 'remove') {
           const finished = t && ['imported', 'removed'].includes(t.status);
           if (!finished && !confirm(`Remove "${t?.name || 'this torrent'}" from qBittorrent and stop tracking it?`)) return;
@@ -739,6 +811,16 @@ export async function mount() {
     }
   };
 
+  // An import's progress arrives as the whole record
+  socketHandlers.importProgress = (rec) => {
+    if (!rec?.id) return;
+    const i = state.imports.findIndex(r => r.id === rec.id);
+    if (i >= 0) state.imports[i] = rec;
+    else state.imports.unshift(rec);
+    refresh();
+  };
+  socket.on(SocketEvents.IMPORT_PROGRESS, socketHandlers.importProgress);
+
   socket.on(SocketEvents.DOWNLOAD_PROGRESS, socketHandlers.downloadProgress);
   socket.on(SocketEvents.DOWNLOAD_COMPLETED, socketHandlers.downloadCompleted);
   socket.on(SocketEvents.QUEUE_UPDATED, socketHandlers.queueUpdated);
@@ -763,6 +845,9 @@ export function unmount() {
   }
   if (socketHandlers.torrentUpdate) {
     socket.off(SocketEvents.TORRENT_UPDATE, socketHandlers.torrentUpdate);
+  }
+  if (socketHandlers.importProgress) {
+    socket.off(SocketEvents.IMPORT_PROGRESS, socketHandlers.importProgress);
   }
   socketHandlers = {};
 }

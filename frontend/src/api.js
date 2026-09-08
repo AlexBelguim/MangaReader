@@ -772,6 +772,15 @@ class ApiClient {
         return this.post('/torrents/local-downloads/import', { path, bookmarkId, newSeriesTitle, selection });
     }
 
+    // Imports running as queue tasks (torrent or folder), with progress
+    getImports() {
+        return this.get('/torrents/imports');
+    }
+
+    getImport(id) {
+        return this.get(`/torrents/imports/${encodeURIComponent(id)}`);
+    }
+
     // Leftovers in the downloads folder (admin)
     getDownloadLeftovers() {
         return this.get('/admin/downloads/leftovers');
