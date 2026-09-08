@@ -143,6 +143,56 @@ router.patch('/map/:bookmarkId', (req, res) => {
     res.json({ mapping: anilistDb.getMapping(req.params.bookmarkId) });
 });
 
+// Where the tracker stands for one bookmark: AniList's own progress, the
+// highest chapter read here, and what was last pushed.
+router.get('/progress/:bookmarkId', async (req, res) => {
+    const tokenRow = requireConnection(req, res);
+    if (!tokenRow) return;
+    const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
+    if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+    const mapping = anilistDb.getMapping(req.params.bookmarkId);
+    if (!mapping) return res.status(404).json({ error: 'Not linked to AniList' });
+    try {
+        const entry = await anilistService.getListEntry(tokenRow.access_token, tokenRow.anilist_user_id, mapping.anilist_id);
+        res.json({
+            anilist: entry ? Math.floor(entry.progress || 0) : null,
+            anilistStatus: entry?.status || null,
+            local: anilistDb.highestReadChapter(req.params.bookmarkId, req.user.id),
+            lastPushed: anilistDb.getLastPushed(req.user.id, req.params.bookmarkId),
+            maxKnown: anilistDb.maxKnownChapter(req.params.bookmarkId),
+            chaptersTotal: mapping.chapters_total ?? null
+        });
+    } catch (error) {
+        res.status(502).json({ error: error.message });
+    }
+});
+
+// Set the tracker by hand - for progress made outside chapters, such as
+// reading volume releases. Writes the chapter to AniList, marks the
+// chapters up to it read here (as far as the app knows them), and
+// remembers it as the last push so reading on from there syncs as usual.
+router.post('/progress', async (req, res) => {
+    const tokenRow = requireConnection(req, res);
+    if (!tokenRow) return;
+    const { bookmarkId, progress } = req.body || {};
+    const chapter = Math.floor(Number(progress));
+    if (!bookmarkId || !Number.isFinite(chapter) || chapter < 0) return res.status(400).json({ error: 'bookmarkId and a chapter number (progress) are required' });
+    const bookmark = bookmarkDb.getById(bookmarkId, req.user.id);
+    if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+    const mapping = anilistDb.getMapping(bookmarkId);
+    if (!mapping) return res.status(404).json({ error: 'Not linked to AniList' });
+    try {
+        const saved = await anilistService.saveProgress(tokenRow.access_token, mapping.anilist_id, chapter, mapping.chapters_total);
+        const known = Math.min(chapter, anilistDb.maxKnownChapter(bookmarkId));
+        if (known > 0) bookmarkDb.markChaptersReadBelow(req.user.id, bookmarkId, known);
+        anilistDb.setLastPushed(req.user.id, bookmarkId, chapter);
+        logger.info(`[AniList] Progress set by hand to ${chapter} for "${mapping.anilist_title}" (${mapping.anilist_id})`);
+        res.json({ success: true, progress: saved.progress, status: saved.status, markedReadUpTo: known > 0 ? known : null });
+    } catch (error) {
+        res.status(502).json({ error: error.message });
+    }
+});
+
 router.delete('/map/:bookmarkId', (req, res) => {
     const bookmark = bookmarkDb.getById(req.params.bookmarkId, req.user.id);
     if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });

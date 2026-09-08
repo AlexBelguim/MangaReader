@@ -670,6 +670,14 @@ class ApiClient {
         return this.post('/anilist/pull');
     }
 
+    anilistGetProgress(bookmarkId) {
+        return this.get(`/anilist/progress/${bookmarkId}`);
+    }
+
+    anilistSetProgress(bookmarkId, progress) {
+        return this.post('/anilist/progress', { bookmarkId, progress });
+    }
+
     // ==================== TROPHY PAGES ====================
 
     getTrophyPages(mangaId, chapterNum) {
@@ -747,8 +755,13 @@ class ApiClient {
     }
 
     // Send a release to qBittorrent; bookmarkId null = a new local series
-    grabTorrent(releaseId, { bookmarkId = null, newSeriesTitle = null } = {}) {
-        return this.post('/torrents/downloads', { releaseId, bookmarkId, newSeriesTitle });
+    grabTorrent(releaseId, { bookmarkId = null, newSeriesTitle = null, autoImport = null } = {}) {
+        return this.post('/torrents/downloads', { releaseId, bookmarkId, newSeriesTitle, autoImport });
+    }
+
+    // A pasted magnet link or .torrent URL, handled like a grabbed release
+    addMagnet(magnet, { bookmarkId = null, newSeriesTitle = null, autoImport = null } = {}) {
+        return this.post('/torrents/downloads/magnet', { magnet, bookmarkId, newSeriesTitle, autoImport });
     }
 
     refreshTorrents() {

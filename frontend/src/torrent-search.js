@@ -124,6 +124,15 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
                     <button type="submit" class="btn btn-primary">Search</button>
                 </form>
                 ${targetHtml}
+                <label class="torrent-option">
+                    <input type="checkbox" id="torrent-auto-import" ${status.autoImport === false ? '' : 'checked'}>
+                    Import automatically when a download finishes. Untick to review what it contains first (Queue page).
+                </label>
+                <form class="torrent-magnet-form" id="torrent-magnet-form">
+                    <input type="text" id="torrent-magnet" placeholder="Or paste a magnet link / .torrent URL from elsewhere" autocomplete="off" spellcheck="false">
+                    <button type="submit" class="btn btn-secondary">Add</button>
+                </form>
+                <div class="torrent-hint" id="torrent-magnet-result" hidden></div>
                 <div class="torrent-results" id="torrent-results"><div class="torrent-hint">Searches every indexer enabled in Prowlarr. Volume releases show their volume number when the name says it.</div></div>
             </div>
         </div>
@@ -247,7 +256,8 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
         btn.textContent = 'Sending…';
         setRowStatus(index, 'pending', 'Sending to qBittorrent…');
         try {
-            const result = await api.grabTorrent(release.id, { bookmarkId: targetId, newSeriesTitle: targetId ? null : release.parsed?.title || null });
+            const autoImport = modal.querySelector('#torrent-auto-import')?.checked ?? null;
+            const result = await api.grabTorrent(release.id, { bookmarkId: targetId, newSeriesTitle: targetId ? null : release.parsed?.title || null, autoImport });
             tracked.set(index, { hash: result.torrent?.hash, title: release.title, done: false });
             setRowButton(index, 'Grabbed', false, false);
             if (result.torrent) applyTorrents([result.torrent]);
@@ -258,6 +268,37 @@ export async function openTorrentSearchModal({ query = '', bookmarkId = null, bo
             setRowStatus(index, 'error', `Failed: ${e.message}`);
         }
     };
+
+    // A magnet link (or .torrent URL) from elsewhere: same target, same tracking
+    modal.querySelector('#torrent-magnet-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const field = modal.querySelector('#torrent-magnet');
+        const out = modal.querySelector('#torrent-magnet-result');
+        const link = field.value.trim();
+        if (!link) { field.focus(); return; }
+        const select = modal.querySelector('#torrent-target-select');
+        const targetId = bookmarkId || (select ? select.value || null : null);
+        const autoImport = modal.querySelector('#torrent-auto-import')?.checked ?? null;
+        const btn = e.currentTarget.querySelector('button');
+        btn.disabled = true;
+        out.hidden = false;
+        out.className = 'torrent-hint';
+        out.textContent = 'Sending to qBittorrent…';
+        try {
+            const result = await api.addMagnet(link, { bookmarkId: targetId, autoImport });
+            field.value = '';
+            out.textContent = `Added "${result.torrent?.name || 'link'}"${targetId ? '' : ' as a new series'}; follow it on the Queue page.`;
+            if (result.torrent) applyTorrents([result.torrent]);
+            startPolling();
+            showToast('Magnet link added', 'success');
+            if (typeof onGrabbed === 'function') onGrabbed(result.torrent);
+        } catch (err) {
+            out.className = 'torrent-hint error';
+            out.textContent = err.message;
+        } finally {
+            btn.disabled = false;
+        }
+    });
 
     modal.querySelector('#torrent-search-form').addEventListener('submit', (e) => { e.preventDefault(); search(); });
     if (query) search(); else input.focus();

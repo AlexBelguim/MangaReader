@@ -3910,3 +3910,49 @@ button[data-action].pressing {
         display: none;
     }
 }
+
+/* ==================== Torrent finder: options + magnet box ==================== */
+.torrent-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: var(--space-sm) 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.torrent-option input {
+    margin-top: 3px;
+}
+
+.torrent-magnet-form {
+    display: flex;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.torrent-magnet-form input {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+/* ==================== AniList: progress by hand ==================== */
+.anilist-progress {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+}
+
+.anilist-progress-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 6px;
+}
+
+.anilist-progress-form input {
+    width: 110px;
+}

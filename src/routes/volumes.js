@@ -12,6 +12,7 @@ import { getPrimaryAdminId } from '../db/connection.js';
 import { downloader } from '../downloader.js';
 import { CONFIG } from '../config.js';
 import * as pageEdits from '../services/pageEdits.js';
+import { anilistService } from '../services/anilistService.js';
 import { volumeFolderName } from '../services/volumeImporter.js';
 
 const upload = multer({
@@ -152,6 +153,8 @@ router.post('/:id/volumes/:volumeId/progress', (req, res) => {
         if (!volume || volume.bookmarkId !== req.params.id) return res.status(404).json({ error: 'Volume not found' });
         const result = bookmarkDb.updateVolumeProgress(req.user.id, volume.id, Math.max(1, parseInt(page, 10) || 1), Math.max(1, parseInt(totalPages, 10) || 1));
         res.json({ success: true, ...result });
+        // The last page marked the volume's chapters read; mirror that to AniList
+        if (result?.finished) anilistService.pushProgress(req.user.id, req.params.id).catch(() => { });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

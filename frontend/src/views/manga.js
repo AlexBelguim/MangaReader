@@ -634,6 +634,15 @@ function renderAnilistModalView(mapping, manga) {
       </div>
       ${mapping.last_pushed_progress != null ? `<div class="text-muted" style="font-size: 0.8em;">Last synced: ch. ${mapping.last_pushed_progress}</div>` : ''}
     </div>
+    <div class="anilist-progress" id="anilist-progress">
+      <div class="text-muted" style="font-size: 0.85em;" id="anilist-progress-info">Loading progress…</div>
+      <form class="anilist-progress-form" id="anilist-progress-form">
+        <label for="anilist-progress-input">Set chapter</label>
+        <input type="number" id="anilist-progress-input" min="0" step="1" placeholder="e.g. 120">
+        <button type="submit" class="btn btn-small btn-primary">Save to AniList</button>
+      </form>
+      <div class="text-muted" style="font-size: 0.8em;">Read volumes or elsewhere? Set the chapter you are at; reading chapters here keeps syncing from there.</div>
+    </div>
     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 12px;">
       <input type="checkbox" id="anilist-sync-toggle" ${mapping.sync_enabled == 1 ? 'checked' : ''}> Sync progress
     </label>
@@ -642,6 +651,42 @@ function renderAnilistModalView(mapping, manga) {
       <button class="btn btn-small btn-danger" id="anilist-unlink-btn">Unlink</button>
     </div>
   `;
+
+  // Where the tracker stands, and a way to set it by hand
+  const progressInfo = document.getElementById('anilist-progress-info');
+  const progressInput = document.getElementById('anilist-progress-input');
+  const loadProgress = async () => {
+    try {
+      const p = await api.anilistGetProgress(manga.id);
+      const parts = [
+        `AniList: ${p.anilist != null ? `ch. ${p.anilist}` : 'not on your list yet'}`,
+        `read here: ${p.local ? `ch. ${p.local}` : 'nothing'}`,
+        p.chaptersTotal ? `of ${p.chaptersTotal}` : ''
+      ].filter(Boolean);
+      progressInfo.textContent = parts.join(' · ');
+      if (progressInput && !progressInput.value) progressInput.value = p.anilist ?? p.local ?? '';
+    } catch (err) {
+      progressInfo.textContent = `Could not read progress: ${err.message}`;
+    }
+  };
+  loadProgress();
+  document.getElementById('anilist-progress-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const chapter = parseInt(progressInput.value, 10);
+    if (!Number.isFinite(chapter) || chapter < 0) { showToast('Enter a chapter number', 'error'); return; }
+    const btn = e.currentTarget.querySelector('button');
+    btn.disabled = true;
+    try {
+      const r = await api.anilistSetProgress(manga.id, chapter);
+      showToast(`AniList set to chapter ${r.progress}${r.markedReadUpTo ? `; chapters up to ${r.markedReadUpTo} marked read here` : ''}`, 'success');
+      await loadProgress();
+      if (r.markedReadUpTo) { await loadData(manga.id); mount([manga.id]); }
+    } catch (err) {
+      showToast('Failed to set progress: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   document.getElementById('anilist-sync-toggle')?.addEventListener('change', async (e) => {
     try {

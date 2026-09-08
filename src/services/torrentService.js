@@ -13,6 +13,7 @@ import { bookmarkDb } from '../db/bookmarks.js';
 import { downloader } from '../downloader.js';
 import * as prowlarr from './prowlarr.js';
 import { QBittorrentClient, isComplete, ERROR_STATES } from './qbittorrent.js';
+import { infoHashFromMagnet, nameFromMagnet } from './torrent-file.js';
 import { parseReleaseName } from './release-name.js';
 import { importRelease, describeRelease } from './volumeImporter.js';
 import { emitToAll } from './socketService.js';
@@ -175,13 +176,61 @@ export async function grab({ releaseId, bookmarkId = null, newSeriesTitle = null
     autoImport: autoImport === null ? s.autoImport !== false : !!autoImport
   });
   broadcast();
-  finishGrab(pending, release, client, s).catch(e => console.error(`[Torrents] Grab of "${release.title}" failed: ${e.message}`));
+  finishGrab(pending, () => prowlarr.fetchRelease(requireProwlarr(), release), client, s)
+    .catch(e => console.error(`[Torrents] Grab of "${release.title}" failed: ${e.message}`));
   return pending;
 }
 
-async function finishGrab(pending, release, client, s) {
+/**
+ * Add a pasted magnet link (or a .torrent URL) for a series, the same way a
+ * search result is grabbed: qBittorrent gets the category and save path
+ * from the settings, the download is tracked and linked to the series,
+ * and it is imported when it finishes (per `autoImport`).
+ * @param {{ magnet: string, bookmarkId?: string, newSeriesTitle?: string, userId?: number, autoImport?: boolean }} opts
+ */
+export async function grabMagnet({ magnet, bookmarkId = null, newSeriesTitle = null, userId = null, autoImport = null }) {
+  const link = String(magnet || '').trim();
+  const isMagnet = /^magnet:\?/i.test(link);
+  const isUrl = /^https?:\/\/\S+$/i.test(link);
+  if (!isMagnet && !isUrl) throw fail('Paste a magnet link (magnet:?xt=urn:btih:…) or a .torrent URL', 400);
+  const hash = isMagnet ? infoHashFromMagnet(link) : null;
+  if (isMagnet && !hash) throw fail('That magnet link has no info hash', 400);
+  if (hash) {
+    const existing = torrentDb.get(hash);
+    if (existing && ['downloading', 'completed', 'importing'].includes(existing.status)) {
+      throw fail(`Already in the list: ${existing.name || existing.releaseTitle}`, 409);
+    }
+  }
+  const name = (isMagnet ? nameFromMagnet(link) : '') || (isUrl ? decodeURIComponent(link.split('/').pop().replace(/\.torrent$/i, '')) : '') || (hash ? `magnet ${hash.slice(0, 8)}` : 'pasted link');
+  const s = settings();
+  const client = qbt();
+
+  const pending = torrentDb.insert({
+    hash: `grab-${crypto.randomUUID()}`,
+    name,
+    releaseTitle: name,
+    size: 0,
+    indexer: 'pasted link',
+    infoUrl: null,
+    bookmarkId,
+    newSeriesTitle: bookmarkId ? null : (newSeriesTitle || parseReleaseName(name).title || name),
+    userId,
+    status: 'grabbing',
+    autoImport: autoImport === null ? s.autoImport !== false : !!autoImport
+  });
+  broadcast();
+  // qBittorrent takes magnets and URLs alike through the same "urls" field
+  finishGrab(pending, async () => ({ magnet: link }), client, s)
+    .catch(e => console.error(`[Torrents] Adding pasted link "${name}" failed: ${e.message}`));
+  return pending;
+}
+
+// Hand a grab to qBittorrent and turn the pending entry into a tracked
+// download. `getPayload` fetches what qBittorrent gets (a .torrent from
+// Prowlarr, or a magnet/URL as is).
+async function finishGrab(pending, getPayload, client, s) {
   try {
-    const payload = await prowlarr.fetchRelease(requireProwlarr(), release);
+    const payload = await getPayload();
     const added = await client.add({
       ...payload,
       category: s.qbittorrent.category || undefined,
@@ -198,7 +247,7 @@ async function finishGrab(pending, release, client, s) {
     const row = torrentDb.insert({
       ...pending,
       hash: added.hash,
-      name: added.name || release.title,
+      name: added.name || pending.name,
       status: 'downloading'
     });
     console.log(`[Torrents] Grabbed "${row.releaseTitle}" (${row.hash}) for ${row.bookmarkId ? `bookmark ${row.bookmarkId}` : `new series "${row.newSeriesTitle}"`}`);
@@ -358,6 +407,13 @@ function runQueuedImport(rec, work) {
         rec.current = current || null;
         emitImport(rec);
       };
+      // Replaced by a newer request (a review import) while still queued
+      if (rec.cancelled) {
+        rec.status = 'cancelled';
+        rec.finishedAt = new Date().toISOString();
+        emitImport(rec);
+        return { cancelled: true };
+      }
       try {
         const { bookmark, summary } = await work(onProgress);
         rec.status = 'done';
@@ -450,28 +506,38 @@ export async function importTorrent(hash, { bookmarkId = null, selection = null,
 }
 
 // Torrents with an import queued but not started yet (the row still says
-// completed until the task runs)
-const queuedHashes = new Set();
+// completed until the task runs): hash -> import record
+const queuedByHash = new Map();
 
 /**
  * Queue the import of a finished torrent; the record it returns tracks
- * progress. Throws (with a status) when the torrent cannot be imported.
+ * progress. An import that is still waiting in the queue (typically the
+ * automatic one) is replaced by a newer request, so a review import made
+ * while the automatic import waits behind other tasks wins. One that has
+ * already started cannot be interrupted. Throws (with a status) when the
+ * torrent cannot be imported.
  */
 export function queueTorrentImport(hash, { bookmarkId = null, selection = null } = {}) {
   const row = torrentDb.get(hash);
   if (!row) throw fail('Unknown torrent', 404);
-  if (row.status === 'importing' || queuedHashes.has(hash)) throw fail('Import already running', 409);
+  if (row.status === 'importing') throw fail('This torrent is being imported right now; wait for it to finish, then import again', 409);
   if (!finished(row)) throw fail('The download has not finished yet', 409);
+  const waiting = queuedByHash.get(hash);
+  if (waiting && waiting.status === 'queued') {
+    waiting.cancelled = true;
+    waiting.error = 'Replaced by a newer import request';
+    console.log(`[Torrents] Queued import of "${row.releaseTitle || row.name}" replaced by a newer request`);
+  }
   const targetId = bookmarkId || row.bookmarkId || null;
   const bookmark = targetId ? bookmarkDb.getById(targetId) : null;
-  queuedHashes.add(hash);
   const rec = newImport({
     title: row.releaseTitle || row.name, hash,
     bookmarkId: bookmark?.id || null, bookmarkTitle: bookmark ? (bookmark.alias || bookmark.title) : (row.newSeriesTitle || null),
     userId: row.userId ?? null
   });
+  queuedByHash.set(hash, rec);
   return runQueuedImport(rec, async (onProgress) => {
-    queuedHashes.delete(hash);
+    if (queuedByHash.get(hash) === rec) queuedByHash.delete(hash);
     return importTorrent(hash, { bookmarkId, selection, onProgress });
   });
 }
@@ -577,4 +643,4 @@ export function start() {
   if (torrentDb.active().length > 0) ensurePolling();
 }
 
-export default { search, grab, poll, ensurePolling, describeTorrent, importTorrent, queueTorrentImport, queueFolderImport, listImports, getImport, createLocalSeries, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT, IMPORT_EVENT };
+export default { search, grab, grabMagnet, poll, ensurePolling, describeTorrent, importTorrent, queueTorrentImport, queueFolderImport, listImports, getImport, createLocalSeries, remove, pause, resume, testProwlarr, testQbittorrent, toLocalPath, getCachedRelease, start, TORRENT_EVENT, IMPORT_EVENT };

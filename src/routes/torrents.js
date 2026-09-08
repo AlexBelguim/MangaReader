@@ -82,6 +82,7 @@ router.get('/status', (req, res) => {
     res.json({
         prowlarr: torrentSettingsDb.isProwlarrConfigured(),
         qbittorrent: torrentSettingsDb.isQbittorrentConfigured(),
+        autoImport: torrentSettingsDb.get().autoImport !== false,
         active: torrentDb.active().length
     });
 });
@@ -116,6 +117,22 @@ router.post('/downloads', async (req, res) => {
         res.status(202).json({ success: true, pending: true, torrent: row });
     } catch (error) {
         console.error(`[Torrents] Grab failed: ${error.message}`);
+        res.status(statusOf(error, 502)).json({ error: error.message });
+    }
+});
+
+// Add a pasted magnet link or .torrent URL for a series: body { magnet,
+// bookmarkId?, newSeriesTitle?, autoImport? }. Needs only qBittorrent.
+router.post('/downloads/magnet', async (req, res) => {
+    try {
+        const { magnet, bookmarkId, newSeriesTitle, autoImport } = req.body || {};
+        if (!magnet || typeof magnet !== 'string') return res.status(400).json({ error: 'magnet is required' });
+        if (magnet.length > 4000) return res.status(400).json({ error: 'That is too long to be a magnet link' });
+        if (bookmarkId && !bookmarkDb.getById(bookmarkId, req.user.id)) return res.status(404).json({ error: 'Series not found' });
+        const row = await torrents.grabMagnet({ magnet, bookmarkId: bookmarkId || null, newSeriesTitle: newSeriesTitle || null, userId: req.user.id, autoImport: autoImport ?? null });
+        res.status(202).json({ success: true, pending: true, torrent: row });
+    } catch (error) {
+        console.error(`[Torrents] Magnet add failed: ${error.message}`);
         res.status(statusOf(error, 502)).json({ error: error.message });
     }
 });
