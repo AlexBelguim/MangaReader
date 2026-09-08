@@ -1,10 +1,34 @@
 /**
  * Base scraper class that all website scrapers should extend
  */
+// Methods that work on the scraper's one shared page (`this.page`, set by
+// createPage and closed by closePage). Two of them running at once on the
+// same scraper close each other's page: "Navigating frame was detached",
+// "Cannot read properties of null (reading 'evaluate')", a helper injected
+// into a page that is gone. They are therefore serialised per scraper (see
+// the constructor); `search`, `checkAccess` and `browse` open pages of their
+// own and stay concurrent.
+const SERIALISED_METHODS = ['getMangaInfo', 'getChapterImages', 'quickCheckUpdates'];
+
 export class BaseScraper {
   constructor(browser) {
     this.browser = browser;
     this.page = null;
+    this._pageLock = Promise.resolve();
+    for (const name of SERIALISED_METHODS) {
+      const original = this[name];
+      if (typeof original !== 'function') continue;
+      this[name] = (...args) => this._withPageLock(() => original.apply(this, args));
+    }
+  }
+
+  // Run `fn` after every earlier page-using call on this scraper has
+  // finished (a quick check waits for the chapter being downloaded, then
+  // slots in before the next one).
+  _withPageLock(fn) {
+    const run = this._pageLock.then(fn);
+    this._pageLock = run.catch(() => { });
+    return run;
   }
 
   // Website identifier
