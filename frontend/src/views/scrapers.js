@@ -7,6 +7,7 @@ import { openCookieImportModal } from '../site-challenge.js';
 import { openAssistModal } from '../site-assist.js';
 import { openTorrentSearchModal } from '../torrent-search.js';
 import { session } from '../session.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -266,7 +267,7 @@ class ScraperView {
     document.querySelectorAll('.scraper-session-forget').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const site = e.currentTarget.dataset.scraper;
-        if (!confirm(`Forget the saved ${site} cookies? The scraper goes back to its own identity.`)) return;
+        if (!await confirmDialog(`Forget the saved ${site} cookies? The scraper goes back to its own identity.`, { danger: true })) return;
         try {
           const res = await api.forgetSiteSession(site);
           if (res.purged === null) {
@@ -811,7 +812,7 @@ class ScraperView {
       document.getElementById('preview-info-modal').style.display = 'none';
       window.location.hash = `#/manga/${bookmark.id}`;
     } catch (e) {
-      alert("Error adding manga: " + e.message);
+      showToast('Error adding manga: ' + e.message, 'error');
     } finally {
       if (btnElement) btnElement.textContent = originalText;
     }
@@ -865,7 +866,7 @@ class ScraperView {
       if (!append) {
         container.innerHTML = `<div class="error-state" style="grid-column: 1/-1; margin-top: 2rem;">Failed to load browse results: ${e.message}</div>`;
       } else {
-        alert("Failed to load more results: " + e.message);
+        showToast('Failed to load more results: ' + e.message, 'error');
       }
     } finally {
       this.isBrowsing = false;

@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../utils/toast.js';
 import { renderHeader } from '../components/header.js';
 import { session } from '../session.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 export default {
     mount: async (params) => {
@@ -127,7 +128,7 @@ async function loadUsers() {
             row.querySelector('.user-can-edit').addEventListener('change', save);
 
             row.querySelector('.user-reset-pw').addEventListener('click', async () => {
-                const password = prompt('New password for this user:');
+                const password = await promptDialog('New password for this user', { type: 'password', confirmText: 'Set password' });
                 if (!password) return;
                 try {
                     await api.updateUser(id, { password });
@@ -138,7 +139,7 @@ async function loadUsers() {
             });
 
             row.querySelector('.user-delete').addEventListener('click', async () => {
-                if (!confirm('Delete this user?')) return;
+                if (!await confirmDialog('Delete this user?', { danger: true })) return;
                 try {
                     await api.deleteUser(id);
                     showToast('User deleted', 'success');

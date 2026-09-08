@@ -12,6 +12,7 @@ import { renderHeader, setupHeaderListeners } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { icon, placeholder, coverImg } from '../icons.js';
 import { session } from '../session.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 // Library filter menu: one choice per group ("any" = no restriction).
 // Declared before the state it seeds.
@@ -815,7 +816,7 @@ export function setupListeners() {
   document.querySelectorAll('.delete-category-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const catName = btn.dataset.category;
-      if (!confirm(`Delete category "${catName}"?`)) return;
+      if (!await confirmDialog(`Delete category "${catName}"?`, { danger: true })) return;
       try {
         await api.delete(`/categories/${encodeURIComponent(catName)}`);
         showToast('Category deleted', 'success');

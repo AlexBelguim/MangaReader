@@ -321,6 +321,12 @@ class ApiClient {
         return this.post(`/bookmarks/${bookmarkId}/volumes/${volumeId}/chapters`, { chapterNumbers });
     }
 
+    // `seriesId`: file the new manga in that series once scraped;
+    // `copyFromBookmarkId`: copy that bookmark's tags and check settings.
+    addBookmarkToSeries(url, { seriesId, copyFromBookmarkId = null }) {
+        return this.post('/bookmarks', { url, seriesId, copyFromBookmarkId });
+    }
+
     addBookmark(url) {
         return this.post('/bookmarks', { url });
     }

@@ -10,6 +10,7 @@ import { showToast } from '../utils/toast.js';
 import { icon } from '../icons.js';
 import { offlineManager } from '../offline-manager.js';
 import { session } from '../session.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 // Volume names come from release names (outside input)
 const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -1061,7 +1062,7 @@ export function setupListeners() {
         const filename = getCurrentPageFilename();
         if (!filename || !state.manga || !state.chapter) return;
 
-        if (!confirm('Split this page into halves? This is permanent.')) return;
+        if (!await confirmDialog('Split this page into halves? This is permanent.', { danger: true })) return;
 
         const splitBtn = document.getElementById('split-btn');
 
@@ -1117,7 +1118,7 @@ export function setupListeners() {
         const filename = getCurrentPageFilename();
         if (!filename || !state.manga || !state.chapter) return;
 
-        if (!confirm(`Delete page "${filename}" permanently? This cannot be undone.`)) return;
+        if (!await confirmDialog(`Delete page "${filename}" permanently? This cannot be undone.`, { danger: true })) return;
 
         try {
             showToast('Deleting...', 'info');
@@ -1598,7 +1599,7 @@ async function openVersionSwitcher() {
 async function keepOnlyVersionInReader(num, keepUrl, versions) {
     const others = versions.filter(u => u !== keepUrl);
     const label = describeVersion(keepUrl) || 'this version';
-    if (!confirm(`Keep only "${label}" and delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${num}?`)) return;
+    if (!await confirmDialog(`Keep only "${label}" and delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${num}?`, { danger: true })) return;
 
     const mangaId = state.manga.id;
     let failed = 0;

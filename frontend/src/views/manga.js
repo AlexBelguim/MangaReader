@@ -16,7 +16,8 @@ import { session } from '../session.js';
 import { openTorrentSearchModal } from '../torrent-search.js';
 import { openChapterPagesModal } from '../chapter-pages.js';
 import { openFolderImportModal } from '../folder-import.js';
-import { openVolumeManager } from '../volume-manager.js';
+import { openVolumeManager } from '../volume-manager.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 const CHAPTERS_PER_PAGE = 50;
 
@@ -705,7 +706,7 @@ function renderAnilistModalView(mapping, manga) {
   });
 
   document.getElementById('anilist-unlink-btn')?.addEventListener('click', async () => {
-    if (!confirm(`Unlink "${mapping.anilist_title}" from AniList?`)) return;
+    if (!await confirmDialog(`Unlink "${mapping.anilist_title}" from AniList?`)) return;
     try {
       await api.anilistUnmap(manga.id);
       showToast('Unlinked from AniList', 'success');
@@ -1460,7 +1461,7 @@ export function setupListeners() {
       const isExtracted = btn.dataset.cbzExtracted === 'true';
 
       // Ask for chapter number
-      const chapterStr = prompt(`Enter chapter number for extraction:`, String(defaultChapter));
+      const chapterStr = await promptDialog('Chapter number for the extracted pages', { value: String(defaultChapter), type: 'number' });
       if (!chapterStr) return;
 
       const chapterNum = parseFloat(chapterStr);
@@ -2162,16 +2163,17 @@ async function bulkUpTo(action, chapterNum) {
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   try {
     if (action === 'read') {
-      if (!confirm(`Mark every chapter up to ${upTo} as read?`)) return;
+      if (!await confirmDialog(`Mark every chapter up to ${upTo} as read?`)) return;
       await api.markChaptersReadUpTo(manga.id, chapterNum);
       showToast(`Marked read up to ${upTo}`, 'success');
     } else if (action === 'hide-chapter') {
-      if (!confirm(`Hide every chapter up to ${upTo}? Their downloaded files are removed too. Locked chapters and chapters in a volume stay.`)) return;
+      if (!await confirmDialog(`Hide every chapter up to ${upTo}? Their downloaded files are removed too. Locked chapters and chapters in a volume stay.`, { danger: true })) return;
       const r = await api.bulkHideChapters(manga.id, chapterNum);
       showToast(`Hid ${plural(r.hidden, 'chapter version')}${r.skipped ? `, ${r.skipped} protected` : ''}`, 'success');
     } else if (action === 'delete-chapter') {
-      if (!confirm(`Delete the downloaded files of every chapter up to ${upTo}? Locked chapters stay.`)) return;
-      const hide = confirm(`Also hide those chapters, up to ${upTo}?`);
+      const answer = await confirmDialog(`Delete the downloaded files of every chapter up to ${upTo}? Locked chapters stay.`, { danger: true, option: `Also hide those chapters, up to ${upTo}` });
+      if (!answer.ok) return;
+      const hide = answer.option;
       const r = await api.bulkDeleteChapters(manga.id, chapterNum, hide);
       showToast(`Deleted ${plural(r.deleted, 'chapter')}${hide ? `, hid ${r.hidden}` : ''}${r.skipped ? `, ${r.skipped} skipped` : ''}`, 'success');
     } else {
@@ -2261,7 +2263,7 @@ function toggleVersions(chapterNum) {
 async function deleteFolder(chapterNum, folder) {
   const manga = state.manga;
   if (!folder) return;
-  if (!confirm(`Delete the folder "${folder}" from disk?`)) return;
+  if (!await confirmDialog(`Delete the folder "${folder}" from disk?`, { danger: true })) return;
   try {
     await api.deleteChapterFolder(manga.id, chapterNum, folder);
     showToast('Folder deleted', 'success');
@@ -2327,7 +2329,7 @@ async function keepOnlyVersion(chapterNum, keepUrl) {
     showToast('This is the only downloaded version', 'info');
     return;
   }
-  if (!confirm(`Delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${chapterNum}?`)) return;
+  if (!await confirmDialog(`Delete the other ${others.length} downloaded version${others.length > 1 ? 's' : ''} of chapter ${chapterNum}?`, { danger: true })) return;
 
   let failed = 0;
   for (const url of others) {
@@ -2435,7 +2437,7 @@ async function restoreChapter(chapterNum) {
 async function deleteChapter(chapterNum, url) {
   const manga = state.manga;
 
-  if (!confirm("Delete this chapter's files from disk?")) return;
+  if (!await confirmDialog("Delete this chapter's files from disk?", { danger: true })) return;
 
   try {
     await api.request(`/bookmarks/${manga.id}/chapters`, {
@@ -2456,7 +2458,7 @@ async function deleteChapter(chapterNum, url) {
 async function hideChapter(chapterNum, url) {
   const manga = state.manga;
 
-  if (!confirm('Hide this chapter? It will be moved to the Hidden filter.')) return;
+  if (!await confirmDialog('Hide this chapter? It will be moved to the Hidden filter.')) return;
 
   try {
     await api.hideVersion(manga.id, chapterNum, url);
@@ -2530,7 +2532,7 @@ function setupMergeListeners(app, manga) {
     if (!Number.isFinite(target)) return showToast('Give the combined chapter a number', 'error');
     const title = titleInput?.value.trim() || `Chapter ${target}`;
     const deleteSources = !!app.querySelector('#merge-delete-sources')?.checked;
-    if (deleteSources && !confirm(`Remove the original folders of ${sources.map(n => `Ch. ${n}`).join(', ')} after combining? Splitting later will need them downloaded again.`)) return;
+    if (deleteSources && !await confirmDialog(`Remove the original folders of ${sources.map(n => `Ch. ${n}`).join(', ')} after combining? Splitting later will need them downloaded again.`, { danger: true })) return;
 
     const btn = app.querySelector('#merge-submit');
     btn.disabled = true;
@@ -2575,7 +2577,7 @@ async function splitChapter(num) {
   const ownPagesGone = merge.sources.includes(num)
     ? ` Chapter ${num}'s own pages were folded into the combined folder, so it will need downloading again.`
     : '';
-  if (!confirm(`Split chapter ${num} back into ${sources}? The combined folder is deleted; the other originals come back as they are on disk.${ownPagesGone}`)) return;
+  if (!await confirmDialog(`Split chapter ${num} back into ${sources}? The combined folder is deleted; the other originals come back as they are on disk.${ownPagesGone}`, { danger: true })) return;
   try {
     await api.unmergeChapter(manga.id, num);
     showToast(`Chapter ${num} split into ${sources}`, 'success');
@@ -2894,7 +2896,7 @@ function setupVolumeListeners(app) {
       const message = volToDelete?.kind === 'release'
         ? `Delete "${volToDelete.name}"? Its ${volToDelete.pageCount || ''} pages are removed from disk. Chapters assigned to it stay in the library.`
         : 'Are you sure you want to delete this volume? Chapters will remain in the library.';
-      if (!confirm(message)) return;
+      if (!await confirmDialog(message)) return;
 
       const volId = editModal.dataset.editingVolId;
       try {
@@ -3095,7 +3097,7 @@ async function setCoverFromImage(filename, chapterNum, target) {
   const editModal = document.getElementById('edit-volume-modal');
   const coverModal = document.getElementById('cover-selector-modal');
 
-  if (!confirm(`Set this image as ${target} cover?`)) return;
+  if (!await confirmDialog(`Set this image as ${target} cover?`)) return;
 
   try {
     if (target === 'volume') {

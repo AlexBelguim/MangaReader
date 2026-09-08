@@ -9,6 +9,7 @@
 import { api } from './api.js';
 import { showToast } from './utils/toast.js';
 import { icon } from './icons.js';
+import { confirmDialog, promptDialog } from './utils/dialog.js';
 
 const MODAL_ID = 'chapter-pages-modal';
 
@@ -151,7 +152,7 @@ export function openChapterPagesModal({ mangaId, num, title = '', versions = [],
         if (tool === 'rotate') return run('Rotate', () => api.rotatePage(mangaId, num, name, 90, current));
         if (tool === 'split') return run('Split', () => api.splitPage(mangaId, num, name, current));
         if (tool === 'delete') {
-            if (!confirm(`Delete page "${name}" from disk?`)) return;
+            if (!await confirmDialog(`Delete page "${name}" from disk?`, { danger: true })) return;
             return run('Delete', () => api.deletePage(mangaId, num, name, current));
         }
         if (tool === 'swap') {

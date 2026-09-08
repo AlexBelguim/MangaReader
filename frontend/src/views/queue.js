@@ -12,7 +12,8 @@ import { openCookieImportModal, openSite } from '../site-challenge.js';
 import { openAssistModal } from '../site-assist.js';
 import { session } from '../session.js';
 import { formatBytes } from '../torrent-search.js';
-import { openImportReviewModal } from '../import-review.js';
+import { openImportReviewModal } from '../import-review.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 let state = {
   downloads: {},
@@ -642,7 +643,7 @@ function setupListeners() {
   if (clearHistoryBtn) {
     clearHistoryBtn.addEventListener('click', async (e) => {
       e.stopPropagation(); // prevent collapsing the section
-      if (confirm('Are you sure you want to clear the task history?')) {
+      if (await confirmDialog('Are you sure you want to clear the task history?', { danger: true })) {
         try {
           await api.clearQueueHistory();
           showToast('History cleared', 'success');
@@ -694,8 +695,12 @@ function setupListeners() {
           showToast('Import queued; its progress shows under Imports', 'info');
         } else if (action === 'remove') {
           const finished = t && ['imported', 'removed'].includes(t.status);
-          if (!finished && !confirm(`Remove "${t?.name || 'this torrent'}" from qBittorrent and stop tracking it?`)) return;
-          const deleteFiles = !finished && confirm('Also delete its downloaded files from disk?');
+          let deleteFiles = false;
+          if (!finished) {
+            const answer = await confirmDialog(`Remove "${t?.name || 'this torrent'}" from qBittorrent and stop tracking it?`, { danger: true, confirmText: 'Remove', option: 'Also delete its downloaded files from disk' });
+            if (!answer.ok) return;
+            deleteFiles = answer.option;
+          }
           await api.removeTorrent(hash, { deleteFiles, fromClient: !finished });
           showToast('Torrent removed', 'info');
         }
@@ -738,7 +743,7 @@ function setupListeners() {
           await api.resumeDownload(taskId);
           showToast('Download resumed', 'info');
         } else if (action === 'cancel') {
-          if (confirm('Cancel this download?')) {
+          if (await confirmDialog('Cancel this download?')) {
             await api.cancelDownload(taskId);
             showToast('Download cancelled', 'info');
           }

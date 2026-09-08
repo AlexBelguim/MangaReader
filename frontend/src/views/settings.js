@@ -4,6 +4,7 @@ import { renderHeader } from '../components/header.js';
 import { router } from '../router.js';
 import { session } from '../session.js';
 import { icon, placeholder, coverImg } from '../icons.js';
+import { confirmDialog, promptDialog } from '../utils/dialog.js';
 
 const SLIDESHOW_DEFAULTS = {
     disabledMangaIds: [],
@@ -165,7 +166,7 @@ async function initCleanupSection() {
             const paths = picked();
             if (!paths.length) return;
             const size = data.groups.flatMap(g => g.items).filter(it => paths.includes(it.path)).reduce((a, it) => a + it.size, 0);
-            if (!confirm(`Delete ${paths.length} folder${paths.length === 1 ? '' : 's'} from disk (${fmt(size)})? This cannot be undone.`)) return;
+            if (!await confirmDialog(`Delete ${paths.length} folder${paths.length === 1 ? '' : 's'} from disk (${fmt(size)})? This cannot be undone.`, { danger: true })) return;
             const btn = results.querySelector('#cleanup-delete');
             btn.disabled = true;
             btn.textContent = 'Deleting…';

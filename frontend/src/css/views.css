@@ -3956,3 +3956,63 @@ button[data-action].pressing {
 .anilist-progress-form input {
     width: 110px;
 }
+
+/* ==================== Series: find more like this ==================== */
+.find-more-modal .modal-content {
+    max-width: min(1100px, calc(100vw - 32px));
+}
+
+.find-more-modal .torrent-search-form select {
+    max-width: 200px;
+}
+
+.find-more-grid {
+    margin-top: var(--space-md);
+}
+
+.find-more-actions {
+    padding: 0 8px 8px;
+    text-align: center;
+}
+
+/* ==================== App dialogs (utils/dialog.js) ==================== */
+.app-dialog {
+    z-index: 10010; /* above every other modal */
+}
+
+.app-dialog-content {
+    max-width: 460px;
+    width: calc(100vw - 32px);
+}
+
+.app-dialog-body {
+    padding: var(--space-md) var(--space-lg);
+}
+
+.app-dialog-message {
+    margin: 0;
+    line-height: 1.5;
+    white-space: pre-line;
+}
+
+.app-dialog-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: var(--space-md);
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.app-dialog-input {
+    width: 100%;
+    margin-top: var(--space-md);
+}
+
+.app-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-sm);
+    padding: var(--space-md) var(--space-lg);
+    border-top: 1px solid var(--border-strong);
+}

@@ -234,7 +234,23 @@ router.post('/', validate(schemas.addBookmark), async (req, res) => {
             });
         }
 
-        const job = queue.add('scrape', { url, userId: req.user.id }, req.user.id);
+        // Optional: put the new manga in a series once scraped, and copy
+        // another bookmark's tags and check settings (the series page's
+        // "Find more like this").
+        const { seriesId, copyFromBookmarkId } = req.body || {};
+        const extra = {};
+        if (seriesId) {
+            const series = seriesDb.getById(String(seriesId), req.user.id);
+            if (!series) return res.status(404).json({ error: 'Series not found' });
+            extra.seriesId = series.id;
+        }
+        if (copyFromBookmarkId) {
+            const source = bookmarkDb.getById(String(copyFromBookmarkId), req.user.id);
+            if (!source) return res.status(404).json({ error: 'Bookmark to copy settings from not found' });
+            extra.copyFrom = source.id;
+        }
+
+        const job = queue.add('scrape', { url, userId: req.user.id, ...extra }, req.user.id);
 
         res.json({
             success: true,

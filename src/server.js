@@ -14,7 +14,8 @@ import {
   getDb,
   artistDb,
   bookmarkDb,
-  closeDatabase
+  closeDatabase,
+  seriesDb
 } from './database.js';
 import { favoritesDb } from './db/favorites.js';
 import { trophyDb } from './db/trophies.js';
@@ -259,7 +260,7 @@ queue.registerProcessor('delete-manga-folder', async (jobData) => {
 });
 
 queue.registerProcessor('scrape', async (jobData, jobId) => {
-  const { url, userId } = jobData;
+  const { url, userId, seriesId = null, copyFrom = null } = jobData;
   logger.info(`[Queue-Worker] Processing scrape job ${jobId} for ${url}`);
 
   if (!userId) {
@@ -300,6 +301,39 @@ queue.registerProcessor('scrape', async (jobData, jobId) => {
 
   if (result.success && mangaInfo.artists && mangaInfo.artists.length > 0) {
     artistDb.setForBookmark(result.bookmark.id, mangaInfo.artists);
+  }
+
+  // Added from a series page: file it in that series and give it the tags
+  // and check settings of the manga it was found next to.
+  if (result.success && result.bookmark?.id) {
+    if (copyFrom) {
+      try {
+        const src = getDb().prepare('SELECT auto_check, auto_download, check_schedule, check_day, check_time FROM bookmarks WHERE id = ?').get(copyFrom);
+        if (src) {
+          bookmarkDb.update(result.bookmark.id, {
+            autoCheck: src.auto_check ? 1 : 0,
+            autoDownload: src.auto_download ? 1 : 0,
+            checkSchedule: src.check_schedule || null,
+            checkDay: src.check_day || null,
+            checkTime: src.check_time || null
+          }, userId);
+          // Categories live in their own link table
+          getDb().prepare('INSERT OR IGNORE INTO bookmark_categories (bookmark_id, category_id) SELECT ?, category_id FROM bookmark_categories WHERE bookmark_id = ?')
+            .run(result.bookmark.id, copyFrom);
+          logger.info(`[Queue-Worker] Copied categories and check settings from ${copyFrom} to ${result.bookmark.id}`);
+        }
+      } catch (e) {
+        logger.warn(`[Queue-Worker] Could not copy settings from ${copyFrom}: ${e.message}`);
+      }
+    }
+    if (seriesId) {
+      try {
+        seriesDb.addEntry(seriesId, result.bookmark.id);
+        logger.info(`[Queue-Worker] Added ${mangaInfo.title} to series ${seriesId}`);
+      } catch (e) {
+        logger.warn(`[Queue-Worker] Could not add ${result.bookmark.id} to series ${seriesId}: ${e.message}`);
+      }
+    }
   }
 
   return result;

@@ -7,6 +7,7 @@
 import { api } from './api.js';
 import { showToast } from './utils/toast.js';
 import { icon } from './icons.js';
+import { confirmDialog, promptDialog } from './utils/dialog.js';
 
 const MODAL_ID = 'volume-manager-modal';
 
@@ -150,7 +151,7 @@ export function openVolumeManager(manga, { onChanged } = {}) {
         const releases = chosen.filter(v => v.kind === 'release').length;
         const what = chosen.length === 1 ? `“${chosen[0].name}”` : `${chosen.length} volumes`;
         const pages = releases ? ` ${releases === chosen.length ? (chosen.length === 1 ? 'Its' : 'Their') : `${releases} of them are releases; their`} pages are removed from disk.` : '';
-        if (!confirm(`Delete ${what}?${pages}`)) return;
+        if (!await confirmDialog(`Delete ${what}?${pages}`, { danger: true })) return;
         try {
             const r = await api.bulkDeleteVolumes(manga.id, ids);
             dirty = true;

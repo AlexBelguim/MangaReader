@@ -77,6 +77,7 @@ export function render() {
             </div>
             <div class="series-detail-actions">
               <button class="btn btn-secondary" id="add-entry-btn">+ Add Entry</button>
+              <button class="btn btn-secondary" id="find-more-btn" title="Search the site of this series' manga for more titles and add them here">${icon('search')} Find more like this</button>
               <button class="btn btn-secondary" id="edit-series-btn">${icon('pencil')} Edit</button>
               <button class="btn btn-secondary" id="back-library-btn">← Library</button>
             </div>
@@ -114,6 +115,175 @@ export function render() {
       </div>
     </div>
   `;
+}
+
+// ==================== FIND MORE LIKE THIS ====================
+// Search the site(s) this series' manga come from for more titles, and add
+// a result straight into the series - a new manga is scraped and filed
+// here with the tags and check settings of the first entry; a title already
+// in the library is just linked.
+
+const FIND_MODAL_ID = 'find-more-modal';
+
+function escText(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function closeFindMoreModal() {
+  document.getElementById(FIND_MODAL_ID)?.remove();
+  document.removeEventListener('keydown', onFindKey);
+}
+
+function onFindKey(e) {
+  if (e.key === 'Escape') closeFindMoreModal();
+}
+
+async function openFindMoreModal(series) {
+  closeFindMoreModal();
+  const entries = series.entries || [];
+  const sites = [...new Set(entries.map(e => e.website).filter(w => w && w !== 'Local'))];
+  const seed = entries[0] || null;
+  const modal = document.createElement('div');
+  modal.id = FIND_MODAL_ID;
+  modal.className = 'modal open torrent-modal find-more-modal';
+  modal.innerHTML = `
+    <div class="modal-overlay"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>${icon('search')} Find more for ${escText(series.alias || series.title)}</h2>
+        <button class="modal-close" data-act="close" title="Close">×</button>
+      </div>
+      <div class="torrent-body">
+        <form class="torrent-search-form" id="find-more-form">
+          <select id="find-more-site" title="Site to search">
+            ${sites.map(s => `<option value="${escText(s)}">${escText(s)}</option>`).join('')}
+            <option value="all">All sites</option>
+          </select>
+          <input type="text" id="find-more-query" value="${escText(series.alias || series.title)}" placeholder="Title to search for" autocomplete="off">
+          <button type="submit" class="btn btn-primary">Search</button>
+        </form>
+        <div class="torrent-hint">Results added here are scraped and filed in this series${seed ? `, with the tags and check settings of <strong>${escText(seed.alias || seed.title)}</strong>` : ''}. Titles already in your library are linked as they are.</div>
+        <div id="find-more-results"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.addEventListener('keydown', onFindKey);
+  modal.querySelector('.modal-overlay').addEventListener('click', closeFindMoreModal);
+  modal.querySelector('[data-act="close"]').addEventListener('click', closeFindMoreModal);
+
+  const results = modal.querySelector('#find-more-results');
+  const inSeries = new Set(entries.map(e => e.bookmark_id));
+  // Library titles by URL, to link instead of re-scrape
+  let libraryByUrl = new Map();
+  try {
+    const lib = await api.getBookmarks();
+    const list = Array.isArray(lib) ? lib : (lib.bookmarks || []);
+    libraryByUrl = new Map(list.map(b => [b.url, b]));
+  } catch (e) { /* new adds only */ }
+
+  const renderResults = (list) => {
+    if (!list.length) {
+      results.innerHTML = '<div class="torrent-hint">No results. Try a shorter title.</div>';
+      return;
+    }
+    results.innerHTML = `<div class="library-grid find-more-grid">${list.map((r, i) => {
+      const cover = r.cover ? (r.cover.startsWith('/covers/') ? r.cover : `/api/scrapers/proxy-cover?url=${encodeURIComponent(r.cover)}`) : '';
+      const existing = libraryByUrl.get(r.url);
+      const already = existing && inSeries.has(existing.id);
+      return `
+        <div class="manga-card scraper-result-card" data-index="${i}">
+          <div class="manga-card-cover">
+            ${cover ? coverImg(cover, 'Cover', { kind: 'series', self: true }) : placeholder('series')}
+            <div class="manga-card-badges">
+              <span class="badge badge-scraper">${escText(r.website)}</span>
+              ${r.chapterCount ? `<span class="badge badge-chapters">${r.chapterCount} ch</span>` : ''}
+            </div>
+          </div>
+          <div class="manga-card-title" title="${escText(r.title)}">${escText(r.title)}</div>
+          <div class="find-more-actions">
+            ${already
+              ? '<span class="torrent-hint">Already in this series</span>'
+              : `<button class="btn btn-primary find-more-add" data-index="${i}" style="width: 100%; font-size: 0.8rem;">${existing ? 'Add to series' : '+ Add and scrape'}</button>`}
+          </div>
+        </div>`;
+    }).join('')}</div>`;
+  };
+
+  let current = [];
+  const search = async () => {
+    const q = modal.querySelector('#find-more-query').value.trim();
+    const site = modal.querySelector('#find-more-site').value || 'all';
+    if (!q) return;
+    results.innerHTML = `<div class="torrent-hint">${icon('loader', { spin: true })} Searching ${escText(site === 'all' ? 'every site' : site)}…</div>`;
+    try {
+      const data = await api.get(`/scrapers/search?q=${encodeURIComponent(q)}&scraper=${encodeURIComponent(site)}`);
+      current = data.results || [];
+      renderResults(current);
+    } catch (e) {
+      results.innerHTML = `<div class="torrent-hint error">${escText(e.message)}</div>`;
+    }
+  };
+  modal.querySelector('#find-more-form').addEventListener('submit', (e) => { e.preventDefault(); search(); });
+
+  // Wait for a queued scrape to finish, then refresh the series behind the dialog
+  const followJob = async (jobId, btn) => {
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      if (!document.getElementById(FIND_MODAL_ID)) return;
+      let job = null;
+      try {
+        const history = await api.getQueueHistory(30);
+        job = history.find(j => j.id === jobId) || null;
+      } catch (e) { /* try again */ }
+      if (!job) continue;
+      if (job.status === 'completed') {
+        btn.textContent = 'Added';
+        showToast('Added to the series', 'success');
+        await loadData(series.id);
+        document.getElementById('app').innerHTML = render();
+        setupListeners();
+        return;
+      }
+      if (job.status === 'failed') {
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+        showToast(`Adding failed: ${job.error || 'unknown error'}`, 'error');
+        return;
+      }
+      btn.textContent = job.status === 'waiting' ? 'Waiting for site…' : 'Scraping…';
+    }
+  };
+
+  results.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.find-more-add');
+    if (!btn) return;
+    const r = current[parseInt(btn.dataset.index, 10)];
+    if (!r) return;
+    btn.disabled = true;
+    const existing = libraryByUrl.get(r.url);
+    try {
+      if (existing) {
+        await api.post(`/series/${series.id}/entries`, { bookmarkId: existing.id });
+        btn.textContent = 'Added';
+        inSeries.add(existing.id);
+        showToast('Added to the series', 'success');
+        await loadData(series.id);
+        document.getElementById('app').innerHTML = render();
+        setupListeners();
+      } else {
+        btn.textContent = 'Queued…';
+        const data = await api.addBookmarkToSeries(r.url, { seriesId: series.id, copyFromBookmarkId: seed?.bookmark_id || null });
+        showToast('Queued: it is scraped and then filed in this series', 'info');
+        followJob(data.jobId, btn);
+      }
+    } catch (err) {
+      btn.disabled = false;
+      showToast(`Failed: ${err.message}`, 'error');
+    }
+  });
+
+  search();
 }
 
 /**
@@ -168,6 +338,8 @@ function renderSeriesEntry(entry, index, totalEntries) {
 export function setupListeners() {
   const app = document.getElementById('app');
   const series = state.series;
+
+  document.getElementById('find-more-btn')?.addEventListener('click', () => openFindMoreModal(series));
 
   // Back button
   document.getElementById('back-btn')?.addEventListener('click', () => router.go('/'));
