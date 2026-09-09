@@ -80,7 +80,7 @@ router.post('/', (req, res) => {
         if (!title || !title.trim()) {
             return res.status(400).json({ error: 'Title required' });
         }
-        const series = seriesDb.create(title.trim(), alias?.trim() || null);
+        const series = seriesDb.create(title.trim(), alias?.trim() || null, req.user.id);
         res.json(series);
     } catch (error) {
         res.status(500).json({ error: error.message });

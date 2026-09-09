@@ -191,6 +191,31 @@ async function runInCodeMigrations(db, applied) {
                     }
                 }
             }
+        },
+        {
+            name: '006_series_owner',
+            run: () => {
+                // A series used to belong to a user only through its entries,
+                // so a freshly created empty one was invisible to everyone.
+                // Give it an owner; existing series take the owner of their
+                // first entry.
+                try {
+                    db.prepare('ALTER TABLE series ADD COLUMN user_id INTEGER').run();
+                    console.log('  ✓ Added user_id column to series');
+                } catch (e) {
+                    // Column likely exists
+                }
+                const r = db.prepare(`
+                    UPDATE series SET user_id = (
+                        SELECT b.user_id FROM series_entries se
+                        JOIN bookmarks b ON b.id = se.bookmark_id
+                        WHERE se.series_id = series.id
+                        ORDER BY se.entry_order, se.created_at
+                        LIMIT 1
+                    ) WHERE user_id IS NULL
+                `).run();
+                console.log(`  ✓ Assigned owners to ${r.changes} series`);
+            }
         }
     ];
 

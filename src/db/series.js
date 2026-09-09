@@ -1,22 +1,23 @@
 import { getDb, generateId } from './connection.js';
 
 export const seriesDb = {
-    // Create a new series
-    create(title, alias = null) {
+    // Create a new series, owned by `userId` (so it is listed for that user
+    // before it has any entries)
+    create(title, alias = null, userId = null) {
         const db = getDb();
         const id = generateId();
         const now = new Date().toISOString();
 
         db.prepare(`
-      INSERT INTO series (id, title, alias, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, title, alias, now, now);
+      INSERT INTO series (id, title, alias, user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, title, alias, userId, now, now);
 
-        return { id, title, alias, created_at: now, updated_at: now };
+        return { id, title, alias, user_id: userId, created_at: now, updated_at: now };
     },
 
     // Get all series with entry counts and cover info. With a userId, only
-    // series containing at least one of that user's bookmarks are returned,
+    // series the user owns or has at least one bookmark in are returned,
     // and counts/covers are computed from the caller's own entries only —
     // other users' titles and covers must not leak.
     getAll(userId = null) {
@@ -32,13 +33,13 @@ export const seriesDb = {
          ${scoped ? 'JOIN bookmarks b ON b.id = se.bookmark_id AND b.user_id = ?' : ''}
          WHERE se.series_id = s.id) as total_chapters
       FROM series s
-      ${scoped ? `WHERE EXISTS (
+      ${scoped ? `WHERE s.user_id = ? OR EXISTS (
         SELECT 1 FROM series_entries se
         JOIN bookmarks b ON b.id = se.bookmark_id
         WHERE se.series_id = s.id AND b.user_id = ?
       )` : ''}
       ORDER BY s.title
-    `).all(...(scoped ? [userId, userId, userId] : []));
+    `).all(...(scoped ? [userId, userId, userId, userId] : []));
 
         // Get cover for each series
         for (const s of series) {
@@ -75,8 +76,8 @@ export const seriesDb = {
     },
 
     // Get a series by ID with all entries. With a userId, entries are
-    // filtered to that user's bookmarks; a series the user has no entries in
-    // returns null (indistinguishable from "not found").
+    // filtered to that user's bookmarks; a series the user neither owns nor
+    // has entries in returns null (indistinguishable from "not found").
     getById(id, userId = null) {
         const db = getDb();
         const series = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
@@ -96,7 +97,7 @@ export const seriesDb = {
       ORDER BY se.entry_order, se.created_at
     `).all(...(scoped ? [id, userId] : [id]));
 
-        if (scoped && series.entries.length === 0) return null;
+        if (scoped && series.entries.length === 0 && series.user_id !== userId) return null;
 
         // Get downloaded chapters for each entry
         for (const entry of series.entries) {
