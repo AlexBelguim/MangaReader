@@ -180,7 +180,12 @@ export async function importAsChapter(bookmark, archivePath, chapterNumber) {
  */
 export async function describeRelease(rootPath, { releaseName = '' } = {}) {
   const found = await scanRelease(rootPath);
-  const root = path.resolve(rootPath);
+  const resolved = path.resolve(rootPath);
+  // Item paths are relative to a FOLDER. Picking a single archive makes the
+  // release root that file, so the folder holding it is the base - otherwise
+  // the file name is joined onto the file itself ("x.cbz/x.cbz", ENOTDIR).
+  const stat = await fs.stat(resolved).catch(() => null);
+  const root = stat && stat.isFile() ? path.dirname(resolved) : resolved;
   const rel = (p) => path.relative(root, p).split(path.sep).join('/') || path.basename(p);
   const releaseInfo = parseReleaseName(releaseName || path.basename(rootPath));
   const candidates = [
