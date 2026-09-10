@@ -8,6 +8,7 @@ import { router } from '../router.js';
 import { renderHeader } from '../components/header.js';
 import { showToast } from '../utils/toast.js';
 import { icon, placeholder, coverImg } from '../icons.js';
+import { openScraperInfoModal } from '../scraper-info.js';
 
 // View state
 let state = {
@@ -162,7 +163,7 @@ async function openFindMoreModal(series) {
           <input type="text" id="find-more-query" value="${escText(series.alias || series.title)}" placeholder="Title to search for" autocomplete="off">
           <button type="submit" class="btn btn-primary">Search</button>
         </form>
-        <div class="torrent-hint">Results added here are scraped and filed in this series${seed ? `, with the tags and check settings of <strong>${escText(seed.alias || seed.title)}</strong>` : ''}. Titles already in your library are linked as they are.</div>
+        <div class="torrent-hint">Click a result for its details. Adding one scrapes it and files it in this series${seed ? `, with the tags and check settings of <strong>${escText(seed.alias || seed.title)}</strong>` : ''}. Titles already in your library are linked as they are.</div>
         <div id="find-more-results"></div>
       </div>
     </div>
@@ -192,7 +193,7 @@ async function openFindMoreModal(series) {
       const existing = libraryByUrl.get(r.url);
       const already = existing && inSeries.has(existing.id);
       return `
-        <div class="manga-card scraper-result-card" data-index="${i}">
+        <div class="manga-card scraper-result-card find-more-card" data-index="${i}" title="Click for details">
           <div class="manga-card-cover">
             ${cover ? coverImg(cover, 'Cover', { kind: 'series', self: true }) : placeholder('series')}
             <div class="manga-card-badges">
@@ -255,32 +256,60 @@ async function openFindMoreModal(series) {
     }
   };
 
+  // Add one result to the series: link a title the library already has,
+  // otherwise queue a scrape that files it here when it finishes. `btn` is
+  // the card's own button, or the details panel's.
+  const addResult = async (r, btn) => {
+    const existing = libraryByUrl.get(r.url);
+    if (existing) {
+      await api.post(`/series/${series.id}/entries`, { bookmarkId: existing.id });
+      inSeries.add(existing.id);
+      showToast('Added to the series', 'success');
+      await loadData(series.id);
+      document.getElementById('app').innerHTML = render();
+      setupListeners();
+      return;
+    }
+    const data = await api.addBookmarkToSeries(r.url, { seriesId: series.id, copyFromBookmarkId: seed?.bookmark_id || null });
+    showToast('Queued: it is scraped and then filed in this series', 'info');
+    if (btn) followJob(data.jobId, btn);
+  };
+
   results.addEventListener('click', async (e) => {
     const btn = e.target.closest('.find-more-add');
-    if (!btn) return;
-    const r = current[parseInt(btn.dataset.index, 10)];
-    if (!r) return;
-    btn.disabled = true;
-    const existing = libraryByUrl.get(r.url);
-    try {
-      if (existing) {
-        await api.post(`/series/${series.id}/entries`, { bookmarkId: existing.id });
-        btn.textContent = 'Added';
-        inSeries.add(existing.id);
-        showToast('Added to the series', 'success');
-        await loadData(series.id);
-        document.getElementById('app').innerHTML = render();
-        setupListeners();
-      } else {
-        btn.textContent = 'Queued…';
-        const data = await api.addBookmarkToSeries(r.url, { seriesId: series.id, copyFromBookmarkId: seed?.bookmark_id || null });
-        showToast('Queued: it is scraped and then filed in this series', 'info');
-        followJob(data.jobId, btn);
+    if (btn) {
+      const r = current[parseInt(btn.dataset.index, 10)];
+      if (!r) return;
+      btn.disabled = true;
+      btn.textContent = libraryByUrl.get(r.url) ? 'Adding…' : 'Queued…';
+      try {
+        await addResult(r, btn);
+        if (libraryByUrl.get(r.url)) btn.textContent = 'Added';
+      } catch (err) {
+        btn.disabled = false;
+        showToast(`Failed: ${err.message}`, 'error');
       }
-    } catch (err) {
-      btn.disabled = false;
-      showToast(`Failed: ${err.message}`, 'error');
+      return;
     }
+    // Anywhere else on a card: its details, straight from the site
+    const card = e.target.closest('.find-more-card');
+    if (!card) return;
+    const r = current[parseInt(card.dataset.index, 10)];
+    if (!r) return;
+    const existing = libraryByUrl.get(r.url);
+    const already = existing && inSeries.has(existing.id);
+    openScraperInfoModal({
+      result: r,
+      action: already ? null : {
+        label: existing ? 'Add to series' : 'Add and scrape',
+        done: existing ? 'Added' : 'Queued',
+        onClick: async () => {
+          const cardBtn = results.querySelector(`.find-more-add[data-index="${card.dataset.index}"]`);
+          await addResult(r, cardBtn);
+          if (cardBtn) { cardBtn.disabled = true; cardBtn.textContent = existing ? 'Added' : 'Queued…'; }
+        }
+      }
+    });
   });
 
   search();

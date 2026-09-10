@@ -280,7 +280,10 @@ router.get('/info', async (req, res) => {
       abortController.abort();
     });
 
-    const info = await scraper.getMangaInfo(targetUrl, { signal: abortController.signal });
+    // `brief=1`: the info panel wants the title page only, not a full walk
+    // of every chapter page (see BaseScraper.getMangaInfo).
+    const brief = req.query.brief === '1' || req.query.brief === 'true';
+    const info = await scraper.getMangaInfo(targetUrl, { signal: abortController.signal, brief });
     res.json({ success: true, info });
   } catch (error) {
     console.error('[API] Scraper info error:', error);

@@ -301,7 +301,7 @@ export class ComixScraper extends BaseScraper {
 
   // ── Get Manga Info ──
 
-  async getMangaInfo(url) {
+  async getMangaInfo(url, { brief = false } = {}) {
     await this.createPage();
 
     try {
@@ -342,8 +342,11 @@ export class ComixScraper extends BaseScraper {
         };
       });
 
-      // Paginate through the chapter list and collect every chapter
-      const allChapters = await this.collectChaptersByPaging();
+      // Paginate through the chapter list and collect every chapter. A
+      // brief look (the info panel) stops after the first page: the total
+      // comes from the page itself, and walking 60 pages of One Piece would
+      // hold this scraper - and every download behind it - for minutes.
+      const allChapters = await this.collectChaptersByPaging(brief ? { stopWhen: () => true } : {});
 
       // Deduplicate
       const { chapters, duplicateChapters, uniqueCount } = deduplicateChapters(allChapters);

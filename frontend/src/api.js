@@ -96,7 +96,11 @@ class ApiClient {
 
             return data;
         } catch (error) {
-            console.error(`[API] ${options.method || 'GET'} ${endpoint}:`, error);
+            // A request the caller aborted on purpose (a panel closed while
+            // it was still loading) is not a failure worth logging.
+            if (error?.name !== 'AbortError') {
+                console.error(`[API] ${options.method || 'GET'} ${endpoint}:`, error);
+            }
             throw error;
         }
     }

@@ -147,8 +147,13 @@ export class BaseScraper {
     }
   }
 
-  // Get manga info from URL - must be implemented by subclasses
-  async getMangaInfo(url) {
+  // Get manga info from URL - must be implemented by subclasses.
+  // `options.brief`: the caller only wants what a title page shows (title,
+  // cover, description, counts) and not every chapter, so a scraper that
+  // pages through a long chapter list may stop after the first page. Used
+  // by the info panel, where a full walk would hold this scraper's page for
+  // minutes. Scrapers that load one page can ignore it.
+  async getMangaInfo(url, options = {}) {
     throw new Error('getMangaInfo must be implemented');
   }
 

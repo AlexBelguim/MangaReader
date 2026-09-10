@@ -58,15 +58,17 @@ export function confirmDialog(message, opts = {}) {
         const modal = openDialog({ message, body, confirmText: rest.confirmText || (rest.danger ? 'Delete' : 'OK'), ...rest });
         const finish = (ok) => {
             const checked = option ? !!modal.querySelector('#app-dialog-option')?.checked : undefined;
-            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('keydown', onKey, true);
             closeDialog();
             resolve(option ? { ok, option: checked } : ok);
         };
+        // Capture and stop: a dialog opened over another modal must not
+        // close that one as well.
         const onKey = (e) => {
-            if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-            if (e.key === 'Enter' && document.activeElement?.tagName !== 'BUTTON') { e.preventDefault(); finish(true); }
+            if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); finish(false); }
+            else if (e.key === 'Enter' && document.activeElement?.tagName !== 'BUTTON') { e.stopImmediatePropagation(); e.preventDefault(); finish(true); }
         };
-        document.addEventListener('keydown', onKey);
+        document.addEventListener('keydown', onKey, true);
         modal.querySelector('.modal-overlay').addEventListener('click', () => finish(false));
         modal.querySelector('[data-act="cancel"]').addEventListener('click', () => finish(false));
         modal.querySelector('[data-act="ok"]').addEventListener('click', () => finish(true));
@@ -87,15 +89,15 @@ export function promptDialog(message, opts = {}) {
         const input = modal.querySelector('#app-dialog-input');
         const finish = (ok) => {
             const v = input.value;
-            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('keydown', onKey, true);
             closeDialog();
             resolve(ok ? v : null);
         };
         const onKey = (e) => {
-            if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); finish(false); }
+            else if (e.key === 'Enter') { e.stopImmediatePropagation(); e.preventDefault(); finish(true); }
         };
-        document.addEventListener('keydown', onKey);
+        document.addEventListener('keydown', onKey, true);
         modal.querySelector('.modal-overlay').addEventListener('click', () => finish(false));
         modal.querySelector('[data-act="cancel"]').addEventListener('click', () => finish(false));
         modal.querySelector('[data-act="ok"]').addEventListener('click', () => finish(true));
