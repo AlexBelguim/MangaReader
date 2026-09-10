@@ -8,7 +8,7 @@ import { getPrimaryAdminId } from '../db/connection.js';
 import { getChallenges, clearChallenge } from '../scrapers/util/challenge.js';
 import {
     parseCookieInput, sanitiseUserAgent, setSiteSession, clearSiteSession, markSiteSessionStale,
-    listSiteSessions, purgeSiteCookiesFromBrowser
+    listSiteSessions, purgeSiteCookiesFromBrowser, hasSiteSession
 } from '../scrapers/util/site-session.js';
 import { scraperFactory } from '../scrapers/index.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -24,6 +24,34 @@ const router = express.Router();
 router.get('/site-status', (req, res) => {
     const detailed = req.user?.role === 'admin';
     res.json({ challenges: getChallenges(), sessions: listSiteSessions({ detailed }) });
+});
+
+// Try the cookies already saved for a site. The app flags a session when
+// its stored expiry passes or the site showed its check once, but the site
+// often still accepts it (it renews the cookie while it is used). This
+// loads the site with the saved cookies and, if real content comes back,
+// lifts the block - no puzzle needed.
+router.post('/site-status/verify', requireAdmin, async (req, res) => {
+    try {
+        const { site } = req.body || {};
+        if (!site || typeof site !== 'string') return res.status(400).json({ error: 'site is required' });
+        const scraper = findScraper(site);
+        if (!scraper || typeof scraper.checkAccess !== 'function') {
+            return res.status(400).json({ error: `${site} cannot be tested` });
+        }
+        if (!hasSiteSession(site)) {
+            return res.status(400).json({ error: `No saved cookies for ${site} to try` });
+        }
+        const probe = await probeSite(scraper);
+        if (probe.ok) {
+            clearChallenge(site);
+        } else if (probe.blocked) {
+            markSiteSessionStale(site, 'The site showed its check when the saved cookies were tried');
+        }
+        res.json({ success: true, probe });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // The user completed the check in their browser: resume automated checks

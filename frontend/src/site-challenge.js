@@ -224,9 +224,13 @@ function renderBanner(entry) {
     el.className = 'site-challenge-banner';
     el.dataset.site = entry.site;
     const waiting = entry.waiting ? ` <span class="site-challenge-waiting">${entry.waiting} task${entry.waiting === 1 ? '' : 's'} waiting</span>` : '';
+    // The app flags a session when its stored expiry passes or the site
+    // showed its check once, but the cookies are often still good.
+    const mayStillWork = admin && (entry.reason === 'expired' || entry.sessionStale);
     el.innerHTML = `
         <div class="site-challenge-text">${describeEntry(entry)}${admin ? '' : ' Ask an admin to pass it.'}${waiting}</div>
         <div class="site-challenge-actions">
+            ${mayStillWork ? '<button class="btn btn-secondary btn-sm" data-act="verify" title="Load the site with the cookies already saved; if it serves pages, work resumes without solving anything">Try the saved cookies</button>' : ''}
             ${admin ? '<button class="btn btn-primary btn-sm" data-act="assist">Solve it here</button>' : ''}
             ${admin ? '<button class="btn btn-secondary btn-sm" data-act="import" title="Complete the check in your own browser and paste its cookies">Paste cookies</button>'
                     : `<button class="btn btn-primary btn-sm" data-act="open">Open ${esc(entry.site)}</button>`}
@@ -236,6 +240,26 @@ function renderBanner(entry) {
     `;
     el.querySelector('[data-act="assist"]')?.addEventListener('click', () => {
         openAssistModal({ site: entry.site, url: entry.url, reason: entry.reason || (entry.sessionStale ? 'rejected' : 'check') });
+    });
+    el.querySelector('[data-act="verify"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Trying…';
+        try {
+            const { probe } = await api.verifySiteSession(entry.site);
+            if (probe?.ok) {
+                showToast(`${entry.site}: the saved cookies still work, waiting work resumes`, 'success');
+                hide(entry.site);
+                return;
+            }
+            showToast(probe?.blocked
+                ? `${entry.site} showed its check again; solve it to continue`
+                : `Could not test the cookies: ${probe?.error || 'the site could not be loaded'}`, 'error');
+        } catch (err) {
+            showToast(`Failed: ${err.message}`, 'error');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Try the saved cookies';
     });
     el.querySelector('[data-act="open"]')?.addEventListener('click', () => openSite(entry.site, entry.url));
     el.querySelector('[data-act="import"]')?.addEventListener('click', () => {

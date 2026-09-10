@@ -12,6 +12,11 @@ import { anilistDb } from '../db/anilist.js';
  */
 
 const API_URL = 'https://graphql.anilist.co';
+// Without a deadline a stalled call to AniList keeps the request that
+// triggered it open until something in front of the app (a tunnel, a proxy)
+// gives up and answers with its own gateway page - which is what the user
+// then sees instead of a usable message.
+const REQUEST_TIMEOUT_MS = 20000;
 const TOKEN_URL = 'https://anilist.co/api/v2/oauth/token';
 const AUTHORIZE_URL = 'https://anilist.co/api/v2/oauth/authorize';
 
@@ -51,15 +56,24 @@ export const anilistService = {
 
     /** Shared GraphQL caller. One retry on 429 using Retry-After. */
     async graphql(token, query, variables = {}, retried = false) {
-        const res = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify({ query, variables })
-        });
+        let res;
+        try {
+            res = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
+                body: JSON.stringify({ query, variables }),
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            });
+        } catch (e) {
+            const timedOut = e.name === 'TimeoutError' || e.name === 'AbortError';
+            throw new Error(timedOut
+                ? `AniList did not answer within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. Check that the server can reach graphql.anilist.co.`
+                : `Could not reach AniList: ${e.message}`);
+        }
 
         if (res.status === 429 && !retried) {
             const wait = (parseInt(res.headers.get('retry-after') || '5', 10)) * 1000;

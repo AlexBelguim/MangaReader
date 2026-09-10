@@ -733,6 +733,11 @@ class ApiClient {
         return this.get('/site-status');
     }
 
+    // Try the cookies already saved for a site, instead of solving again
+    verifySiteSession(site) {
+        return this.post('/site-status/verify', { site });
+    }
+
     clearSiteChallenge(site) {
         return this.post('/site-status/clear', { site });
     }
